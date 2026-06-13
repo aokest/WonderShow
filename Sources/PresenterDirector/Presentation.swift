@@ -38,6 +38,12 @@ public final class PresentationDirector {
             return DirectorCommand(presentationAction: .zoomIn, transport: transport)
         case .zoomOut:
             return DirectorCommand(presentationAction: .zoomOut, transport: transport)
+        case .startPresentation:
+            return DirectorCommand(presentationAction: .startPresentation, transport: transport)
+        case .exitPresentation:
+            return DirectorCommand(presentationAction: .exitPresentation, transport: transport)
+        case .toggleRecording:
+            return DirectorCommand(presentationAction: .toggleRecording, transport: .accessibilityAutomation)
         case .pinchToggle:
             return DirectorCommand(presentationAction: .toggleAnnotation, transport: annotationTransport(for: target))
         case .pinchDrag:

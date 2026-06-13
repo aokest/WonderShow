@@ -230,16 +230,18 @@ struct DashboardView: View {
                 Button("快速校准") {
                     camera.gestureCalibrationProfile = GestureProfile(
                         minimumHorizontalTravel: 0.18,
-                        minimumVerticalTravel: 0.20,
+                        minimumZoomDistanceChange: 0.15,
                         maximumGestureDurationMilliseconds: 750
                     )
                 }
             }
 
-            GestureRow(icon: "arrow.left", gesture: "左挥", action: "下一页")
-            GestureRow(icon: "arrow.right", gesture: "右挥", action: "上一页")
-            GestureRow(icon: "arrow.up", gesture: "上挥", action: "放大演示")
-            GestureRow(icon: "arrow.down", gesture: "下挥", action: "缩小演示")
+            GestureRow(icon: "arrow.left", gesture: "指枪左挥", action: "下一页")
+            GestureRow(icon: "arrow.right", gesture: "指枪右挥", action: "上一页")
+            GestureRow(icon: "arrow.up.left.and.arrow.down.right", gesture: "双手八字分开", action: "放大演示")
+            GestureRow(icon: "arrow.down.right.and.arrow.up.left", gesture: "双手八字合拢", action: "缩小演示")
+            GestureRow(icon: "play.fill", gesture: "待录入", action: "开始播放")
+            GestureRow(icon: "record.circle", gesture: "待录入", action: "开始/停止录制")
         }
         .surface()
     }

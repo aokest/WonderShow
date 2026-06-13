@@ -3,6 +3,9 @@ public enum GestureIntent: Hashable, Sendable {
     case swipeRight
     case zoomIn
     case zoomOut
+    case startPresentation
+    case exitPresentation
+    case toggleRecording
     case pinchToggle
     case pinchDrag
     case openPalmHold
@@ -16,6 +19,9 @@ public enum PresentationAction: Hashable, Sendable {
     case clearAnnotations
     case zoomIn
     case zoomOut
+    case startPresentation
+    case exitPresentation
+    case toggleRecording
     case none
 }
 
@@ -59,23 +65,23 @@ public struct GestureCalibrationSample: Hashable, Sendable {
 
 public struct GestureProfile: Hashable, Sendable {
     public let minimumHorizontalTravel: Double
-    public let minimumVerticalTravel: Double
+    public let minimumZoomDistanceChange: Double
     public let maximumGestureDurationMilliseconds: Int
 
     public init(
         minimumHorizontalTravel: Double,
-        minimumVerticalTravel: Double,
+        minimumZoomDistanceChange: Double,
         maximumGestureDurationMilliseconds: Int
     ) {
         self.minimumHorizontalTravel = minimumHorizontalTravel
-        self.minimumVerticalTravel = minimumVerticalTravel
+        self.minimumZoomDistanceChange = minimumZoomDistanceChange
         self.maximumGestureDurationMilliseconds = maximumGestureDurationMilliseconds
     }
 
     public static let `default` = GestureProfile(
-        minimumHorizontalTravel: 0.22,
-        minimumVerticalTravel: 0.24,
-        maximumGestureDurationMilliseconds: 650
+        minimumHorizontalTravel: 0.18,
+        minimumZoomDistanceChange: 0.14,
+        maximumGestureDurationMilliseconds: 800
     )
 }
 
@@ -91,16 +97,11 @@ public struct GestureCalibration: Sendable {
             .filter { $0.intent == .swipeLeft || $0.intent == .swipeRight }
             .map { abs($0.horizontalTravel) }
 
-        let verticalSamples = samples
-            .filter { $0.intent == .zoomIn || $0.intent == .zoomOut }
-            .map { abs($0.verticalTravel) }
-
         let horizontalAverage = horizontalSamples.average ?? GestureProfile.default.minimumHorizontalTravel
-        let verticalAverage = verticalSamples.average ?? GestureProfile.default.minimumVerticalTravel
 
         return GestureProfile(
             minimumHorizontalTravel: max(0.16, horizontalAverage * 0.72),
-            minimumVerticalTravel: max(0.16, verticalAverage * 0.72),
+            minimumZoomDistanceChange: GestureProfile.default.minimumZoomDistanceChange,
             maximumGestureDurationMilliseconds: GestureProfile.default.maximumGestureDurationMilliseconds
         )
     }
@@ -125,11 +126,144 @@ public struct MotionGestureRecognizer: Sendable {
             return horizontal < 0 ? .swipeLeft : .swipeRight
         }
 
-        if abs(vertical) >= profile.minimumVerticalTravel, abs(vertical) > abs(horizontal) * 1.35 {
-            return vertical < 0 ? .zoomIn : .zoomOut
+        return nil
+    }
+}
+
+public struct HandPoint: Hashable, Sendable {
+    public let x: Double
+    public let y: Double
+    public let shape: HandShape
+
+    public init(x: Double, y: Double, shape: HandShape = .unknown) {
+        self.x = x
+        self.y = y
+        self.shape = shape
+    }
+
+    public func distance(to other: HandPoint) -> Double {
+        let dx = x - other.x
+        let dy = y - other.y
+        return (dx * dx + dy * dy).squareRoot()
+    }
+}
+
+public enum HandShape: Hashable, Sendable {
+    case unknown
+    case natural
+    case fingerGun
+    case lShape
+}
+
+public struct TwoHandMotion: Hashable, Sendable {
+    public let startDistance: Double
+    public let endDistance: Double
+    public let durationMilliseconds: Int
+
+    public init(startDistance: Double, endDistance: Double, durationMilliseconds: Int) {
+        self.startDistance = startDistance
+        self.endDistance = endDistance
+        self.durationMilliseconds = durationMilliseconds
+    }
+}
+
+public struct TwoHandGestureRecognizer: Sendable {
+    public let profile: GestureProfile
+
+    public init(profile: GestureProfile) {
+        self.profile = profile
+    }
+
+    public func recognize(_ motion: TwoHandMotion) -> GestureIntent? {
+        guard motion.durationMilliseconds <= profile.maximumGestureDurationMilliseconds else {
+            return nil
         }
 
-        return nil
+        let change = motion.endDistance - motion.startDistance
+        guard abs(change) >= profile.minimumZoomDistanceChange else {
+            return nil
+        }
+
+        return change > 0 ? .zoomIn : .zoomOut
+    }
+}
+
+public struct FrameGestureRecognizer: Sendable {
+    public let profile: GestureProfile
+
+    public init(profile: GestureProfile) {
+        self.profile = profile
+    }
+
+    public func recognize(
+        start: [HandPoint],
+        end: [HandPoint],
+        durationMilliseconds: Int
+    ) -> GestureIntent? {
+        guard durationMilliseconds <= profile.maximumGestureDurationMilliseconds else {
+            return nil
+        }
+
+        let pairedCount = min(start.count, end.count)
+        guard pairedCount > 0 else { return nil }
+
+        if pairedCount >= 2 {
+            let canZoom = start[0].shape == .lShape
+                && start[1].shape == .lShape
+                && end[0].shape == .lShape
+                && end[1].shape == .lShape
+            let leftMotion = GestureMotion(
+                horizontalTravel: end[0].x - start[0].x,
+                verticalTravel: end[0].y - start[0].y,
+                durationMilliseconds: durationMilliseconds
+            )
+            let rightMotion = GestureMotion(
+                horizontalTravel: end[1].x - start[1].x,
+                verticalTravel: end[1].y - start[1].y,
+                durationMilliseconds: durationMilliseconds
+            )
+
+            let bothHandsMove = abs(leftMotion.horizontalTravel) >= profile.minimumZoomDistanceChange * 0.42
+                && abs(rightMotion.horizontalTravel) >= profile.minimumZoomDistanceChange * 0.42
+            let oppositeDirections = leftMotion.horizontalTravel * rightMotion.horizontalTravel < 0
+
+            if canZoom, bothHandsMove, oppositeDirections {
+                let twoHand = TwoHandMotion(
+                    startDistance: start[0].distance(to: start[1]),
+                    endDistance: end[0].distance(to: end[1]),
+                    durationMilliseconds: durationMilliseconds
+                )
+                if let zoom = TwoHandGestureRecognizer(profile: profile).recognize(twoHand) {
+                    return zoom
+                }
+            }
+        }
+
+        let motions = (0..<pairedCount).map { index in
+            GestureMotion(
+                horizontalTravel: end[index].x - start[index].x,
+                verticalTravel: end[index].y - start[index].y,
+                durationMilliseconds: durationMilliseconds
+            )
+        }
+
+        if pairedCount == 1 {
+            guard start[0].shape == .fingerGun, end[0].shape == .fingerGun else {
+                return nil
+            }
+            return MotionGestureRecognizer(profile: profile).recognize(motions[0])
+        }
+
+        let significant = motions.enumerated().filter { index, motion in
+            abs(motion.horizontalTravel) >= profile.minimumHorizontalTravel
+                && start[index].shape == .fingerGun
+                && end[index].shape == .fingerGun
+        }
+        guard significant.count == 1, let (_, motion) = significant.first else {
+            return nil
+        }
+
+        return MotionGestureRecognizer(profile: profile).recognize(motion)
     }
 }
 

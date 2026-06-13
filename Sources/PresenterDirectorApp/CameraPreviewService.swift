@@ -23,12 +23,17 @@ final class CameraPreviewService: NSObject, ObservableObject {
     private let sessionBox = CaptureSessionBox()
     private let sessionQueue = DispatchQueue(label: "com.lingyan.camera-session")
     private let handPoseRequest = VNDetectHumanHandPoseRequest()
-    private var gestureSamples: [TimedHandPoint] = []
+    private var gestureSamples: [TimedHandFrame] = []
     private var lastAcceptedGestureTime = Date.distantPast
     private var connectionAttemptID = UUID()
 
     var session: AVCaptureSession {
         sessionBox.session
+    }
+
+    override init() {
+        handPoseRequest.maximumHandCount = 2
+        super.init()
     }
 
     func start() {
@@ -160,20 +165,23 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         do {
             let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
             try handler.perform([handPoseRequest])
-            guard let observation = handPoseRequest.results?.first else {
+            let observations = Array((handPoseRequest.results ?? []).prefix(2))
+            guard !observations.isEmpty else {
                 gestureStatus = .searching
                 return
             }
 
-            let point = try handAnchorPoint(from: observation)
-            appendGesturePoint(point)
+            let points = try observations
+                .map { try handAnchorPoint(from: $0) }
+                .sorted { $0.x < $1.x }
+            appendGestureFrame(points)
             gestureStatus = .tracking
         } catch {
             gestureStatus = .failed
         }
     }
 
-    private func handAnchorPoint(from observation: VNHumanHandPoseObservation) throws -> CGPoint {
+    private func handAnchorPoint(from observation: VNHumanHandPoseObservation) throws -> HandPoint {
         let points = try observation.recognizedPoints(.all)
         let candidates = [
             points[.wrist],
@@ -188,12 +196,58 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
 
         let x = candidates.map(\.location.x).reduce(0, +) / CGFloat(candidates.count)
         let y = candidates.map(\.location.y).reduce(0, +) / CGFloat(candidates.count)
-        return CGPoint(x: x, y: y)
+        return HandPoint(x: Double(x), y: Double(y), shape: classifyHandShape(points))
     }
 
-    private func appendGesturePoint(_ point: CGPoint) {
+    private func classifyHandShape(_ points: [VNHumanHandPoseObservation.JointName: VNRecognizedPoint]) -> HandShape {
+        let thumb = isExtended(.thumbTip, base: .thumbCMC, points: points, ratio: 1.15)
+        let index = isExtended(.indexTip, base: .indexMCP, points: points)
+        let middle = isExtended(.middleTip, base: .middleMCP, points: points)
+        let ring = isExtended(.ringTip, base: .ringMCP, points: points)
+        let little = isExtended(.littleTip, base: .littleMCP, points: points)
+
+        if thumb, index, !middle, !ring, !little {
+            return .lShape
+        }
+
+        if index, middle, !ring, !little {
+            return .fingerGun
+        }
+
+        return .natural
+    }
+
+    private func isExtended(
+        _ tip: VNHumanHandPoseObservation.JointName,
+        base: VNHumanHandPoseObservation.JointName,
+        points: [VNHumanHandPoseObservation.JointName: VNRecognizedPoint],
+        ratio: Double = 1.28
+    ) -> Bool {
+        guard
+            let wrist = points[.wrist],
+            let tipPoint = points[tip],
+            let basePoint = points[base],
+            wrist.confidence > 0.35,
+            tipPoint.confidence > 0.35,
+            basePoint.confidence > 0.35
+        else {
+            return false
+        }
+
+        let tipDistance = distance(wrist.location, tipPoint.location)
+        let baseDistance = distance(wrist.location, basePoint.location)
+        return tipDistance > baseDistance * ratio
+    }
+
+    private func distance(_ a: CGPoint, _ b: CGPoint) -> Double {
+        let dx = Double(a.x - b.x)
+        let dy = Double(a.y - b.y)
+        return (dx * dx + dy * dy).squareRoot()
+    }
+
+    private func appendGestureFrame(_ points: [HandPoint]) {
         let now = Date()
-        gestureSamples.append(TimedHandPoint(point: point, timestamp: now))
+        gestureSamples.append(TimedHandFrame(points: points, timestamp: now))
         gestureSamples = gestureSamples.filter { now.timeIntervalSince($0.timestamp) <= 0.75 }
 
         guard
@@ -205,14 +259,14 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         let duration = Int(last.timestamp.timeIntervalSince(first.timestamp) * 1_000)
-        let motion = GestureMotion(
-            horizontalTravel: Double(last.point.x - first.point.x),
-            verticalTravel: Double(last.point.y - first.point.y),
+        let recognizer = FrameGestureRecognizer(profile: gestureCalibrationProfile)
+        guard let gesture = recognizer.recognize(
+            start: first.points,
+            end: last.points,
             durationMilliseconds: duration
-        )
-
-        let recognizer = MotionGestureRecognizer(profile: gestureCalibrationProfile)
-        guard let gesture = recognizer.recognize(motion) else { return }
+        ) else {
+            return
+        }
 
         lastAcceptedGestureTime = now
         lastGesture = gesture
@@ -228,8 +282,8 @@ enum GestureStatus: String {
     case failed = "识别异常"
 }
 
-private struct TimedHandPoint {
-    let point: CGPoint
+private struct TimedHandFrame {
+    let points: [HandPoint]
     let timestamp: Date
 }
 

@@ -5,6 +5,7 @@ import PresenterDirector
 final class PresentationCommandController: ObservableObject {
     @Published private(set) var accessibilityStatus: AccessibilityStatus = .unknown
     @Published private(set) var lastActionDescription = "尚未触发"
+    @Published private(set) var isRecording = false
 
     private let director = PresentationDirector()
 
@@ -35,6 +36,12 @@ final class PresentationCommandController: ObservableObject {
             postKey(.equals, modifiers: .maskCommand)
         case .zoomOut:
             postKey(.minus, modifiers: .maskCommand)
+        case .startPresentation:
+            postKey(.returnKey, modifiers: .maskCommand)
+        case .exitPresentation:
+            postKey(.escape)
+        case .toggleRecording:
+            isRecording.toggle()
         case .toggleAnnotation, .drawAnnotation, .clearAnnotations, .none:
             break
         }
@@ -65,6 +72,8 @@ private enum VirtualKey: CGKeyCode {
     case rightArrow = 0x7C
     case minus = 0x1B
     case equals = 0x18
+    case escape = 0x35
+    case returnKey = 0x24
 }
 
 private extension PresentationAction {
@@ -78,6 +87,12 @@ private extension PresentationAction {
             return "放大演示"
         case .zoomOut:
             return "缩小演示"
+        case .startPresentation:
+            return "开始播放"
+        case .exitPresentation:
+            return "退出播放"
+        case .toggleRecording:
+            return "切换录制"
         case .toggleAnnotation:
             return "开关标注"
         case .drawAnnotation:
