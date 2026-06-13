@@ -243,11 +243,14 @@ struct DashboardView: View {
             DetailRow(label: "识别状态", value: camera.gestureStatus.rawValue)
             DetailRow(label: "当前手型", value: camera.detectedHandShapes)
             DetailRow(label: "最近动作", value: commandController.lastActionDescription)
-            DetailRow(label: "辅助功能", value: commandController.accessibilityStatus.rawValue)
+            DetailRow(label: "系统报告", value: commandController.accessibilityStatus.rawValue)
 
             HStack {
                 Button("请求授权") {
                     commandController.requestAccessibilityPermission()
+                }
+                Button("3秒后测试") {
+                    commandController.testNextSlide()
                 }
                 Button("快速校准") {
                     camera.gestureCalibrationProfile = GestureProfile(

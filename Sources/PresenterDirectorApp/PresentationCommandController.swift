@@ -22,13 +22,28 @@ final class PresentationCommandController: ObservableObject {
     func handle(_ gesture: GestureIntent, target: PresentationTarget) {
         refreshAccessibilityStatus()
         let command = director.command(for: gesture, target: target)
-        guard accessibilityStatus == .granted || command.presentationAction == .toggleRecording else {
-            lastActionDescription = "\(command.presentationAction.label) 未发送：需要授权"
-            requestAccessibilityPermission()
-            return
-        }
         sendKeyboardCommand(for: command.presentationAction)
-        lastActionDescription = command.presentationAction.label
+        if accessibilityStatus == .granted || command.presentationAction == .toggleRecording {
+            lastActionDescription = command.presentationAction.label
+        } else {
+            lastActionDescription = "\(command.presentationAction.label) 已尝试发送"
+        }
+    }
+
+    func testNextSlide() {
+        refreshAccessibilityStatus()
+        lastActionDescription = "3 秒后测试下一页"
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            sendKeyboardCommand(for: .nextSlide)
+            lastActionDescription = accessibilityStatus == .granted ? "测试下一页" : "测试下一页已尝试发送"
+        }
+    }
+
+    func sendDebugNextSlideNow() {
+        refreshAccessibilityStatus()
+        sendKeyboardCommand(for: .nextSlide)
+        lastActionDescription = accessibilityStatus == .granted ? "测试下一页" : "测试下一页已尝试发送"
     }
 
     private func sendKeyboardCommand(for action: PresentationAction) {
