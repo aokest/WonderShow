@@ -22,6 +22,11 @@ final class PresentationCommandController: ObservableObject {
     func handle(_ gesture: GestureIntent, target: PresentationTarget) {
         refreshAccessibilityStatus()
         let command = director.command(for: gesture, target: target)
+        guard accessibilityStatus == .granted || command.presentationAction == .toggleRecording else {
+            lastActionDescription = "\(command.presentationAction.label) 未发送：需要授权"
+            requestAccessibilityPermission()
+            return
+        }
         sendKeyboardCommand(for: command.presentationAction)
         lastActionDescription = command.presentationAction.label
     }

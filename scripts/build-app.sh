@@ -21,8 +21,8 @@ plutil -insert CFBundleIdentifier -string "com.local.LingYan" "$BUNDLE_DIR/Conte
 plutil -insert CFBundleName -string "$APP_NAME" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleDisplayName -string "$APP_NAME" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundlePackageType -string APPL "$BUNDLE_DIR/Contents/Info.plist"
-plutil -insert CFBundleVersion -string 0.4.1 "$BUNDLE_DIR/Contents/Info.plist"
-plutil -insert CFBundleShortVersionString -string 0.4.1 "$BUNDLE_DIR/Contents/Info.plist"
+plutil -insert CFBundleVersion -string 0.4.2 "$BUNDLE_DIR/Contents/Info.plist"
+plutil -insert CFBundleShortVersionString -string 0.4.2 "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert LSMinimumSystemVersion -string 14.0 "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert NSCameraUsageDescription -string "灵演需要访问摄像头，用于接入 DJI Osmo Pocket 3 的演讲画面。" "$BUNDLE_DIR/Contents/Info.plist"
 

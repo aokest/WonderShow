@@ -2,7 +2,7 @@ import PresenterDirector
 import SwiftUI
 
 struct DashboardView: View {
-    private static let appVersion = "v0.4.1"
+    private static let appVersion = "v0.4.2"
 
     @StateObject private var camera = CameraPreviewService()
     @StateObject private var commandController = PresentationCommandController()
@@ -26,24 +26,26 @@ struct DashboardView: View {
             )
             .ignoresSafeArea()
 
-            VStack(spacing: 18) {
-                topBar
+            ScrollView {
+                VStack(spacing: 18) {
+                    topBar
 
-                HStack(alignment: .top, spacing: 18) {
-                    VStack(spacing: 18) {
-                        previewPanel
-                        presentationPanel
-                    }
+                    HStack(alignment: .top, spacing: 18) {
+                        VStack(spacing: 18) {
+                            previewPanel
+                            presentationPanel
+                        }
 
-                    VStack(spacing: 18) {
-                        cameraPanel
-                        recordingPanel
-                        gesturesPanel
+                        VStack(spacing: 18) {
+                            cameraPanel
+                            recordingPanel
+                            gesturesPanel
+                        }
+                        .frame(width: 360)
                     }
-                    .frame(width: 360)
                 }
+                .padding(22)
             }
-            .padding(22)
         }
         .onAppear {
             commandController.refreshAccessibilityStatus()
@@ -91,11 +93,6 @@ struct DashboardView: View {
             StatusChip(icon: "video.fill", title: "摄像头", value: camera.status.label)
             StatusChip(icon: "hand.raised.fill", title: "手势", value: camera.gestureStatus.rawValue)
             StatusChip(icon: "rectangle.3.group.fill", title: "演示", value: target.label)
-
-            Button(copy.rehearsalButton) {}
-                .buttonStyle(PrimaryButtonStyle())
-            Button(copy.recordButton) {}
-                .buttonStyle(RecordButtonStyle())
         }
     }
 
@@ -219,6 +216,13 @@ struct DashboardView: View {
                 Text("左右分屏").tag(RecordingLayout.sideBySide)
             }
 
+            HStack(spacing: 10) {
+                Button(copy.rehearsalButton) {}
+                    .buttonStyle(PrimaryButtonStyle())
+                Button(copy.recordButton) {}
+                    .buttonStyle(RecordButtonStyle())
+            }
+
             DetailRow(label: "输入源", value: "\(pipeline.inputs.count) 路")
             DetailRow(label: "输出素材", value: pipeline.outputs.map(\.label).joined(separator: "、"))
             DetailRow(label: "成片布局", value: pipeline.composition.label)
@@ -231,6 +235,11 @@ struct DashboardView: View {
             SectionTitle(icon: "hand.raised.fill", text: "手势控制")
             Toggle("启用手势控制", isOn: $camera.gestureControlEnabled)
                 .toggleStyle(.switch)
+                .onChange(of: camera.gestureControlEnabled) {
+                    if camera.gestureControlEnabled {
+                        commandController.requestAccessibilityPermission()
+                    }
+                }
             DetailRow(label: "识别状态", value: camera.gestureStatus.rawValue)
             DetailRow(label: "当前手型", value: camera.detectedHandShapes)
             DetailRow(label: "最近动作", value: commandController.lastActionDescription)

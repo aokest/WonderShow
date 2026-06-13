@@ -21,6 +21,39 @@ The following features are not implemented yet:
 - Picture-in-picture rendering.
 - Annotation overlay.
 
+## Product Scope Expansion
+
+LingYan / WonderShow should be designed as a recording and presentation studio, not only as a gesture remote.
+
+Core use cases:
+
+- Screen-only recording when the speaker is working at the computer.
+- Camera-only recording using the built-in Mac camera, DJI Osmo Pocket 3, or another UVC camera.
+- Screen plus speaker recording with one or two camera inputs.
+- Live presentation recording in front of a large screen, TV, projector, or physical stage, using Pocket 3 for tracking.
+- Final compositing into a polished video after recording.
+
+Input sources:
+
+- Mac screen or selected window.
+- System audio when permitted.
+- Microphone.
+- Built-in Mac camera.
+- DJI Osmo Pocket 3.
+- Optional second camera.
+
+Composition modes:
+
+- Screen only.
+- Speaker only.
+- Screen with picture-in-picture camera.
+- Camera with picture-in-picture screen.
+- Side-by-side.
+- Keyed cutout speaker over screen.
+- Two-camera layout for stage plus close-up.
+
+This means the recording engine should be source-agnostic: it should not assume Pocket 3 is always present, and it should support one or two camera tracks plus screen/audio tracks.
+
 ## Naming
 
 - Chinese name: `灵演`
