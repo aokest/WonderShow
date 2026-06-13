@@ -2,114 +2,163 @@ import PresenterDirector
 import SwiftUI
 
 struct DashboardView: View {
+    @StateObject private var camera = CameraPreviewService()
     @State private var target: PresentationTarget = .powerPoint
     @State private var mode: RecordingMode = .cameraAndScreen
     @State private var layout: RecordingLayout = .screenWithCameraPictureInPicture(corner: .bottomRight)
 
+    private let copy = AppLocalization().copy()
     private let director = PresentationDirector()
     private let pipelineFactory = RecordingPipelineFactory()
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.94, green: 0.96, blue: 0.98),
+                    Color(red: 0.98, green: 0.96, blue: 0.91)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
 
-            HStack(alignment: .top, spacing: 16) {
-                VStack(spacing: 16) {
-                    previewPanel
-                    compatibilityPanel
-                }
+            VStack(spacing: 18) {
+                topBar
 
-                VStack(spacing: 16) {
-                    devicePanel
-                    recordingPanel
-                    gesturePanel
-                    htmlPanel
+                HStack(alignment: .top, spacing: 18) {
+                    VStack(spacing: 18) {
+                        previewPanel
+                        presentationPanel
+                    }
+
+                    VStack(spacing: 18) {
+                        cameraPanel
+                        recordingPanel
+                        gesturesPanel
+                    }
+                    .frame(width: 360)
                 }
-                .frame(width: 340)
             }
-            .padding(20)
+            .padding(22)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear {
+            camera.start()
+        }
+        .onDisappear {
+            camera.stop()
+        }
     }
 
-    private var header: some View {
-        HStack {
+    private var topBar: some View {
+        HStack(alignment: .center, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Presenter Director")
-                    .font(.system(size: 26, weight: .semibold))
-                Text("Pocket 3 speaker tracking, gesture slide control, and presentation recording")
+                Text(copy.productName)
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.08, green: 0.1, blue: 0.13))
+                Text(copy.tagline)
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            Button("Start Rehearsal") {}
-                .buttonStyle(.borderedProminent)
-            Button("Record") {}
-                .buttonStyle(.bordered)
+            StatusChip(icon: "video.fill", title: "摄像头", value: camera.status.label)
+            StatusChip(icon: "rectangle.3.group.fill", title: "演示", value: target.label)
+
+            Button(copy.rehearsalButton) {}
+                .buttonStyle(PrimaryButtonStyle())
+            Button(copy.recordButton) {}
+                .buttonStyle(RecordButtonStyle())
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
-        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var previewPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Program Preview", systemImage: "rectangle.inset.filled.and.person.filled")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                SectionTitle(icon: "rectangle.inset.filled.and.person.filled", text: copy.programPreview)
+                Spacer()
+                Text(camera.activeDeviceName)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
 
-            ZStack {
+            ZStack(alignment: .bottomLeading) {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.black)
-                VStack(spacing: 10) {
-                    Image(systemName: "video")
-                        .font(.system(size: 42))
-                    Text("AVFoundation camera preview connects here")
-                        .font(.headline)
-                    Text("Next phase: bind this panel to the OsmoPocket3 UVC stream.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+
+                CameraPreviewView(session: camera.session)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                if camera.status != .running {
+                    VStack(spacing: 10) {
+                        Image(systemName: "camera.viewfinder")
+                            .font(.system(size: 46, weight: .medium))
+                        Text(copy.cameraNotConnected)
+                            .font(.system(size: 18, weight: .semibold))
+                        Text(camera.status.detail)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.72))
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 420)
+                        Button("重新连接") {
+                            camera.start()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+
+                HStack(spacing: 8) {
+                    LiveDot(isOn: camera.status == .running)
+                    Text(camera.status == .running ? "实时预览" : "预览待连接")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.black.opacity(0.52))
                 .foregroundStyle(.white)
+                .clipShape(Capsule())
+                .padding(14)
             }
             .aspectRatio(16 / 9, contentMode: .fit)
         }
-        .panelStyle()
+        .surface()
     }
 
-    private var compatibilityPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Presentation Target", systemImage: "play.rectangle.on.rectangle")
-                .font(.headline)
+    private var presentationPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SectionTitle(icon: "play.rectangle.on.rectangle", text: "演示兼容")
 
-            Picker("Target", selection: $target) {
+            Picker("演示软件", selection: $target) {
                 Text("PowerPoint").tag(PresentationTarget.powerPoint)
                 Text("WPS").tag(PresentationTarget.wps)
                 Text("Keynote").tag(PresentationTarget.keynote)
                 Text("PDF").tag(PresentationTarget.pdfViewer)
-                Text("HTML / Reveal.js").tag(PresentationTarget.html(engine: .revealJS))
+                Text("HTML").tag(PresentationTarget.html(engine: .revealJS))
             }
             .pickerStyle(.segmented)
 
-            HStack {
-                SummaryPill(title: "Slide Control", value: commandSummary)
-                SummaryPill(title: "Annotation", value: annotationSummary)
+            HStack(spacing: 12) {
+                MetricTile(title: "翻页通道", value: commandSummary, icon: "keyboard")
+                MetricTile(title: "标注方式", value: annotationSummary, icon: "pencil.and.scribble")
+                MetricTile(title: "HTML 优势", value: htmlAdvantage, icon: "curlybraces")
             }
         }
-        .panelStyle()
+        .surface()
     }
 
-    private var devicePanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Camera", systemImage: "camera")
-                .font(.headline)
-
-            DetailRow(label: "Device", value: DeviceCapability.pocket3.name)
-            DetailRow(label: "Interface", value: "UVC camera")
-            DetailRow(label: "Tracking", value: "Pocket 3 on-device FaceTrack")
-            DetailRow(label: "Private SDK", value: DeviceCapability.pocket3.requiresPrivateGimbalSDK ? "Required" : "Not required")
+    private var cameraPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionTitle(icon: "camera.fill", text: "Pocket 3")
+            DetailRow(label: "当前设备", value: camera.activeDeviceName)
+            DetailRow(label: "连接状态", value: camera.status.detail)
+            DetailRow(label: "接入方式", value: "UVC 摄像头")
+            DetailRow(label: "跟踪策略", value: "机身 FaceTrack + 软件构图")
+            DetailRow(label: "私有 SDK", value: "不依赖")
         }
-        .panelStyle()
+        .surface()
     }
 
     private var recordingPanel: some View {
@@ -120,53 +169,37 @@ struct DashboardView: View {
             layout: layout
         )
 
-        return VStack(alignment: .leading, spacing: 12) {
-            Label("Recording", systemImage: "record.circle")
-                .font(.headline)
+        return VStack(alignment: .leading, spacing: 14) {
+            SectionTitle(icon: "record.circle", text: "录制方案")
 
-            Picker("Mode", selection: $mode) {
-                Text("Speaker Only").tag(RecordingMode.cameraOnly)
-                Text("Speaker + Screen").tag(RecordingMode.cameraAndScreen)
+            Picker("录制模式", selection: $mode) {
+                Text("只录人像").tag(RecordingMode.cameraOnly)
+                Text("人像 + 屏幕").tag(RecordingMode.cameraAndScreen)
             }
             .pickerStyle(.segmented)
 
-            Picker("Layout", selection: $layout) {
-                Text("Close-up").tag(RecordingLayout.speakerCloseUp)
-                Text("Picture in Picture").tag(RecordingLayout.screenWithCameraPictureInPicture(corner: .bottomRight))
-                Text("Side by Side").tag(RecordingLayout.sideBySide)
+            Picker("画面布局", selection: $layout) {
+                Text("人物特写").tag(RecordingLayout.speakerCloseUp)
+                Text("画中画").tag(RecordingLayout.screenWithCameraPictureInPicture(corner: .bottomRight))
+                Text("左右分屏").tag(RecordingLayout.sideBySide)
             }
 
-            DetailRow(label: "Inputs", value: "\(pipeline.inputs.count)")
-            DetailRow(label: "Outputs", value: pipeline.outputs.map(\.label).joined(separator: ", "))
-            DetailRow(label: "Composition", value: pipeline.composition.label)
+            DetailRow(label: "输入源", value: "\(pipeline.inputs.count) 路")
+            DetailRow(label: "输出素材", value: pipeline.outputs.map(\.label).joined(separator: "、"))
+            DetailRow(label: "成片布局", value: pipeline.composition.label)
         }
-        .panelStyle()
+        .surface()
     }
 
-    private var gesturePanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Gestures", systemImage: "hand.raised")
-                .font(.headline)
-
-            DetailRow(label: "Swipe left", value: "Next slide")
-            DetailRow(label: "Swipe right", value: "Previous slide")
-            DetailRow(label: "Pinch", value: "Toggle annotation")
-            DetailRow(label: "Open palm", value: "Clear marks")
+    private var gesturesPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionTitle(icon: "hand.raised.fill", text: "手势控制")
+            GestureRow(icon: "arrow.left", gesture: "左挥", action: "下一页")
+            GestureRow(icon: "arrow.right", gesture: "右挥", action: "上一页")
+            GestureRow(icon: "hand.pinch.fill", gesture: "捏合", action: "开关标注")
+            GestureRow(icon: "hand.raised.fill", gesture: "张掌停留", action: "清除标记")
         }
-        .panelStyle()
-    }
-
-    private var htmlPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("HTML Mode", systemImage: "curlybraces")
-                .font(.headline)
-
-            Text("HTML decks can use a local bridge and in-slide canvas, so drawing, undo, clearing, and exporting marks are more reliable than controlling Office ink tools.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .panelStyle()
+        .surface()
     }
 
     private var commandSummary: String {
@@ -175,6 +208,54 @@ struct DashboardView: View {
 
     private var annotationSummary: String {
         director.annotationStrategy(for: target).label
+    }
+
+    private var htmlAdvantage: String {
+        switch target {
+        case .html:
+            return "内嵌画布"
+        default:
+            return "可后续接入"
+        }
+    }
+}
+
+private struct SectionTitle: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: icon)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(Color(red: 0.1, green: 0.12, blue: 0.16))
+    }
+}
+
+private struct StatusChip: View {
+    let icon: String
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .foregroundStyle(Color(red: 0.11, green: 0.38, blue: 0.47))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.system(size: 12, weight: .semibold))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.white.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(.white.opacity(0.8), lineWidth: 1)
+        )
     }
 }
 
@@ -188,42 +269,128 @@ private struct DetailRow: View {
                 .foregroundStyle(.secondary)
             Spacer(minLength: 12)
             Text(value)
+                .fontWeight(.medium)
                 .multilineTextAlignment(.trailing)
         }
-        .font(.callout)
+        .font(.system(size: 13))
     }
 }
 
-private struct SummaryPill: View {
+private struct MetricTile: View {
     let title: String
     let value: String
+    let icon: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.callout.weight(.medium))
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 32, height: 32)
+                .background(Color(red: 0.88, green: 0.94, blue: 0.96))
+                .foregroundStyle(Color(red: 0.07, green: 0.36, blue: 0.44))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.system(size: 14, weight: .semibold))
+            }
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .padding(12)
+        .background(Color.white.opacity(0.62))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
+private struct GestureRow: View {
+    let icon: String
+    let gesture: String
+    let action: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .frame(width: 28, height: 28)
+                .background(Color(red: 0.96, green: 0.92, blue: 0.82))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            Text(gesture)
+                .fontWeight(.medium)
+            Spacer()
+            Text(action)
+                .foregroundStyle(.secondary)
+        }
+        .font(.system(size: 13))
+    }
+}
+
+private struct LiveDot: View {
+    let isOn: Bool
+
+    var body: some View {
+        Circle()
+            .fill(isOn ? Color.green : Color.orange)
+            .frame(width: 8, height: 8)
+    }
+}
+
+private struct PrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 14, weight: .semibold))
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .background(Color(red: 0.1, green: 0.36, blue: 0.44).opacity(configuration.isPressed ? 0.82 : 1))
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct RecordButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 14, weight: .semibold))
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .background(Color(red: 0.78, green: 0.18, blue: 0.13).opacity(configuration.isPressed ? 0.82 : 1))
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 private extension View {
-    func panelStyle() -> some View {
+    func surface() -> some View {
         self
-            .padding(16)
+            .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(.white.opacity(0.78))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                    .stroke(.white.opacity(0.92), lineWidth: 1)
             )
+            .shadow(color: .black.opacity(0.06), radius: 20, x: 0, y: 10)
+    }
+}
+
+private extension PresentationTarget {
+    var label: String {
+        switch self {
+        case .powerPoint:
+            return "PowerPoint"
+        case .wps:
+            return "WPS"
+        case .keynote:
+            return "Keynote"
+        case .pdfViewer:
+            return "PDF"
+        case .genericKeyboard:
+            return "通用"
+        case .html:
+            return "HTML"
+        }
     }
 }
 
@@ -231,13 +398,13 @@ private extension CommandTransport {
     var label: String {
         switch self {
         case .keyboardShortcut:
-            return "Keyboard"
+            return "键盘事件"
         case .accessibilityAutomation:
-            return "Accessibility"
+            return "辅助控制"
         case .htmlBridge:
-            return "HTML bridge"
+            return "HTML 桥接"
         case .internalOverlay:
-            return "Overlay"
+            return "应用浮层"
         }
     }
 }
@@ -246,9 +413,9 @@ private extension AnnotationStrategy {
     var label: String {
         switch self {
         case .systemOverlay:
-            return "System overlay"
+            return "系统浮层"
         case .inSlideCanvas:
-            return "In-slide canvas"
+            return "页面画布"
         }
     }
 }
@@ -257,11 +424,11 @@ private extension RecordingOutput {
     var label: String {
         switch self {
         case .cameraArchive:
-            return "camera"
+            return "人像"
         case .screenArchive:
-            return "screen"
+            return "屏幕"
         case .programRecording:
-            return "program"
+            return "成片"
         }
     }
 }
@@ -270,11 +437,11 @@ private extension ProgramComposition {
     var label: String {
         switch self {
         case .singleCamera:
-            return "Speaker close-up"
+            return "人物特写"
         case .pictureInPicture:
-            return "Picture in picture"
+            return "画中画"
         case .sideBySide:
-            return "Side by side"
+            return "左右分屏"
         }
     }
 }
