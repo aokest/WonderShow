@@ -7,8 +7,8 @@ This roadmap extends LingYan / WonderShow from a live presentation director into
 The current app can be tried as a camera preview and product console:
 
 - Chinese UI is enabled by default.
-- DJI Osmo Pocket 3 is detected as a UVC camera.
-- The live preview can display the Pocket 3 feed.
+- AVFoundation camera discovery is enabled.
+- The live preview can display a connected camera feed, including Pocket 3 when present.
 - Presentation target, recording mode, layout, and gesture strategy controls are present.
 
 The following features are not implemented yet:
@@ -28,9 +28,9 @@ LingYan / WonderShow should be designed as a recording and presentation studio, 
 Core use cases:
 
 - Screen-only recording when the speaker is working at the computer.
-- Camera-only recording using the built-in Mac camera, DJI Osmo Pocket 3, or another UVC camera.
+- Camera-only recording using the built-in Mac camera, DJI Osmo Pocket 3, Insta360 cameras, UVC capture devices, or another compatible camera.
 - Screen plus speaker recording with one or two camera inputs.
-- Live presentation recording in front of a large screen, TV, projector, or physical stage, using Pocket 3 for tracking.
+- Live presentation recording in front of a large screen, TV, projector, or physical stage, using a tracking-capable camera when available.
 - Final compositing into a polished video after recording.
 
 Input sources:
@@ -40,6 +40,9 @@ Input sources:
 - Microphone.
 - Built-in Mac camera.
 - DJI Osmo Pocket 3.
+- Insta360 cameras / action cameras.
+- USB capture cards and HDMI cameras.
+- Network cameras such as Hikvision.
 - Optional second camera.
 
 Composition modes:
@@ -63,14 +66,14 @@ This means the recording engine should be source-agnostic: it should not assume 
 
 ## Screen Studio-Inspired Capabilities
 
-LingYan should eventually include the strongest ideas from modern polished screen recorders while adapting them to presentation, Pocket 3 tracking, and gesture control.
+LingYan should eventually include the strongest ideas from modern polished screen recorders while adapting them to presentation, multi-camera tracking, and gesture control.
 
 ### Timeline Tracks
 
 The editor should use multiple editable tracks:
 
 - Screen video track.
-- Pocket 3 camera track.
+- Speaker camera track.
 - Microphone/system audio tracks.
 - Zoom keyframe track.
 - Cursor/action metadata track.
@@ -107,7 +110,7 @@ These events should be stored as editable metadata, not baked into the raw video
 
 Users should be able to:
 
-- Add Pocket 3 camera as picture-in-picture.
+- Add a speaker camera as picture-in-picture.
 - Pick corner, size, shape, shadow, and border.
 - Animate PiP layout changes over time.
 - Switch between speaker close-up, screen-first, side-by-side, and full-camera moments.
@@ -147,7 +150,7 @@ Raw media and metadata should stay separate. The rendered video is generated fro
 ## Implementation Order
 
 1. Gesture calibration and gesture-to-slide control.
-2. Screen recording with raw screen plus Pocket 3 camera files.
+2. Screen recording with raw screen plus speaker camera files.
 3. Basic program export with fixed PiP layout.
 4. Project file format for raw media plus metadata.
 5. Timeline view with zoom markers.

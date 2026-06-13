@@ -1,10 +1,10 @@
-# Presenter Director
+# 灵演 WonderShow
 
-Presenter Director is a macOS presentation assistant for DJI Osmo Pocket 3.
+灵演 WonderShow is a macOS presentation and recording assistant for multiple camera inputs.
 
 It is designed to:
 
-- use Pocket 3 as the tracking speaker camera;
+- use a built-in Mac camera, DJI Osmo Pocket 3, Insta360 camera, UVC capture device, or network camera as the speaker camera;
 - recognize custom gestures for slide control and annotations;
 - record speaker-only or speaker-plus-screen sessions;
 - support PowerPoint, WPS, Keynote, PDF viewers, and HTML slide decks.
@@ -21,7 +21,7 @@ This repository currently contains the tested Swift core logic layer:
 - app compatibility strategy for Office, WPS, generic keyboard control, and HTML decks;
 - annotation strategy selection;
 - recording pipeline planning;
-- Pocket 3 capability modeling as a UVC camera input.
+- multi-camera capability modeling, with Pocket 3 as one verified UVC input.
 
 ## Development
 
@@ -37,4 +37,4 @@ Run the current macOS prototype:
 swift run PresenterDirectorApp
 ```
 
-The next implementation step is to connect the preview panel to AVFoundation camera discovery and default to the `OsmoPocket3` UVC stream when it is present.
+The macOS prototype uses AVFoundation camera discovery and prefers a recognizable tracking camera such as `OsmoPocket3` when it is present, while still falling back to other available camera inputs.

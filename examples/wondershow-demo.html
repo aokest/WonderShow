@@ -122,7 +122,7 @@
       <div>
         <div class="eyebrow">LINGYAN / WONDERSHOW TEST DECK</div>
         <h1>用手势控制演示</h1>
-        <p>打开灵演，启用手势控制，然后用 Pocket 3 对准你的手。指枪翻页，双手八字缩放。</p>
+        <p>打开灵演，启用手势控制，然后用任意已接入摄像头对准你的手。指枪翻页，双手八字缩放。</p>
       </div>
       <div class="footer"><span class="badge">指枪左挥 / 右挥翻页</span><span>1 / 4</span></div>
     </section>
@@ -131,7 +131,7 @@
       <div>
         <div class="eyebrow">SLIDE CONTROL</div>
         <h2>右挥：上一页<br>左挥：下一页</h2>
-        <p>灵演会向当前前台窗口发送方向键，所以 PowerPoint、WPS、Keynote、PDF 和网页都能测试。</p>
+        <p>HTML 测试页优先使用直连指令；PowerPoint、WPS、Keynote 和 PDF 使用目标窗口快捷键。</p>
       </div>
       <div class="footer"><span class="badge">键盘事件兼容模式</span><span>2 / 4</span></div>
     </section>
@@ -196,6 +196,16 @@
         setZoom(zoom - 0.12);
       }
     });
+
+    window.wonderShowCommand = function(command) {
+      if (command === 'next') next();
+      if (command === 'previous') previous();
+      if (command === 'zoomIn') setZoom(zoom + 0.12);
+      if (command === 'zoomOut') setZoom(zoom - 0.12);
+      if (command === 'start') document.body.classList.add('presenting');
+      if (command === 'exit') document.body.classList.remove('presenting');
+      return 'ok';
+    };
   </script>
 </body>
 </html>

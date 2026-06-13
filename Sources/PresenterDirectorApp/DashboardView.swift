@@ -2,7 +2,7 @@ import PresenterDirector
 import SwiftUI
 
 struct DashboardView: View {
-    private static let appVersion = "v0.4.2"
+    private static let appVersion = "v0.4.3"
 
     @StateObject private var camera = CameraPreviewService()
     @StateObject private var commandController = PresentationCommandController()
@@ -165,9 +165,10 @@ struct DashboardView: View {
 
             HStack {
                 Button("打开测试演示页") {
+                    target = .html(engine: .custom)
                     DemoDeckLauncher.openDemoDeck()
                 }
-                Text("测试时让浏览器或 PPT 保持前台，灵演会发送翻页/缩放快捷键。")
+                Text("测试页会优先使用 Chrome 直连；PPT、WPS、Keynote 使用目标窗口快捷键。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -183,12 +184,13 @@ struct DashboardView: View {
 
     private var cameraPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionTitle(icon: "camera.fill", text: "Pocket 3")
+            SectionTitle(icon: "camera.fill", text: "输入设备")
             DetailRow(label: "当前设备", value: camera.activeDeviceName)
             DetailRow(label: "连接状态", value: camera.status.detail)
-            DetailRow(label: "接入方式", value: "UVC 摄像头")
-            DetailRow(label: "跟踪策略", value: "机身 FaceTrack + 软件构图")
-            DetailRow(label: "私有 SDK", value: "不依赖")
+            DetailRow(label: "接入方式", value: "AVFoundation / UVC")
+            DetailRow(label: "可用设备", value: supportedDeviceSummary)
+            DetailRow(label: "跟踪策略", value: "设备侧跟踪 + 软件构图")
+            DetailRow(label: "私有 SDK", value: "首版不依赖")
         }
         .surface()
     }
@@ -196,7 +198,7 @@ struct DashboardView: View {
     private var recordingPanel: some View {
         let pipeline = pipelineFactory.makePipeline(
             mode: mode,
-            camera: .pocket3,
+            camera: .external(name: camera.activeDeviceName),
             screen: mode == .cameraAndScreen ? .mainDisplay : nil,
             layout: layout
         )
@@ -243,6 +245,9 @@ struct DashboardView: View {
             DetailRow(label: "识别状态", value: camera.gestureStatus.rawValue)
             DetailRow(label: "当前手型", value: camera.detectedHandShapes)
             DetailRow(label: "最近动作", value: commandController.lastActionDescription)
+            DetailRow(label: "前台应用", value: commandController.frontmostApplication)
+            DetailRow(label: "投递通道", value: commandController.lastDeliveryBackend)
+            DetailRow(label: "投递结果", value: commandController.lastDeliveryDetail)
             DetailRow(label: "系统报告", value: commandController.accessibilityStatus.rawValue)
 
             HStack {
@@ -250,7 +255,7 @@ struct DashboardView: View {
                     commandController.requestAccessibilityPermission()
                 }
                 Button("3秒后测试") {
-                    commandController.testNextSlide()
+                    commandController.testNextSlide(target: target)
                 }
                 Button("快速校准") {
                     camera.gestureCalibrationProfile = GestureProfile(
@@ -286,6 +291,10 @@ struct DashboardView: View {
         default:
             return "可后续接入"
         }
+    }
+
+    private var supportedDeviceSummary: String {
+        "内置、DJI、Insta360、采集卡、网络摄像头"
     }
 }
 

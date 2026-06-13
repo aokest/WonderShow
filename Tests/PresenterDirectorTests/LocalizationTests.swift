@@ -5,7 +5,7 @@ import Testing
     let copy = AppLocalization().copy()
 
     #expect(copy.productName == "灵演")
-    #expect(copy.tagline == "让 Pocket 3 成为你的智能演讲导演")
+    #expect(copy.tagline == "让摄像头成为你的智能演讲导演")
     #expect(copy.rehearsalButton == "开始彩排")
     #expect(copy.recordButton == "开始录制")
 }

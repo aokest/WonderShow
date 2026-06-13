@@ -5,6 +5,9 @@ import PresenterDirector
 final class PresentationCommandController: ObservableObject {
     @Published private(set) var accessibilityStatus: AccessibilityStatus = .unknown
     @Published private(set) var lastActionDescription = "尚未触发"
+    @Published private(set) var lastDeliveryBackend = "未发送"
+    @Published private(set) var frontmostApplication = "未检测"
+    @Published private(set) var lastDeliveryDetail = "等待命令"
     @Published private(set) var isRecording = false
 
     private let director = PresentationDirector()
@@ -22,62 +25,153 @@ final class PresentationCommandController: ObservableObject {
     func handle(_ gesture: GestureIntent, target: PresentationTarget) {
         refreshAccessibilityStatus()
         let command = director.command(for: gesture, target: target)
-        sendKeyboardCommand(for: command.presentationAction)
-        if accessibilityStatus == .granted || command.presentationAction == .toggleRecording {
-            lastActionDescription = command.presentationAction.label
-        } else {
-            lastActionDescription = "\(command.presentationAction.label) 已尝试发送"
-        }
+        let result = sendCommand(command.presentationAction, target: target)
+        lastActionDescription = result.userFacingAction(action: command.presentationAction)
     }
 
-    func testNextSlide() {
+    func testNextSlide(target: PresentationTarget) {
         refreshAccessibilityStatus()
         lastActionDescription = "3 秒后测试下一页"
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
-            sendKeyboardCommand(for: .nextSlide)
-            lastActionDescription = accessibilityStatus == .granted ? "测试下一页" : "测试下一页已尝试发送"
+            let result = sendCommand(.nextSlide, target: target)
+            lastActionDescription = result.userFacingAction(action: .nextSlide, prefix: "测试")
         }
     }
 
-    func sendDebugNextSlideNow() {
+    func sendDebugNextSlideNow(target: PresentationTarget) {
         refreshAccessibilityStatus()
-        sendKeyboardCommand(for: .nextSlide)
-        lastActionDescription = accessibilityStatus == .granted ? "测试下一页" : "测试下一页已尝试发送"
+        let result = sendCommand(.nextSlide, target: target)
+        lastActionDescription = result.userFacingAction(action: .nextSlide, prefix: "测试")
     }
 
-    private func sendKeyboardCommand(for action: PresentationAction) {
+    @discardableResult
+    private func sendCommand(_ action: PresentationAction, target: PresentationTarget) -> CommandDeliveryResult {
+        updateFrontmostApplication()
+
+        if action == .toggleRecording {
+            isRecording.toggle()
+            return finishDelivery(.success(backend: "内部状态", detail: isRecording ? "录制状态：开启" : "录制状态：关闭"))
+        }
+
+        if case .html = target {
+            let htmlResult = sendHTMLCommand(action)
+            if htmlResult.succeeded {
+                return finishDelivery(htmlResult)
+            }
+
+            let fallback = sendKeyboardCommand(for: action)
+            return finishDelivery(fallback.mergingFallbackReason(htmlResult.detail))
+        }
+
+        return finishDelivery(sendKeyboardCommand(for: action))
+    }
+
+    private func finishDelivery(_ result: CommandDeliveryResult) -> CommandDeliveryResult {
+        lastDeliveryBackend = result.backend
+        lastDeliveryDetail = result.detail
+        return result
+    }
+
+    private func updateFrontmostApplication() {
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            frontmostApplication = "未检测"
+            return
+        }
+        frontmostApplication = [app.localizedName, app.bundleIdentifier]
+            .compactMap { $0 }
+            .joined(separator: " / ")
+    }
+
+    private func sendKeyboardCommand(for action: PresentationAction) -> CommandDeliveryResult {
         switch action {
         case .nextSlide:
-            postKey(.rightArrow)
+            return postKey(.rightArrow)
         case .previousSlide:
-            postKey(.leftArrow)
+            return postKey(.leftArrow)
         case .zoomIn:
-            postKey(.equals, modifiers: .maskCommand)
+            return postKey(.equals, modifiers: .maskCommand)
         case .zoomOut:
-            postKey(.minus, modifiers: .maskCommand)
+            return postKey(.minus, modifiers: .maskCommand)
         case .startPresentation:
-            postKey(.returnKey, modifiers: .maskCommand)
+            return postKey(.returnKey, modifiers: .maskCommand)
         case .exitPresentation:
-            postKey(.escape)
+            return postKey(.escape)
+        case .toggleAnnotation, .drawAnnotation, .clearAnnotations, .none:
+            return .skipped(backend: "未实现", detail: "\(action.label) 暂未接入当前目标")
         case .toggleRecording:
             isRecording.toggle()
-        case .toggleAnnotation, .drawAnnotation, .clearAnnotations, .none:
-            break
+            return .success(backend: "内部状态", detail: isRecording ? "录制状态：开启" : "录制状态：关闭")
         }
     }
 
-    private func postKey(_ key: VirtualKey, modifiers: CGEventFlags = []) {
+    private func sendHTMLCommand(_ action: PresentationAction) -> CommandDeliveryResult {
+        guard let javascript = action.htmlJavaScript else {
+            return .skipped(backend: "HTML 直连", detail: "\(action.label) 暂无 HTML 测试页命令")
+        }
+        let compactJavaScript = javascript
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        let escapedJavaScript = compactJavaScript.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+
+        let source = """
+        tell application "Google Chrome"
+            if (count of windows) is 0 then error "Chrome 没有打开窗口"
+
+            repeat with chromeWindow in windows
+                repeat with tabIndex from 1 to (count of tabs of chromeWindow)
+                    set chromeTab to tab tabIndex of chromeWindow
+                    if ((URL of chromeTab contains "wondershow-demo.html") or (title of chromeTab contains "灵演 WonderShow")) then
+                        set active tab index of chromeWindow to tabIndex
+                        set index of chromeWindow to 1
+                        tell chromeTab to execute javascript "\(escapedJavaScript)"
+                        return "sent to wondershow-demo"
+                    end if
+                end repeat
+            end repeat
+
+            tell active tab of front window to execute javascript "\(escapedJavaScript)"
+            return "sent to active tab"
+        end tell
+        """
+
+        var error: NSDictionary?
+        guard let script = NSAppleScript(source: source) else {
+            return .failed(backend: "Chrome HTML 直连", detail: "无法创建 AppleScript")
+        }
+
+        let output = script.executeAndReturnError(&error)
+        if let error {
+            let message = error[NSAppleScript.errorMessage] as? String ?? "\(error)"
+            return .failed(backend: "Chrome HTML 直连", detail: message)
+        }
+
+        let result = output.stringValue ?? "已发送"
+        return .success(backend: "Chrome HTML 直连", detail: "\(action.label) 已发送：\(result)")
+    }
+
+    private func postKey(_ key: VirtualKey, modifiers: CGEventFlags = []) -> CommandDeliveryResult {
         guard let down = CGEvent(keyboardEventSource: nil, virtualKey: key.rawValue, keyDown: true),
               let up = CGEvent(keyboardEventSource: nil, virtualKey: key.rawValue, keyDown: false)
         else {
-            return
+            return .failed(backend: "通用键盘", detail: "无法创建键盘事件")
         }
 
         down.flags = modifiers
         up.flags = modifiers
+
+        if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+            down.postToPid(pid)
+            up.postToPid(pid)
+            return .success(backend: "目标进程键盘", detail: "已发送到 \(frontmostApplication)")
+        }
+
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
+        return .success(backend: "系统键盘兜底", detail: "已发送到系统事件队列")
     }
 }
 
@@ -122,5 +216,93 @@ private extension PresentationAction {
         case .none:
             return "无动作"
         }
+    }
+
+    var htmlJavaScript: String? {
+        switch self {
+        case .nextSlide:
+            return """
+            (() => {
+              const slides = Array.from(document.querySelectorAll('.slide'));
+              const current = Math.max(0, slides.findIndex(slide => slide.classList.contains('active')));
+              const next = Math.min(slides.length - 1, current + 1);
+              slides.forEach((slide, index) => slide.classList.toggle('active', index === next));
+              return `${next + 1} / ${slides.length}`;
+            })()
+            """
+        case .previousSlide:
+            return """
+            (() => {
+              const slides = Array.from(document.querySelectorAll('.slide'));
+              const current = Math.max(0, slides.findIndex(slide => slide.classList.contains('active')));
+              const next = Math.max(0, current - 1);
+              slides.forEach((slide, index) => slide.classList.toggle('active', index === next));
+              return `${next + 1} / ${slides.length}`;
+            })()
+            """
+        case .zoomIn:
+            return """
+            (() => {
+              const stage = document.getElementById('stage');
+              const current = Number(stage.dataset.wonderShowZoom || '1');
+              const next = Math.min(1.8, current + 0.12);
+              stage.dataset.wonderShowZoom = String(next);
+              stage.style.transform = `scale(${next})`;
+              return `zoom ${next.toFixed(2)}`;
+            })()
+            """
+        case .zoomOut:
+            return """
+            (() => {
+              const stage = document.getElementById('stage');
+              const current = Number(stage.dataset.wonderShowZoom || '1');
+              const next = Math.max(0.75, current - 0.12);
+              stage.dataset.wonderShowZoom = String(next);
+              stage.style.transform = `scale(${next})`;
+              return `zoom ${next.toFixed(2)}`;
+            })()
+            """
+        case .startPresentation:
+            return "document.body.classList.add('presenting'); 'presenting'"
+        case .exitPresentation:
+            return "document.body.classList.remove('presenting'); 'exited'"
+        case .toggleAnnotation:
+            return "document.body.classList.toggle('annotating'); 'annotation toggled'"
+        case .clearAnnotations:
+            return "document.querySelectorAll('[data-wondershow-annotation]').forEach(node => node.remove()); 'annotations cleared'"
+        case .drawAnnotation, .toggleRecording, .none:
+            return nil
+        }
+    }
+}
+
+private struct CommandDeliveryResult {
+    let succeeded: Bool
+    let backend: String
+    let detail: String
+
+    static func success(backend: String, detail: String) -> CommandDeliveryResult {
+        CommandDeliveryResult(succeeded: true, backend: backend, detail: detail)
+    }
+
+    static func failed(backend: String, detail: String) -> CommandDeliveryResult {
+        CommandDeliveryResult(succeeded: false, backend: backend, detail: detail)
+    }
+
+    static func skipped(backend: String, detail: String) -> CommandDeliveryResult {
+        CommandDeliveryResult(succeeded: false, backend: backend, detail: detail)
+    }
+
+    func mergingFallbackReason(_ reason: String) -> CommandDeliveryResult {
+        CommandDeliveryResult(
+            succeeded: succeeded,
+            backend: "\(backend)（HTML 失败后兜底）",
+            detail: "\(detail)；HTML 直连未生效：\(reason)"
+        )
+    }
+
+    func userFacingAction(action: PresentationAction, prefix: String? = nil) -> String {
+        let actionText = [prefix, action.label].compactMap { $0 }.joined()
+        return succeeded ? actionText : "\(actionText)已尝试发送"
     }
 }

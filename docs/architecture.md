@@ -1,10 +1,10 @@
-# Presenter Director Architecture
+# 灵演 WonderShow Architecture
 
-Presenter Director is a macOS app for live presentation control, speaker tracking, and lecture recording with DJI Osmo Pocket 3 as the primary camera.
+灵演 WonderShow is a macOS app for live presentation control, speaker tracking, and lecture recording with multiple camera inputs. DJI Osmo Pocket 3 is one verified UVC tracking camera, not the only supported input.
 
 ## Product Goals
 
-- Use DJI Osmo Pocket 3 as a high quality tracking camera through its standard UVC webcam stream.
+- Use the built-in Mac camera, DJI Osmo Pocket 3, Insta360 cameras, UVC capture devices, or network cameras as speaker video inputs.
 - Recognize custom hand gestures to control slides and annotations.
 - Record either speaker close-up only or speaker plus screen.
 - Support PowerPoint, WPS, Keynote, PDF viewers, and HTML presentation frameworks.
@@ -12,15 +12,15 @@ Presenter Director is a macOS app for live presentation control, speaker trackin
 
 ## Feasibility Summary
 
-The app should treat Pocket 3 as a video input rather than a directly programmable gimbal. The Mac can capture the Pocket 3 through AVFoundation because macOS enumerates it as a UVC camera. Hardware face tracking should be enabled on the Pocket 3 itself when needed; the app can add software crop/framing on top of the incoming video stream.
+The app should treat cameras as video inputs first. The Mac can capture built-in cameras and UVC devices through AVFoundation; network cameras can be added later through stream adapters. Hardware face tracking can run on capable devices such as Pocket 3, while the app adds software crop/framing on top of the incoming video stream.
 
-Direct private gimbal control is not a first-phase dependency because Pocket 3 does not provide a clearly supported macOS SDK path for controlling the gimbal from a desktop app.
+Direct private gimbal or vendor SDK control is not a first-phase dependency. The first reliable path is standard video capture plus software gesture recognition.
 
 ## System Architecture
 
 ```mermaid
 flowchart LR
-    Pocket3["DJI Osmo Pocket 3\nUVC camera stream"] --> CameraCapture["Camera Capture\nAVFoundation"]
+    Cameras["Camera Inputs\nBuilt-in / DJI / Insta360 / UVC / network"] --> CameraCapture["Camera Capture\nAVFoundation / stream adapters"]
     Screen["Mac display/window"] --> ScreenCapture["Screen Capture\nScreenCaptureKit"]
     CameraCapture --> GestureEngine["Gesture Engine\nVision / MediaPipe"]
     CameraCapture --> RecordingEngine["Recording Engine\nAVAssetWriter"]
@@ -39,10 +39,11 @@ flowchart LR
 
 ### Device Layer
 
-- Discovers `OsmoPocket3` from AVFoundation devices.
+- Discovers available AVFoundation video devices.
 - Selects resolution and frame rate.
 - Reports device status to the UI.
-- Does not require private DJI SDK access.
+- Prefers known tracking cameras when present, but falls back to any available camera.
+- Does not require private vendor SDK access in the first phase.
 
 ### Gesture Engine
 
@@ -97,7 +98,7 @@ HTML is easier and more powerful because annotation coordinates, slide state, un
 
 Inputs:
 
-- Pocket 3 camera stream.
+- One or two camera streams.
 - Screen or window capture.
 - Optional microphone input in a later phase.
 
@@ -119,7 +120,7 @@ Layouts:
 
 - Keep the Swift package as the tested core module.
 - Create a macOS SwiftUI app target.
-- Enumerate AVFoundation cameras and default to `OsmoPocket3` when present.
+- Enumerate AVFoundation cameras and prefer known tracking cameras when present.
 - Show camera preview.
 - Add basic device status.
 
@@ -133,7 +134,7 @@ Layouts:
 ### Phase 3: Recording
 
 - Add ScreenCaptureKit source picker.
-- Capture Pocket 3 plus selected screen/window.
+- Capture selected camera input plus selected screen/window.
 - Write camera archive, screen archive, and composited recording.
 - Add layout selection.
 
@@ -156,7 +157,7 @@ The repository currently contains a Swift package with the core decision layer a
 
 - `PresentationDirector`: gesture to command mapping, transport selection, cooldown.
 - `RecordingPipelineFactory`: recording mode to input/output/composition mapping.
-- `DeviceCapability.pocket3`: Pocket 3 modeled as a UVC camera input with on-device tracking.
+- `DeviceCapability.supportedExamples`: models built-in cameras, Pocket 3, Insta360/运动相机, UVC capture devices, and network cameras.
 
 Run tests:
 

@@ -3,9 +3,19 @@ import AppKit
 enum DemoDeckLauncher {
     static func openDemoDeck() {
         for candidate in candidateURLs() where FileManager.default.fileExists(atPath: candidate.path) {
-            NSWorkspace.shared.open(candidate)
+            openInChrome(candidate)
             return
         }
+    }
+
+    private static func openInChrome(_ url: URL) {
+        guard let chromeURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome") else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.open([url], withApplicationAt: chromeURL, configuration: configuration)
     }
 
     private static func candidateURLs() -> [URL] {

@@ -40,20 +40,20 @@ public struct AppLocalization: Sendable {
         case .zhHans:
             return AppCopy(
                 productName: "灵演",
-                tagline: "让 Pocket 3 成为你的智能演讲导演",
+                tagline: "让摄像头成为你的智能演讲导演",
                 rehearsalButton: "开始彩排",
                 recordButton: "开始录制",
                 programPreview: "导播预览",
-                cameraNotConnected: "等待连接 Pocket 3 画面"
+                cameraNotConnected: "等待连接摄像头画面"
             )
         case .en:
             return AppCopy(
                 productName: "LingYan",
-                tagline: "Turn Pocket 3 into your intelligent presentation director",
+                tagline: "Turn any camera into your intelligent presentation director",
                 rehearsalButton: "Start Rehearsal",
                 recordButton: "Record",
                 programPreview: "Program Preview",
-                cameraNotConnected: "Waiting for Pocket 3 video"
+                cameraNotConnected: "Waiting for camera video"
             )
         }
     }

@@ -67,3 +67,13 @@ import Testing
     #expect(capability.requiresPrivateGimbalSDK == false)
     #expect(capability.recommendedTrackingMode == .hardwareFaceTrackConfiguredOnDevice)
 }
+
+@Test func modelsMultipleSupportedCameraInputTypes() {
+    let examples = DeviceCapability.supportedExamples
+
+    #expect(examples.contains(.pocket3))
+    #expect(examples.contains(.builtInCamera))
+    #expect(examples.contains { $0.name.contains("Insta360") })
+    #expect(examples.contains { $0.name.contains("海康威视") })
+    #expect(examples.allSatisfy { !$0.requiresPrivateGimbalSDK })
+}

@@ -117,7 +117,7 @@ final class CameraPreviewService: NSObject, ObservableObject {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(6))
             guard connectionAttemptID == attemptID, status == .connecting else { return }
-            status = .failed("连接超时，请确认 Pocket 3 已进入摄像头模式，或重新插拔后再试。")
+            status = .failed("连接超时，请确认摄像头已开启并处于可采集模式，或重新插拔后再试。")
         }
     }
 
