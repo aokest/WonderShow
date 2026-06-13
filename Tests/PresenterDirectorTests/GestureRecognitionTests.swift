@@ -78,6 +78,17 @@ import Testing
     #expect(naturalHandSwipe == nil)
 }
 
+@Test func allowsSwipeWhenHandShapeIsUncertain() {
+    let recognizer = FrameGestureRecognizer(profile: .default)
+    let uncertainSwipe = recognizer.recognize(
+        start: [.init(x: 0.25, y: 0.5, shape: .unknown)],
+        end: [.init(x: 0.02, y: 0.5, shape: .unknown)],
+        durationMilliseconds: 420
+    )
+
+    #expect(uncertainSwipe == .swipeLeft)
+}
+
 @Test func requiresLShapeOnBothHandsForZoom() {
     let recognizer = FrameGestureRecognizer(profile: .default)
     let zoom = recognizer.recognize(

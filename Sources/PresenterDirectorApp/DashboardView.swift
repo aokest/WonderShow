@@ -2,6 +2,8 @@ import PresenterDirector
 import SwiftUI
 
 struct DashboardView: View {
+    private static let appVersion = "v0.4.1"
+
     @StateObject private var camera = CameraPreviewService()
     @StateObject private var commandController = PresentationCommandController()
     @State private var target: PresentationTarget = .powerPoint
@@ -66,13 +68,23 @@ struct DashboardView: View {
     private var topBar: some View {
         HStack(alignment: .center, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(copy.productName)
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color(red: 0.08, green: 0.1, blue: 0.13))
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(copy.productName)
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color(red: 0.08, green: 0.1, blue: 0.13))
+                    Text(Self.appVersion)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(.white.opacity(0.72))
+                        .clipShape(Capsule())
+                }
                 Text(copy.tagline)
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.secondary)
             }
+            .frame(minWidth: 280, alignment: .leading)
 
             Spacer()
 
@@ -220,6 +232,7 @@ struct DashboardView: View {
             Toggle("启用手势控制", isOn: $camera.gestureControlEnabled)
                 .toggleStyle(.switch)
             DetailRow(label: "识别状态", value: camera.gestureStatus.rawValue)
+            DetailRow(label: "当前手型", value: camera.detectedHandShapes)
             DetailRow(label: "最近动作", value: commandController.lastActionDescription)
             DetailRow(label: "辅助功能", value: commandController.accessibilityStatus.rawValue)
 
@@ -384,6 +397,7 @@ private struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 14, weight: .semibold))
+            .frame(minWidth: 88)
             .padding(.horizontal, 18)
             .padding(.vertical, 10)
             .background(Color(red: 0.1, green: 0.36, blue: 0.44).opacity(configuration.isPressed ? 0.82 : 1))
@@ -396,6 +410,7 @@ private struct RecordButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 14, weight: .semibold))
+            .frame(minWidth: 88)
             .padding(.horizontal, 18)
             .padding(.vertical, 10)
             .background(Color(red: 0.78, green: 0.18, blue: 0.13).opacity(configuration.isPressed ? 0.82 : 1))

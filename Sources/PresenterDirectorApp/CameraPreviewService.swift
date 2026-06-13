@@ -15,6 +15,7 @@ final class CameraPreviewService: NSObject, ObservableObject {
     @Published private(set) var activeDeviceName: String = "未连接"
     @Published private(set) var gestureStatus: GestureStatus = .idle
     @Published private(set) var lastGesture: GestureIntent?
+    @Published private(set) var detectedHandShapes = "未检测"
     @Published var gestureControlEnabled = false
     @Published var gestureCalibrationProfile = GestureProfile.default
 
@@ -174,6 +175,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
             let points = try observations
                 .map { try handAnchorPoint(from: $0) }
                 .sorted { $0.x < $1.x }
+            detectedHandShapes = points.map(\.shape.label).joined(separator: "、")
             appendGestureFrame(points)
             gestureStatus = .tracking
         } catch {
@@ -210,7 +212,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
             return .lShape
         }
 
-        if index, middle, !ring, !little {
+        if index, !ring, !little {
             return .fingerGun
         }
 
@@ -289,6 +291,21 @@ private struct TimedHandFrame {
 
 private enum GestureFrameError: Error {
     case missingHandPoint
+}
+
+private extension HandShape {
+    var label: String {
+        switch self {
+        case .unknown:
+            return "未知"
+        case .natural:
+            return "自然手"
+        case .fingerGun:
+            return "指枪"
+        case .lShape:
+            return "八字"
+        }
+    }
 }
 
 enum CameraStatus: Equatable {

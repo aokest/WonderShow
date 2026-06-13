@@ -153,6 +153,14 @@ public enum HandShape: Hashable, Sendable {
     case natural
     case fingerGun
     case lShape
+
+    public var allowsSwipe: Bool {
+        self == .fingerGun || self == .lShape || self == .unknown
+    }
+
+    public var allowsZoom: Bool {
+        self == .lShape || self == .fingerGun || self == .unknown
+    }
 }
 
 public struct TwoHandMotion: Hashable, Sendable {
@@ -208,10 +216,10 @@ public struct FrameGestureRecognizer: Sendable {
         guard pairedCount > 0 else { return nil }
 
         if pairedCount >= 2 {
-            let canZoom = start[0].shape == .lShape
-                && start[1].shape == .lShape
-                && end[0].shape == .lShape
-                && end[1].shape == .lShape
+            let canZoom = start[0].shape.allowsZoom
+                && start[1].shape.allowsZoom
+                && end[0].shape.allowsZoom
+                && end[1].shape.allowsZoom
             let leftMotion = GestureMotion(
                 horizontalTravel: end[0].x - start[0].x,
                 verticalTravel: end[0].y - start[0].y,
@@ -248,7 +256,7 @@ public struct FrameGestureRecognizer: Sendable {
         }
 
         if pairedCount == 1 {
-            guard start[0].shape == .fingerGun, end[0].shape == .fingerGun else {
+            guard start[0].shape.allowsSwipe, end[0].shape.allowsSwipe else {
                 return nil
             }
             return MotionGestureRecognizer(profile: profile).recognize(motions[0])
@@ -256,8 +264,8 @@ public struct FrameGestureRecognizer: Sendable {
 
         let significant = motions.enumerated().filter { index, motion in
             abs(motion.horizontalTravel) >= profile.minimumHorizontalTravel
-                && start[index].shape == .fingerGun
-                && end[index].shape == .fingerGun
+                && start[index].shape.allowsSwipe
+                && end[index].shape.allowsSwipe
         }
         guard significant.count == 1, let (_, motion) = significant.first else {
             return nil
