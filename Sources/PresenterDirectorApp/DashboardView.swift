@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DashboardView: View {
     @StateObject private var camera = CameraPreviewService()
+    @StateObject private var commandController = PresentationCommandController()
     @State private var target: PresentationTarget = .powerPoint
     @State private var mode: RecordingMode = .cameraAndScreen
     @State private var layout: RecordingLayout = .screenWithCameraPictureInPicture(corner: .bottomRight)
@@ -43,10 +44,22 @@ struct DashboardView: View {
             .padding(22)
         }
         .onAppear {
+            commandController.refreshAccessibilityStatus()
+            updateGestureHandler()
             camera.start()
+        }
+        .onChange(of: target) {
+            updateGestureHandler()
         }
         .onDisappear {
             camera.stop()
+        }
+    }
+
+    private func updateGestureHandler() {
+        let currentTarget = target
+        camera.onGestureRecognized = { gesture in
+            commandController.handle(gesture, target: currentTarget)
         }
     }
 
@@ -64,6 +77,7 @@ struct DashboardView: View {
             Spacer()
 
             StatusChip(icon: "video.fill", title: "摄像头", value: camera.status.label)
+            StatusChip(icon: "hand.raised.fill", title: "手势", value: camera.gestureStatus.rawValue)
             StatusChip(icon: "rectangle.3.group.fill", title: "演示", value: target.label)
 
             Button(copy.rehearsalButton) {}
@@ -140,6 +154,15 @@ struct DashboardView: View {
             }
             .pickerStyle(.segmented)
 
+            HStack {
+                Button("打开测试演示页") {
+                    DemoDeckLauncher.openDemoDeck()
+                }
+                Text("测试时让浏览器或 PPT 保持前台，灵演会发送翻页/缩放快捷键。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             HStack(spacing: 12) {
                 MetricTile(title: "翻页通道", value: commandSummary, icon: "keyboard")
                 MetricTile(title: "标注方式", value: annotationSummary, icon: "pencil.and.scribble")
@@ -194,10 +217,29 @@ struct DashboardView: View {
     private var gesturesPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             SectionTitle(icon: "hand.raised.fill", text: "手势控制")
+            Toggle("启用手势控制", isOn: $camera.gestureControlEnabled)
+                .toggleStyle(.switch)
+            DetailRow(label: "识别状态", value: camera.gestureStatus.rawValue)
+            DetailRow(label: "最近动作", value: commandController.lastActionDescription)
+            DetailRow(label: "辅助功能", value: commandController.accessibilityStatus.rawValue)
+
+            HStack {
+                Button("请求授权") {
+                    commandController.requestAccessibilityPermission()
+                }
+                Button("快速校准") {
+                    camera.gestureCalibrationProfile = GestureProfile(
+                        minimumHorizontalTravel: 0.18,
+                        minimumVerticalTravel: 0.20,
+                        maximumGestureDurationMilliseconds: 750
+                    )
+                }
+            }
+
             GestureRow(icon: "arrow.left", gesture: "左挥", action: "下一页")
             GestureRow(icon: "arrow.right", gesture: "右挥", action: "上一页")
-            GestureRow(icon: "hand.pinch.fill", gesture: "捏合", action: "开关标注")
-            GestureRow(icon: "hand.raised.fill", gesture: "张掌停留", action: "清除标记")
+            GestureRow(icon: "arrow.up", gesture: "上挥", action: "放大演示")
+            GestureRow(icon: "arrow.down", gesture: "下挥", action: "缩小演示")
         }
         .surface()
     }

@@ -34,6 +34,10 @@ public final class PresentationDirector {
             return DirectorCommand(presentationAction: .nextSlide, transport: transport)
         case .swipeRight:
             return DirectorCommand(presentationAction: .previousSlide, transport: transport)
+        case .zoomIn:
+            return DirectorCommand(presentationAction: .zoomIn, transport: transport)
+        case .zoomOut:
+            return DirectorCommand(presentationAction: .zoomOut, transport: transport)
         case .pinchToggle:
             return DirectorCommand(presentationAction: .toggleAnnotation, transport: annotationTransport(for: target))
         case .pinchDrag:
