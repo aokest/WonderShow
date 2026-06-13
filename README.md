@@ -11,6 +11,8 @@ It is designed to:
 
 See [docs/architecture.md](docs/architecture.md) for the product architecture, feasibility notes, and staged development plan.
 
+See [docs/recording-studio-roadmap.md](docs/recording-studio-roadmap.md) for the future recording editor, timeline zoom, picture-in-picture, and export roadmap.
+
 ## Current Status
 
 This repository currently contains the tested Swift core logic layer:
