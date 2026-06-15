@@ -39,3 +39,12 @@
 ## 回退
 
 - sidecar 不可用时，Swift 继续使用旧 Vision 路线
+
+## v0.7 消费约束
+
+- `hands[].landmarks[21]` 必须完整，否则该手不会进入 `MediaPipeHandGeometry`
+- `gesture_categories[]` 仍保留给兼容映射，但 v0.7 的缩放主链路不再把它作为唯一真相
+- Swift 侧会同时读取：
+  - `gesture_categories[]` 生成兼容 `HandShape`
+  - `landmarks[21]` 生成 `palmSize`、`palmCenter`、`primaryShape`
+- 双手缩放要求两只手的 21 点都完整，且必须都能推导出严格 `L` 形

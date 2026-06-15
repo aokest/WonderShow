@@ -1,5 +1,6 @@
 public enum AppLanguage: Hashable, Sendable {
     case zhHans
+    case zhHant
     case en
 }
 
@@ -46,11 +47,20 @@ public struct AppLocalization: Sendable {
                 programPreview: "导播预览",
                 cameraNotConnected: "等待连接摄像头画面"
             )
+        case .zhHant:
+            return AppCopy(
+                productName: "靈演",
+                tagline: "讓攝影機成為你的智能演講導播",
+                rehearsalButton: "開始彩排",
+                recordButton: "開始錄製",
+                programPreview: "導播預覽",
+                cameraNotConnected: "等待連接攝影機畫面"
+            )
         case .en:
             return AppCopy(
-                productName: "LingYan",
+                productName: "WonderShow",
                 tagline: "Turn any camera into your intelligent presentation director",
-                rehearsalButton: "Start Rehearsal",
+                rehearsalButton: "Rehearsal",
                 recordButton: "Record",
                 programPreview: "Program Preview",
                 cameraNotConnected: "Waiting for camera video"

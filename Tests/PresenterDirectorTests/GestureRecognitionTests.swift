@@ -459,7 +459,7 @@ import Testing
         durationMilliseconds: 420
     )
 
-    #expect(uncertainSwipe == .swipeLeft)
+    #expect(uncertainSwipe == nil)
 }
 
 @Test func requiresLShapeOnBothHandsForZoom() {

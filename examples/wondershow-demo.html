@@ -209,7 +209,10 @@
      * @param {number} nextZoom 用户或桥接命令要求的目标缩放值。
      */
     function setZoom(nextZoom) {
-      targetZoom = Math.max(0.75, Math.min(1.8, Number(nextZoom || zoom)));
+      targetZoom = Math.max(0.30, Math.min(3.0, Number(nextZoom || zoom)));
+      // #region debug-point D:set-zoom-command
+      fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"zoom-instability-v07",runId:"pre-fix",hypothesisId:"D",location:"examples/wondershow-demo.html:setZoom",msg:"[DEBUG] demo received zoom target",data:{targetZoom,currentZoom:zoom,input:Number(nextZoom || zoom)},ts:Date.now()})}).catch(()=>{});
+      // #endregion
       if (targetZoom <= 1.01) {
         targetPanX = 0;
         targetPanY = 0;
@@ -278,6 +281,9 @@
         panY = targetPanY;
         animating = false;
         stage.style.transform = `translate(${(panX * Math.max(0, (zoom - 1) * 520)).toFixed(1)}px, ${(panY * Math.max(0, (zoom - 1) * 340)).toFixed(1)}px) scale(${zoom.toFixed(4)})`;
+        // #region debug-point D:settled-zoom-frame
+        fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"zoom-instability-v07",runId:"pre-fix",hypothesisId:"D",location:"examples/wondershow-demo.html:tick",msg:"[DEBUG] demo zoom animation settled",data:{zoom,targetZoom,panX,panY},ts:Date.now()})}).catch(()=>{});
+        // #endregion
         return;
       }
 

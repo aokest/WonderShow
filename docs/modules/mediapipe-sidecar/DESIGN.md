@@ -36,3 +36,14 @@
   - `Victory` 使用拇指/食指尖中点再融合食指根部
   - 其他手型使用掌心多点质心
 - 这样可以在不重写整套识别器的前提下，先降低单点抖动导致的翻页迟滞与缩放发飘
+
+## v0.7 衔接方式
+
+- Swift 侧新增 `MediaPipeHandGeometry`，直接消费 sidecar 返回的 21 点 landmarks
+- `handPoints()` 继续保留给兼容层和旧测试使用，避免破坏 v0.6.0 基线
+- 真正的新链路只在两处直接依赖 21 点几何：
+  - 双手缩放姿态判定
+  - 连续缩放的 palm-size 归一化距离
+- 因此 sidecar 现在同时服务两条链路：
+  - 兼容链：`landmarks -> HandPoint`
+  - v0.7 链：`landmarks -> MediaPipeHandGeometry -> GestureModeCoordinator`

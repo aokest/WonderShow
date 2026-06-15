@@ -94,6 +94,15 @@ public struct MediaPipeInferenceFrame: Hashable, Sendable, Codable {
 /// - Note: This adapter keeps the current Swift gesture pipeline working while upgrading
 ///   the detector from Vision anchors to MediaPipe landmarks.
 public enum MediaPipeGestureAdapter {
+    /// Converts MediaPipe hands into full 21-point geometries sorted from left to right.
+    /// - Parameter hands: MediaPipe hand predictions sorted in any order.
+    /// - Returns: Stable geometries consumed by the v0.7 gesture engine.
+    public static func handGeometries(from hands: [MediaPipeHandPrediction]) -> [MediaPipeHandGeometry] {
+        hands
+            .compactMap(MediaPipeHandGeometry.init(prediction:))
+            .sorted { $0.palmCenter.x < $1.palmCenter.x }
+    }
+
     /// Projects MediaPipe hands into anchor-based points consumed by the current gesture pipeline.
     /// - Parameter hands: MediaPipe hand predictions sorted in any order.
     /// - Returns: Hand anchor points sorted from left to right.
@@ -133,7 +142,7 @@ public enum MediaPipeGestureAdapter {
         case "Thumb_Up", "Thumb_Down", "ILoveYou":
             return .natural
         default:
-            return .natural
+            return MediaPipeHandGeometry(prediction: hand)?.primaryShape ?? .natural
         }
     }
 

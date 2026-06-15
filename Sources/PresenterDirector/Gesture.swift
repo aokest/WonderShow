@@ -1,3 +1,5 @@
+import Foundation
+
 public enum GestureIntent: String, Hashable, Sendable, Codable, CaseIterable {
     case swipeLeft
     case swipeRight
@@ -176,10 +178,11 @@ public enum HandShape: String, Hashable, Sendable, Codable {
     case openPalm
     case fist
     case fingerGun
+    case sword
     case lShape
 
     public var allowsSwipe: Bool {
-        self == .fingerGun || self == .lShape || self == .unknown
+        self == .sword || self == .fingerGun
     }
 
     public func allowsSwipe(profile: GestureProfile) -> Bool {
@@ -187,7 +190,7 @@ public enum HandShape: String, Hashable, Sendable, Codable {
     }
 
     public var allowsZoom: Bool {
-        self == .lShape || self == .fingerGun || self == .unknown
+        self == .lShape
     }
 }
 
@@ -446,6 +449,39 @@ public struct ContinuousZoomUpdate: Hashable, Sendable {
     }
 }
 
+// #region debug-point E:zoom-runtime-report
+/// Reports runtime zoom diagnostics to the local debug server.
+/// - Parameters:
+///   - hypothesisId: Active hypothesis identifier for this log line.
+///   - location: Source location string for later log analysis.
+///   - message: Human-readable short message.
+///   - data: Structured runtime fields associated with this event.
+private func reportZoomRuntimeDebug(
+    hypothesisId: String,
+    location: String,
+    message: String,
+    data: [String: Any]
+) {
+    guard let url = URL(string: "http://127.0.0.1:7777/event") else { return }
+    guard JSONSerialization.isValidJSONObject(data) else { return }
+    let payload: [String: Any] = [
+        "sessionId": "zoom-instability-v07",
+        "runId": "pre-fix",
+        "hypothesisId": hypothesisId,
+        "location": location,
+        "msg": message,
+        "data": data,
+        "ts": Int(Date().timeIntervalSince1970 * 1_000)
+    ]
+    guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = body
+    URLSession.shared.dataTask(with: request).resume()
+}
+// #endregion
+
 public struct ContinuousZoomTracker: Sendable {
     public let minimumHandDistance: Double
     public let minimumRelativeChange: Double
@@ -458,25 +494,46 @@ public struct ContinuousZoomTracker: Sendable {
     public let minimumScaleDeltaPerUpdate: Double
     public let maximumScaleDeltaPerUpdate: Double
     public let dynamicScaleDeltaMultiplier: Double
+    public let reverseDirectionSuppressionThreshold: Double
+    public let dwellMilliseconds: Int
+    public let graceMilliseconds: Int
+    public let rebaseRelativeChangeThreshold: Double
+    public let rebaseMinimumIntervalMilliseconds: Int
+    public let accelerationGain: Double
+    public let accelerationActivationThreshold: Double
+    public let directionConsistencyFrames: Int
 
     private var baselineDistance: Double?
-    private var baselineScale: Double
     private var lastEmittedScale: Double
     private var lastDistance: Double?
     private var quietFrameCount: Int
+    private var lastDirectionSign: Double
+    private var directionConsistencyCount: Int
+    private var lastFrameRelativeChange: Double
+    private var lastTimestampMilliseconds: Int
+    private var lastEmissionTimestampMilliseconds: Int
+    private var stateMachine: GestureRecognitionStateMachine
 
     public init(
         minimumHandDistance: Double = 0.18,
-        minimumRelativeChange: Double = 0.010,
+        minimumRelativeChange: Double = 0.006,
         minimumScaleStep: Double = 0.0025,
-        scaleSensitivity: Double = 0.75,
-        minimumScale: Double = 0.75,
-        maximumScale: Double = 1.8,
+        scaleSensitivity: Double = 0.85,
+        minimumScale: Double = 0.30,
+        maximumScale: Double = 3.0,
         quietDistanceDeltaThreshold: Double = 0.0018,
-        quietFramesToRebase: Int = 6,
+        quietFramesToRebase: Int = 8,
         minimumScaleDeltaPerUpdate: Double = 0.005,
-        maximumScaleDeltaPerUpdate: Double = 0.04,
-        dynamicScaleDeltaMultiplier: Double = 0.20
+        maximumScaleDeltaPerUpdate: Double = 0.05,
+        dynamicScaleDeltaMultiplier: Double = 0.25,
+        reverseDirectionSuppressionThreshold: Double = 0.040,
+        dwellMilliseconds: Int = 110,
+        graceMilliseconds: Int = 250,
+        rebaseRelativeChangeThreshold: Double = 0.008,
+        rebaseMinimumIntervalMilliseconds: Int = 320,
+        accelerationGain: Double = 0.85,
+        accelerationActivationThreshold: Double = 0.010,
+        directionConsistencyFrames: Int = 2
     ) {
         self.minimumHandDistance = minimumHandDistance
         self.minimumRelativeChange = minimumRelativeChange
@@ -489,21 +546,59 @@ public struct ContinuousZoomTracker: Sendable {
         self.minimumScaleDeltaPerUpdate = minimumScaleDeltaPerUpdate
         self.maximumScaleDeltaPerUpdate = maximumScaleDeltaPerUpdate
         self.dynamicScaleDeltaMultiplier = dynamicScaleDeltaMultiplier
-        baselineScale = 1
+        self.reverseDirectionSuppressionThreshold = reverseDirectionSuppressionThreshold
+        self.dwellMilliseconds = dwellMilliseconds
+        self.graceMilliseconds = graceMilliseconds
+        self.rebaseRelativeChangeThreshold = rebaseRelativeChangeThreshold
+        self.rebaseMinimumIntervalMilliseconds = rebaseMinimumIntervalMilliseconds
+        self.accelerationGain = accelerationGain
+        self.accelerationActivationThreshold = accelerationActivationThreshold
+        self.directionConsistencyFrames = directionConsistencyFrames
         lastEmittedScale = 1
         lastDistance = nil
         quietFrameCount = 0
+        lastDirectionSign = 0
+        directionConsistencyCount = 0
+        lastFrameRelativeChange = 0
+        lastTimestampMilliseconds = 0
+        lastEmissionTimestampMilliseconds = 0
+        stateMachine = GestureRecognitionStateMachine(
+            profile: GestureModeProfile(
+                enterThreshold: minimumRelativeChange,
+                exitThreshold: minimumRelativeChange * 0.5,
+                dwellMilliseconds: dwellMilliseconds,
+                graceMilliseconds: graceMilliseconds,
+                cooldownMilliseconds: 0
+            )
+        )
     }
 
+    /// Resets the current zoom gesture session to the supplied scale.
+    /// - Parameter currentScale: Current presentation scale used as the new baseline.
     public mutating func reset(currentScale: Double = 1) {
         baselineDistance = nil
-        baselineScale = currentScale
         lastEmittedScale = currentScale
         lastDistance = nil
         quietFrameCount = 0
+        lastDirectionSign = 0
+        directionConsistencyCount = 0
+        lastFrameRelativeChange = 0
+        lastTimestampMilliseconds = 0
+        lastEmissionTimestampMilliseconds = 0
+        stateMachine.reset()
     }
 
-    public mutating func update(points: [HandPoint], currentScale: Double) -> ContinuousZoomUpdate? {
+    /// Consumes lightweight hand anchors and emits a stabilized zoom update when meaningful motion occurs.
+    /// - Parameters:
+    ///   - points: Active hand anchors sorted from left to right.
+    ///   - currentScale: Current presentation scale before this frame.
+    ///   - timestampMilliseconds: Optional frame timestamp used for dwell and grace timing.
+    /// - Returns: A continuous zoom update when the current frame should change the zoom level.
+    public mutating func update(
+        points: [HandPoint],
+        currentScale: Double,
+        timestampMilliseconds: Int? = nil
+    ) -> ContinuousZoomUpdate? {
         guard points.count >= 2 else {
             reset(currentScale: currentScale)
             return nil
@@ -511,7 +606,7 @@ public struct ContinuousZoomTracker: Sendable {
 
         let first = points[0]
         let second = points[1]
-        guard first.shape != .fist, second.shape != .fist else {
+        guard first.shape.allowsZoom, second.shape.allowsZoom else {
             reset(currentScale: currentScale)
             return nil
         }
@@ -522,6 +617,62 @@ public struct ContinuousZoomTracker: Sendable {
             return nil
         }
 
+        return updateDistance(
+            distance: distance,
+            currentScale: currentScale,
+            timestampMilliseconds: timestampMilliseconds
+        )
+    }
+
+    /// Consumes full MediaPipe hand geometry and emits a stabilized zoom update using palm-size normalization.
+    /// - Parameters:
+    ///   - geometries: Active MediaPipe hand geometries sorted from left to right.
+    ///   - currentScale: Current presentation scale before this frame.
+    ///   - timestampMilliseconds: Optional frame timestamp used for dwell and grace timing.
+    /// - Returns: A continuous zoom update when the geometry indicates a deliberate zoom change.
+    public mutating func update(
+        geometries: [MediaPipeHandGeometry],
+        currentScale: Double,
+        timestampMilliseconds: Int? = nil
+    ) -> ContinuousZoomUpdate? {
+        guard geometries.count >= 2 else {
+            reset(currentScale: currentScale)
+            return nil
+        }
+
+        let hands = Array(geometries.prefix(2))
+        guard hands.allSatisfy(\.isStrictLShape) else {
+            reset(currentScale: currentScale)
+            return nil
+        }
+
+        let distance = hands[0].normalizedDistance(to: hands[1])
+        guard distance >= 1.2 else {
+            reset(currentScale: currentScale)
+            return nil
+        }
+
+        return updateDistance(
+            distance: distance,
+            currentScale: currentScale,
+            timestampMilliseconds: timestampMilliseconds
+        )
+    }
+
+    /// Applies the shared zoom-state-machine logic for either lightweight anchors or full MediaPipe geometry.
+    /// - Parameters:
+    ///   - distance: Current two-hand distance in a consistent coordinate space.
+    ///   - currentScale: Current presentation scale before this frame.
+    ///   - timestampMilliseconds: Optional frame timestamp used for dwell and grace timing.
+    /// - Returns: A continuous zoom update when the current distance change is meaningful.
+    private mutating func updateDistance(
+        distance: Double,
+        currentScale: Double,
+        timestampMilliseconds: Int?
+    ) -> ContinuousZoomUpdate? {
+
+        let nextTimestampMilliseconds = nextTimestamp(explicit: timestampMilliseconds)
+
         if let lastDistance {
             let delta = abs(distance - lastDistance)
             if delta <= quietDistanceDeltaThreshold {
@@ -530,35 +681,147 @@ public struct ContinuousZoomTracker: Sendable {
                 quietFrameCount = 0
             }
         }
-        lastDistance = distance
 
         guard let baselineDistance else {
             self.baselineDistance = distance
-            baselineScale = currentScale
             lastEmittedScale = currentScale
-            return nil
-        }
-
-        if quietFrameCount >= quietFramesToRebase {
-            self.baselineDistance = distance
-            baselineScale = currentScale
-            lastEmittedScale = currentScale
-            quietFrameCount = 0
+            lastDistance = distance
+            // #region debug-point B:zoom-baseline-init
+            reportZoomRuntimeDebug(
+                hypothesisId: "B",
+                location: "Gesture.swift:ContinuousZoomTracker.updateDistance",
+                message: "[DEBUG] zoom baseline initialized",
+                data: [
+                    "distance": distance,
+                    "currentScale": currentScale,
+                    "timestampMilliseconds": nextTimestampMilliseconds
+                ]
+            )
+            // #endregion
             return nil
         }
 
         let relativeChange = (distance - baselineDistance) / baselineDistance
-        guard abs(relativeChange) >= minimumRelativeChange else {
+
+        if quietFrameCount >= quietFramesToRebase,
+           abs(relativeChange) <= rebaseRelativeChangeThreshold,
+           nextTimestampMilliseconds - lastEmissionTimestampMilliseconds >= rebaseMinimumIntervalMilliseconds {
+            // #region debug-point B:zoom-rebase
+            reportZoomRuntimeDebug(
+                hypothesisId: "B",
+                location: "Gesture.swift:ContinuousZoomTracker.updateDistance",
+                message: "[DEBUG] zoom baseline rebased after quiet frames",
+                data: [
+                    "distance": distance,
+                    "baselineDistance": baselineDistance,
+                    "relativeChange": relativeChange,
+                    "quietFrameCount": quietFrameCount,
+                    "currentScale": currentScale
+                ]
+            )
+            // #endregion
+            self.baselineDistance = distance
+            lastEmittedScale = currentScale
+            lastDistance = distance
+            quietFrameCount = 0
+            lastDirectionSign = 0
+            directionConsistencyCount = 0
+            lastFrameRelativeChange = 0
+            stateMachine.reset()
             return nil
         }
 
+        let outcome = stateMachine.observe(
+            signal: abs(relativeChange),
+            isEligible: true,
+            timestampMilliseconds: nextTimestampMilliseconds
+        )
+        guard outcome.isBlocking else {
+            // #region debug-point E:zoom-blocked-by-state
+            reportZoomRuntimeDebug(
+                hypothesisId: "E",
+                location: "Gesture.swift:ContinuousZoomTracker.updateDistance",
+                message: "[DEBUG] zoom candidate blocked by state machine",
+                data: [
+                    "distance": distance,
+                    "baselineDistance": baselineDistance,
+                    "relativeChange": relativeChange,
+                    "phase": outcome.phase.rawValue
+                ]
+            )
+            // #endregion
+            lastDistance = distance
+            return nil
+        }
+
+        let previousDistance = lastDistance ?? distance
+        let frameRelativeChange = (distance - previousDistance) / baselineDistance
+        let acceleration = frameRelativeChange - lastFrameRelativeChange
+        let motionEnergy = max(abs(frameRelativeChange), abs(acceleration) * accelerationGain)
+        guard motionEnergy >= min(minimumRelativeChange, accelerationActivationThreshold) else {
+            lastFrameRelativeChange = frameRelativeChange
+            lastDistance = distance
+            return nil
+        }
+
+        let currentDirectionSign: Double = frameRelativeChange == 0 ? 0 : (frameRelativeChange > 0 ? 1 : -1)
+        if currentDirectionSign == 0 {
+            directionConsistencyCount = 0
+        } else if currentDirectionSign == lastDirectionSign {
+            directionConsistencyCount += 1
+        } else {
+            directionConsistencyCount = 1
+        }
+        if lastDirectionSign != 0,
+           currentDirectionSign != 0,
+           currentDirectionSign != lastDirectionSign,
+           abs(frameRelativeChange) < reverseDirectionSuppressionThreshold {
+            // #region debug-point A:zoom-direction-suppressed
+            reportZoomRuntimeDebug(
+                hypothesisId: "A",
+                location: "Gesture.swift:ContinuousZoomTracker.updateDistance",
+                message: "[DEBUG] zoom frame ignored because direction flipped under suppression threshold",
+                data: [
+                    "distance": distance,
+                    "baselineDistance": baselineDistance,
+                    "previousDistance": previousDistance,
+                    "frameRelativeChange": frameRelativeChange,
+                    "acceleration": acceleration,
+                    "motionEnergy": motionEnergy,
+                    "lastDirectionSign": lastDirectionSign,
+                    "currentDirectionSign": currentDirectionSign,
+                    "suppressionThreshold": reverseDirectionSuppressionThreshold
+                ]
+            )
+            // #endregion
+            lastFrameRelativeChange = frameRelativeChange
+            lastDistance = distance
+            return nil
+        }
+
+        let isStrongSingleDirectionMotion = abs(frameRelativeChange) >= reverseDirectionSuppressionThreshold * 0.5
+        guard directionConsistencyCount >= directionConsistencyFrames || isStrongSingleDirectionMotion else {
+            lastFrameRelativeChange = frameRelativeChange
+            lastDistance = distance
+            return nil
+        }
+
+        let accelerationAdjustedChange = frameRelativeChange + acceleration * accelerationGain
+        let signedResponseChange: Double
+        if currentDirectionSign == 0 {
+            signedResponseChange = 0
+        } else if accelerationAdjustedChange * currentDirectionSign > 0 {
+            signedResponseChange = accelerationAdjustedChange
+        } else {
+            signedResponseChange = frameRelativeChange * 0.35
+        }
         let unclampedScale = clamp(
-            baselineScale * (1 + relativeChange * scaleSensitivity),
+            currentScale * (1 + signedResponseChange * scaleSensitivity),
             minimumScale,
             maximumScale
         )
         let allowedScaleDelta = clamp(
-            minimumScaleDeltaPerUpdate + abs(relativeChange) * dynamicScaleDeltaMultiplier,
+            minimumScaleDeltaPerUpdate + motionEnergy * dynamicScaleDeltaMultiplier,
             minimumScaleDeltaPerUpdate,
             maximumScaleDeltaPerUpdate
         )
@@ -568,21 +831,65 @@ public struct ContinuousZoomTracker: Sendable {
             lastEmittedScale + allowedScaleDelta
         )
         guard abs(nextScale - lastEmittedScale) >= minimumScaleStep else {
+            lastFrameRelativeChange = frameRelativeChange
+            lastDistance = distance
             return nil
         }
 
         lastEmittedScale = nextScale
-        self.baselineDistance = distance
-        baselineScale = nextScale
+        lastDistance = distance
+        lastFrameRelativeChange = frameRelativeChange
         quietFrameCount = 0
-        let confidence = max(0, min(1, abs(relativeChange) / 0.35))
+        lastDirectionSign = currentDirectionSign
+        lastEmissionTimestampMilliseconds = nextTimestampMilliseconds
+        let confidence = max(0, min(1, motionEnergy / 0.30))
+        // #region debug-point A:zoom-update-emitted
+        reportZoomRuntimeDebug(
+            hypothesisId: "A",
+            location: "Gesture.swift:ContinuousZoomTracker.updateDistance",
+            message: "[DEBUG] zoom update emitted from tracker",
+            data: [
+                "distance": distance,
+                "baselineDistance": baselineDistance,
+                "previousDistance": previousDistance,
+                "relativeChange": relativeChange,
+                "frameRelativeChange": frameRelativeChange,
+                "acceleration": acceleration,
+                "motionEnergy": motionEnergy,
+                "signedResponseChange": signedResponseChange,
+                "currentScale": currentScale,
+                "nextScale": nextScale,
+                "allowedScaleDelta": allowedScaleDelta,
+                "confidence": confidence
+            ]
+        )
+        // #endregion
         return ContinuousZoomUpdate(
             scale: nextScale,
-            relativeDistanceChange: relativeChange,
+            relativeDistanceChange: frameRelativeChange,
             confidence: confidence
         )
     }
 
+    /// Computes the next timestamp used by the internal dwell/grace state machine.
+    /// - Parameter explicitTimestampMilliseconds: Optional external timestamp provided by the caller.
+    /// - Returns: A monotonic millisecond value suitable for state transitions.
+    private mutating func nextTimestamp(explicit explicitTimestampMilliseconds: Int?) -> Int {
+        if let explicitTimestampMilliseconds {
+            lastTimestampMilliseconds = explicitTimestampMilliseconds
+            return explicitTimestampMilliseconds
+        }
+
+        lastTimestampMilliseconds += 16
+        return lastTimestampMilliseconds
+    }
+
+    /// Clamps a scale-related value to the supplied closed range.
+    /// - Parameters:
+    ///   - value: Value to clamp.
+    ///   - lower: Inclusive lower bound.
+    ///   - upper: Inclusive upper bound.
+    /// - Returns: The clamped value.
     private func clamp(_ value: Double, _ lower: Double, _ upper: Double) -> Double {
         min(upper, max(lower, value))
     }
@@ -603,62 +910,100 @@ public struct StreamingGestureRecognizer: Sendable {
         self.minimumDirectionConsistency = minimumDirectionConsistency
     }
 
+    /// Scans the recent frame window and emits a symmetric left/right swipe when exactly one hand is clearly responsible.
+    /// - Parameter frames: Recent frame snapshots ordered by time.
+    /// - Returns: A discrete swipe intent when the motion is deliberate and directionally stable.
     public func recognize(frames: [GestureFrameSnapshot]) -> GestureIntent? {
         guard frames.count >= 3, let last = frames.last else { return nil }
 
-        let indexedFrames = Array(frames.enumerated())
-        for (startIndex, start) in indexedFrames.dropLast().reversed() {
-            let duration = last.timestampMilliseconds - start.timestampMilliseconds
-            guard duration >= minimumDecisionDurationMilliseconds else { continue }
-            guard duration <= profile.maximumGestureDurationMilliseconds else { break }
+        let pairedCount = frames.map(\.points.count).min() ?? 0
+        guard pairedCount > 0 else { return nil }
 
-            guard let gesture = FrameGestureRecognizer(profile: profile).recognize(
-                start: start.points,
-                end: last.points,
-                durationMilliseconds: duration
-            ) else {
+        let indexedFrames = Array(frames.enumerated())
+        var recognizedCandidates: [GestureIntent] = []
+
+        for handIndex in 0..<pairedCount {
+            guard frames.allSatisfy({
+                $0.points.indices.contains(handIndex)
+                    && $0.points[handIndex].shape.allowsSwipe(profile: profile)
+            }) else {
                 continue
             }
 
-            if isDirectionallyConsistent(
-                gesture: gesture,
-                frames: Array(frames[startIndex...])
-            ) {
-                return gesture
+            for (startIndex, start) in indexedFrames.dropLast().reversed() {
+                let duration = last.timestampMilliseconds - start.timestampMilliseconds
+                guard duration >= minimumDecisionDurationMilliseconds else { continue }
+                guard duration <= profile.maximumGestureDurationMilliseconds else { break }
+
+                let window = Array(frames[startIndex...])
+                guard let gesture = recognizeSwipe(
+                    for: handIndex,
+                    frames: window
+                ) else {
+                    continue
+                }
+
+                recognizedCandidates.append(gesture)
+                break
             }
         }
 
+        if recognizedCandidates.count == 1 {
+            return recognizedCandidates[0]
+        }
         return nil
     }
 
-    private func isDirectionallyConsistent(
-        gesture: GestureIntent,
+    /// Evaluates a single hand inside a candidate window and returns a directional swipe if the signal is stable.
+    /// - Parameters:
+    ///   - handIndex: Index of the active hand within every frame.
+    ///   - frames: Candidate frame window ordered by time.
+    /// - Returns: A swipe intent when the hand motion is horizontal, deliberate, and symmetric.
+    private func recognizeSwipe(
+        for handIndex: Int,
         frames: [GestureFrameSnapshot]
-    ) -> Bool {
-        switch gesture {
-        case .swipeLeft:
-            return horizontalDirectionConsistency(frames: frames, expectedSign: -1)
-        case .swipeRight:
-            return horizontalDirectionConsistency(frames: frames, expectedSign: 1)
-        case .zoomIn, .zoomOut:
-            return true
-        case .startPresentation, .exitPresentation, .toggleRecording, .pinchToggle, .pinchDrag, .openPalmHold:
-            return true
+    ) -> GestureIntent? {
+        guard
+            let firstFrame = frames.first,
+            let lastFrame = frames.last,
+            firstFrame.points.indices.contains(handIndex),
+            lastFrame.points.indices.contains(handIndex)
+        else {
+            return nil
         }
+
+        let first = firstFrame.points[handIndex]
+        let last = lastFrame.points[handIndex]
+        let horizontalTravel = last.x - first.x
+        let verticalTravel = last.y - first.y
+        guard abs(horizontalTravel) >= profile.minimumHorizontalTravel else { return nil }
+        guard abs(horizontalTravel) > abs(verticalTravel) * 1.18 else { return nil }
+
+        let expectedSign = horizontalTravel > 0 ? 1.0 : -1.0
+        guard horizontalDirectionConsistency(
+            for: handIndex,
+            frames: frames,
+            expectedSign: expectedSign
+        ) else {
+            return nil
+        }
+
+        return expectedSign < 0 ? .swipeLeft : .swipeRight
     }
 
+    /// Checks whether the frame-by-frame horizontal deltas stay aligned with the intended swipe direction.
+    /// - Parameters:
+    ///   - handIndex: Index of the hand to evaluate.
+    ///   - frames: Candidate frame window ordered by time.
+    ///   - expectedSign: `-1` for leftward motion and `1` for rightward motion.
+    /// - Returns: `true` when the direction consistency reaches the configured minimum ratio.
     private func horizontalDirectionConsistency(
+        for handIndex: Int,
         frames: [GestureFrameSnapshot],
         expectedSign: Double
     ) -> Bool {
         guard frames.count >= 3 else { return false }
-        let pairedCount = frames.map(\.points.count).min() ?? 0
-        guard pairedCount > 0 else { return false }
-
-        let handIndex = (0..<pairedCount).max { lhs, rhs in
-            abs((frames.last?.points[lhs].x ?? 0) - frames[0].points[lhs].x)
-                < abs((frames.last?.points[rhs].x ?? 0) - frames[0].points[rhs].x)
-        } ?? 0
+        guard frames.allSatisfy({ $0.points.indices.contains(handIndex) }) else { return false }
 
         let total = (frames.last?.points[handIndex].x ?? 0) - frames[0].points[handIndex].x
         guard total * expectedSign > 0 else { return false }

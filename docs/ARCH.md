@@ -48,6 +48,12 @@ Swift Adapter
   - 演示控制
   - 手势工作区
   - 高级诊断抽屉
+- v0.7 手势结构重构：
+  - `MediaPipeHandGeometry` 负责 21 点几何和 palm-size 归一化
+  - `GestureModeCoordinator` 负责 `swipe` / `zoom` 互斥仲裁
+  - `GestureRecognitionStateMachine` 统一处理 enter / exit / dwell / grace / cooldown
+  - `CameraPreviewService` 先走模式仲裁，再决定进入缩放链或离散翻页链
+  - `MediaPipeGestureAdapter.handPoints()` 保持兼容层语义，避免破坏 v0.6.0 基线测试
 
 ## 后续规划
 

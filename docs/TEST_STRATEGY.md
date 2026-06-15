@@ -14,6 +14,9 @@
 - 手势模板与轨迹匹配
 - 手势解锁/冷却状态机
 - 热区判断与开掌停留识别
+- v0.7 模式仲裁：缩放优先于翻页
+- v0.7 21 点几何：`剑指` / `L` 形 / palm-size 归一化
+- v0.7 连续缩放：快速动作识别、方向不反跳、grace/hysteresis 稳态
 
 ### 2. App 手工回归
 
@@ -35,6 +38,7 @@
 ```bash
 swift test
 swift run PresenterDirectorApp
+bash scripts/build-app.sh
 ```
 
 ## 重点关注
@@ -43,3 +47,5 @@ swift run PresenterDirectorApp
 - 解锁后应只在短窗口内接受动作
 - 冷却期间不应重复发送命令
 - 设备异常和权限异常必须有清晰提示
+- 双手缩放进入后不应再漏出上一页/下一页
+- 上一页和下一页的识别难度应尽量对称

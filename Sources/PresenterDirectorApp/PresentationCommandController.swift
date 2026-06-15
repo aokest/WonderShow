@@ -95,7 +95,7 @@ final class PresentationCommandController: ObservableObject {
 
     func setZoom(_ scale: Double, target: PresentationTarget) {
         refreshAccessibilityStatus()
-        let boundedScale = min(1.8, max(0.75, scale))
+        let boundedScale = min(3.0, max(0.30, scale))
         let result = sendCommand(.setZoom(boundedScale), target: target)
         lastActionDescription = result.succeeded
             ? "缩放到 \(Int((boundedScale * 100).rounded()))%"
@@ -569,7 +569,7 @@ private extension PresentationAction {
               }
               const stage = document.getElementById('stage');
               const current = Number(stage.dataset.wonderShowZoom || '1');
-              const next = Math.min(1.8, current + 0.12);
+              const next = Math.min(3.0, current + 0.12);
               stage.dataset.wonderShowZoom = String(next);
               stage.style.transform = `scale(${next})`;
               return `zoom ${next.toFixed(2)}`;
@@ -584,7 +584,7 @@ private extension PresentationAction {
               }
               const stage = document.getElementById('stage');
               const current = Number(stage.dataset.wonderShowZoom || '1');
-              const next = Math.max(0.75, current - 0.12);
+              const next = Math.max(0.30, current - 0.12);
               stage.dataset.wonderShowZoom = String(next);
               stage.style.transform = `scale(${next})`;
               return `zoom ${next.toFixed(2)}`;
@@ -598,7 +598,7 @@ private extension PresentationAction {
                 return 'setZoom';
               }
               const stage = document.getElementById('stage');
-              const next = Math.max(0.75, Math.min(1.8, \(scale)));
+              const next = Math.max(0.30, Math.min(3.0, \(scale)));
               stage.dataset.wonderShowZoom = String(next);
               stage.style.transform = `scale(${next})`;
               return `zoom ${next.toFixed(2)}`;

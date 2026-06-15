@@ -13,6 +13,12 @@ See [docs/architecture.md](docs/architecture.md) for the product architecture, f
 
 See [docs/recording-studio-roadmap.md](docs/recording-studio-roadmap.md) for the future recording editor, timeline zoom, picture-in-picture, and export roadmap.
 
+## Repository Remote
+
+- This project uses a NAS-hosted Gitea remote by default, not GitHub.
+- Default remote: `nas`
+- Remote URL: `ssh://gitea-nas/agent/lingyan.git`
+
 ## Current Status
 
 This repository currently contains the tested Swift core logic layer:

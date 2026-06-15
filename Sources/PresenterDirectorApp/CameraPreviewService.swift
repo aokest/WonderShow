@@ -68,6 +68,7 @@ final class CameraPreviewService: NSObject, ObservableObject {
     @Published private(set) var gestureSessionLabel = "待命中"
     @Published private(set) var gestureEngineLabel = "Vision 增强版"
     @Published private(set) var gestureZoneLabel = "热区待进入"
+    @Published private(set) var gestureModeLabel = "空闲"
     @Published var gestureControlEnabled = false
     @Published var gestureCalibrationProfile = GestureProfile.default
 
@@ -86,13 +87,19 @@ final class CameraPreviewService: NSObject, ObservableObject {
     private var personalizedLibrary = PersonalizedGestureLibrary()
     private var calibrationCapture: CalibrationCapture?
     private var continuousZoomTracker = ContinuousZoomTracker()
+    private var gestureModeCoordinator = GestureModeCoordinator()
     private let discreteGestureSuppressionEvaluator = DiscreteGestureSuppressionEvaluator()
+    private let swipeReadyDetector = SwipeReadyDetector()
+    private let twoHandZoomPoseDetector = TwoHandZoomPoseDetector()
     private var gestureSessionCoordinator = GestureSessionCoordinator()
     private var smoothedPoints: [HandPoint] = []
+    private var latestHandGeometries: [MediaPipeHandGeometry] = []
     private var isMediaPipeAvailable = false
     private var mediaPipeInferenceInFlight = false
     private var lastMediaPipeFrameTimestampMilliseconds = 0
     private var mediaPipeEmptyFrameStreak = 0
+    private var mediaPipeLaunchAttempted = false
+    private var mediaPipeSidecarProcess: Process?
     private let mediaPipeMinimumFrameIntervalMilliseconds = 60
 
     private var isPanning = false
@@ -103,6 +110,7 @@ final class CameraPreviewService: NSObject, ObservableObject {
     private var lastSingleHandShape: HandShape?
     private var lastSingleHandZoomAtMilliseconds = 0
     private var zoomPoseStreak = 0
+    private var lastReportedGestureMode: GestureMode = .idle
 
     var session: AVCaptureSession {
         sessionBox.session
@@ -281,12 +289,64 @@ final class CameraPreviewService: NSObject, ObservableObject {
     /// Checks whether the MediaPipe sidecar is reachable and updates the visible engine label.
     private func refreshGestureEngineAvailability() {
         Task { @MainActor in
-            let health = await mediaPipeSidecar.health()
+            var health = await mediaPipeSidecar.health()
+            if health?.ok != true {
+                launchMediaPipeSidecarIfPossible()
+                try? await Task.sleep(for: .milliseconds(450))
+                health = await mediaPipeSidecar.health()
+            }
             isMediaPipeAvailable = health?.ok == true
             gestureEngineLabel = isMediaPipeAvailable
                 ? GestureEngineBackend.mediaPipeSidecar.rawValue
                 : GestureEngineBackend.visionLegacy.rawValue
         }
+    }
+
+    /// Attempts to launch the local MediaPipe sidecar from the project scripts when it is not already running.
+    /// - Important: This only runs once per app session and only when the project-root scripts exist.
+    private func launchMediaPipeSidecarIfPossible() {
+        guard !mediaPipeLaunchAttempted else { return }
+        mediaPipeLaunchAttempted = true
+
+        guard let projectRootURL = mediaPipeProjectRootURL() else { return }
+        let scriptURL = projectRootURL.appendingPathComponent("scripts/run-mediapipe-sidecar.sh")
+        let venvURL = projectRootURL.appendingPathComponent(".venv-mediapipe")
+        guard FileManager.default.fileExists(atPath: scriptURL.path),
+              FileManager.default.fileExists(atPath: venvURL.path) else {
+            return
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [scriptURL.path]
+        process.currentDirectoryURL = projectRootURL
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            mediaPipeSidecarProcess = process
+        } catch {
+            mediaPipeSidecarProcess = nil
+        }
+    }
+
+    /// Resolves the project root so the app can find `scripts/run-mediapipe-sidecar.sh` after being launched from `dist/灵演.app`.
+    /// - Returns: The project root URL when the expected scripts directory exists, otherwise `nil`.
+    private func mediaPipeProjectRootURL() -> URL? {
+        let bundleRoot = Bundle.main.bundleURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let currentRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let candidates = [bundleRoot, currentRoot]
+
+        for candidate in candidates {
+            let scriptsURL = candidate.appendingPathComponent("scripts")
+            if FileManager.default.fileExists(atPath: scriptsURL.path) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     private nonisolated static func preferredCamera(selectedDeviceID: String) -> AVCaptureDevice? {
@@ -406,6 +466,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
                     return
                 }
                 self.mediaPipeEmptyFrameStreak = 0
+                self.latestHandGeometries = MediaPipeGestureAdapter.handGeometries(from: frame.hands)
                 self.processDetectedPoints(
                     MediaPipeGestureAdapter.handPoints(from: frame.hands),
                     timestampMilliseconds: frame.timestampMilliseconds,
@@ -440,6 +501,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
             let rawPoints = try observations
                 .map { try handAnchorPoint(from: $0) }
                 .sorted { $0.x < $1.x }
+            latestHandGeometries = []
             processDetectedPoints(
                 rawPoints,
                 timestampMilliseconds: timestampMilliseconds,
@@ -479,6 +541,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         let activePoints = GestureHandSelector(zone: activationZone).selectPrimaryHands(from: allPoints)
         guard !activePoints.isEmpty else {
             gestureSessionCoordinator.reset()
+            gestureModeCoordinator.reset()
             continuousZoomTracker.reset(currentScale: zoomScale)
             gestureSamples.removeAll()
             gestureZoneLabel = "热区外"
@@ -488,6 +551,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
         let snapshot = makeGestureSnapshot(activePoints, timestampMilliseconds: timestampMilliseconds)
+        let activeGeometries = currentActiveGeometries(for: activePoints)
         // #region debug-point A:frame-processed
         debugReport(
             hypothesisId: "A",
@@ -515,6 +579,26 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
 
         gestureZoneLabel = "热区已进入"
         gestureGuidance = "先张开手掌停留，再执行动作"
+        let gestureMode = updateGestureMode(
+            activePoints: activePoints,
+            activeGeometries: activeGeometries,
+            timestampMilliseconds: snapshot.timestampMilliseconds
+        )
+        publishGestureMode(
+            gestureMode,
+            activePoints: activePoints,
+            timestampMilliseconds: snapshot.timestampMilliseconds
+        )
+        if handleZoomMode(
+            gestureMode: gestureMode,
+            activePoints: activePoints,
+            activeGeometries: activeGeometries,
+            timestampMilliseconds: snapshot.timestampMilliseconds
+        ) {
+            gestureStatus = .tracking
+            return
+        }
+
         recordGestureSample(snapshot)
 
         let sessionUpdate = gestureSessionCoordinator.refresh(at: snapshot.timestampMilliseconds)
@@ -559,7 +643,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
             }
 
             if activePoints.count >= 2, isLikelyTwoHandZoomCandidate(points: activePoints) {
-                let handledZoom = handleContinuousZoom(points: activePoints)
+                let handledZoom = handleContinuousZoom(points: activePoints, at: snapshot.timestampMilliseconds)
                 // #region debug-point E:zoom-candidate
                 debugReport(
                     hypothesisId: "E",
@@ -591,7 +675,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         if activePoints.count >= 2, isLikelyTwoHandZoomCandidate(points: activePoints) {
-            let handledZoom = handleContinuousZoom(points: activePoints)
+            let handledZoom = handleContinuousZoom(points: activePoints, at: snapshot.timestampMilliseconds)
             if handledZoom {
                 gestureGuidance = "检测到双手缩放，已优先处理缩放"
                 gestureStatus = .tracking
@@ -599,8 +683,134 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
             }
         }
 
-        appendGestureFrame(snapshot)
+        if shouldAllowSwipe(activePoints: activePoints, activeGeometries: activeGeometries) {
+            appendGestureFrame(snapshot)
+        } else {
+            gestureGuidance = "单手翻页只在明确剑指或指枪模式下生效"
+        }
         gestureStatus = .tracking
+    }
+
+    /// Selects the active MediaPipe geometries that correspond to the already-selected active hand points.
+    /// - Parameter activePoints: Current active hand anchors after zone filtering.
+    /// - Returns: MediaPipe hand geometries sorted from left to right for the same active hands.
+    private func currentActiveGeometries(for activePoints: [HandPoint]) -> [MediaPipeHandGeometry] {
+        guard !latestHandGeometries.isEmpty else {
+            return []
+        }
+
+        let geometriesInZone = latestHandGeometries.filter { geometry in
+            activationZone.contains(geometry.asHandPoint())
+        }
+        .sorted { $0.palmCenter.x < $1.palmCenter.x }
+
+        return Array(geometriesInZone.prefix(activePoints.count))
+    }
+
+    /// Updates the mutually exclusive swipe/zoom mode coordinator for the current frame.
+    /// - Parameters:
+    ///   - activePoints: Current active hand anchors after zone filtering.
+    ///   - activeGeometries: Current MediaPipe geometries for the same active hands.
+    ///   - timestampMilliseconds: Current frame timestamp.
+    /// - Returns: The dominant interaction mode after arbitration.
+    private func updateGestureMode(
+        activePoints: [HandPoint],
+        activeGeometries: [MediaPipeHandGeometry],
+        timestampMilliseconds: Int
+    ) -> GestureMode {
+        let swipeReady = activeGeometries.isEmpty
+            ? swipeReadyDetector.isSwipeReady(points: activePoints)
+            : swipeReadyDetector.isSwipeReady(geometries: activeGeometries)
+        let zoomReady = activeGeometries.isEmpty
+            ? twoHandZoomPoseDetector.isZoomReady(points: activePoints)
+            : twoHandZoomPoseDetector.isZoomReady(geometries: activeGeometries)
+
+        return gestureModeCoordinator.update(
+            swipeReady: swipeReady,
+            zoomReady: zoomReady,
+            timestampMilliseconds: timestampMilliseconds
+        )
+    }
+
+    /// Publishes the current interaction mode to the UI and reports mode transitions for real-camera debugging.
+    /// - Parameters:
+    ///   - gestureMode: Newly resolved dominant mode.
+    ///   - activePoints: Current active hand anchors used to summarize shapes.
+    ///   - timestampMilliseconds: Current frame timestamp.
+    private func publishGestureMode(
+        _ gestureMode: GestureMode,
+        activePoints: [HandPoint],
+        timestampMilliseconds: Int
+    ) {
+        gestureModeLabel = switch gestureMode {
+        case .idle:
+            "空闲"
+        case .swipe:
+            "翻页模式"
+        case .zoom:
+            "缩放模式"
+        }
+
+        guard gestureMode != lastReportedGestureMode else {
+            return
+        }
+
+        debugReport(
+            hypothesisId: "M",
+            location: "CameraPreviewService.publishGestureMode",
+            message: "[DEBUG] gesture interaction mode changed",
+            data: [
+                "gestureMode": gestureMode.rawValue,
+                "timestampMilliseconds": timestampMilliseconds,
+                "shapes": activePoints.map(\.shape.rawValue).joined(separator: ","),
+                "pointCount": activePoints.count
+            ]
+        )
+        lastReportedGestureMode = gestureMode
+    }
+
+    /// Handles the mutually exclusive two-hand zoom mode before the discrete swipe pipeline runs.
+    /// - Parameters:
+    ///   - gestureMode: Current dominant mode chosen by the coordinator.
+    ///   - activePoints: Current active hand anchors after zone filtering.
+    ///   - activeGeometries: Current MediaPipe geometries for the same active hands.
+    ///   - timestampMilliseconds: Current frame timestamp.
+    /// - Returns: `true` when zoom mode owns this frame and swipe recognition must stop.
+    private func handleZoomMode(
+        gestureMode: GestureMode,
+        activePoints: [HandPoint],
+        activeGeometries: [MediaPipeHandGeometry],
+        timestampMilliseconds: Int
+    ) -> Bool {
+        guard gestureMode == .zoom else {
+            return false
+        }
+
+        gestureSamples.removeAll()
+        let handledZoom = activeGeometries.isEmpty
+            ? handleContinuousZoom(points: activePoints, at: timestampMilliseconds)
+            : handleContinuousZoom(geometries: activeGeometries, at: timestampMilliseconds)
+
+        gestureGuidance = handledZoom
+            ? "双手 L 形缩放中，翻页识别已锁定"
+            : "已进入双手缩放模式，保持 L 形再继续放缩"
+        gestureSessionLabel = "缩放模式"
+        return true
+    }
+
+    /// Returns whether the current frame is allowed to enter discrete swipe recognition.
+    /// - Parameters:
+    ///   - activePoints: Current active hand anchors after zone filtering.
+    ///   - activeGeometries: Current MediaPipe geometries for the same active hands.
+    /// - Returns: `true` when the current frame explicitly matches sword or finger-gun swipe mode.
+    private func shouldAllowSwipe(
+        activePoints: [HandPoint],
+        activeGeometries: [MediaPipeHandGeometry]
+    ) -> Bool {
+        if activeGeometries.isEmpty {
+            return swipeReadyDetector.isSwipeReady(points: activePoints)
+        }
+        return swipeReadyDetector.isSwipeReady(geometries: activeGeometries)
     }
 
     private func handAnchorPoint(from observation: VNHumanHandPoseObservation) throws -> HandPoint {
@@ -639,6 +849,10 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
 
         if thumb, index, !middle, !ring, !little {
             return .lShape
+        }
+
+        if index, middle, !ring, !little {
+            return .sword
         }
 
         if index, !ring, !little {
@@ -754,6 +968,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         lastGesture = emittedGesture
+        gestureModeCoordinator.markSwipeTriggered(at: snapshot.timestampMilliseconds)
         gestureGuidance = "动作已触发，请等待冷却结束"
         gestureSamples.removeAll()
         onGestureRecognized?(emittedGesture)
@@ -776,7 +991,12 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         gestureSamples = gestureSamples.filter { $0.timestampMilliseconds >= cutoff }
     }
 
-    private func handleContinuousZoom(points: [HandPoint]) -> Bool {
+    /// Applies continuous zoom updates from lightweight hand anchors.
+    /// - Parameters:
+    ///   - points: Active hand anchors sorted from left to right.
+    ///   - timestampMilliseconds: Current frame timestamp.
+    /// - Returns: `true` when the frame belongs to the continuous zoom interaction.
+    private func handleContinuousZoom(points: [HandPoint], at timestampMilliseconds: Int) -> Bool {
         guard points.count >= 2 else {
             continuousZoomTracker.reset(currentScale: zoomScale)
             // #region debug-point E:zoom-reset-few-points
@@ -793,7 +1013,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
             return false
         }
 
-        let usesZoomPose = points.prefix(2).allSatisfy { $0.shape == .lShape || $0.shape == .unknown }
+        let usesZoomPose = points.prefix(2).allSatisfy { $0.shape == .lShape }
         guard usesZoomPose else {
             continuousZoomTracker.reset(currentScale: zoomScale)
             zoomPoseStreak = 0
@@ -811,7 +1031,11 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
             return false
         }
 
-        if let update = continuousZoomTracker.update(points: points, currentScale: zoomScale) {
+        if let update = continuousZoomTracker.update(
+            points: points,
+            currentScale: zoomScale,
+            timestampMilliseconds: timestampMilliseconds
+        ) {
             zoomScale = update.scale
             lastGesture = update.relativeDistanceChange >= 0 ? .zoomIn : .zoomOut
             gestureSessionLabel = "缩放中"
@@ -847,6 +1071,94 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         return true
     }
 
+    /// Applies continuous zoom updates from full MediaPipe geometry.
+    /// - Parameters:
+    ///   - geometries: Active MediaPipe hand geometries sorted from left to right.
+    ///   - timestampMilliseconds: Current frame timestamp.
+    /// - Returns: `true` when the frame belongs to the continuous zoom interaction.
+    private func handleContinuousZoom(
+        geometries: [MediaPipeHandGeometry],
+        at timestampMilliseconds: Int
+    ) -> Bool {
+        guard geometries.count >= 2 else {
+            continuousZoomTracker.reset(currentScale: zoomScale)
+            zoomPoseStreak = 0
+            return false
+        }
+
+        guard twoHandZoomPoseDetector.isZoomReady(geometries: geometries) else {
+            continuousZoomTracker.reset(currentScale: zoomScale)
+            zoomPoseStreak = 0
+            return false
+        }
+
+        let hands = Array(geometries.prefix(2))
+        // #region debug-point C:zoom-geometry-frame
+        debugReport(
+            hypothesisId: "C",
+            location: "CameraPreviewService.handleContinuousZoom(geometries:)",
+            message: "[DEBUG] zoom geometry frame accepted",
+            data: [
+                "timestampMilliseconds": timestampMilliseconds,
+                "leftHandedness": hands[0].handedness,
+                "rightHandedness": hands[1].handedness,
+                "leftPalmCenterX": hands[0].palmCenter.x,
+                "leftPalmCenterY": hands[0].palmCenter.y,
+                "rightPalmCenterX": hands[1].palmCenter.x,
+                "rightPalmCenterY": hands[1].palmCenter.y,
+                "leftPalmSize": hands[0].palmSize,
+                "rightPalmSize": hands[1].palmSize,
+                "normalizedDistance": hands[0].normalizedDistance(to: hands[1]),
+                "leftShape": hands[0].primaryShape.rawValue,
+                "rightShape": hands[1].primaryShape.rawValue
+            ]
+        )
+        // #endregion
+
+        if let update = continuousZoomTracker.update(
+            geometries: geometries,
+            currentScale: zoomScale,
+            timestampMilliseconds: timestampMilliseconds
+        ) {
+            zoomScale = update.scale
+            lastGesture = update.relativeDistanceChange >= 0 ? .zoomIn : .zoomOut
+            gestureSessionLabel = "缩放中"
+            onZoomChanged?(update.scale)
+            // #region debug-point C:zoom-geometry-update
+            debugReport(
+                hypothesisId: "C",
+                location: "CameraPreviewService.handleContinuousZoom(geometries:)",
+                message: "[DEBUG] zoom update emitted from geometry path",
+                data: [
+                    "timestampMilliseconds": timestampMilliseconds,
+                    "scale": update.scale,
+                    "relativeDistanceChange": update.relativeDistanceChange,
+                    "confidence": update.confidence,
+                    "leftHandedness": hands[0].handedness,
+                    "rightHandedness": hands[1].handedness
+                ]
+            )
+            // #endregion
+            zoomPoseStreak = min(12, zoomPoseStreak + 1)
+        } else {
+            // #region debug-point C:zoom-geometry-no-update
+            debugReport(
+                hypothesisId: "C",
+                location: "CameraPreviewService.handleContinuousZoom(geometries:)",
+                message: "[DEBUG] geometry path produced no zoom update",
+                data: [
+                    "timestampMilliseconds": timestampMilliseconds,
+                    "currentScale": zoomScale,
+                    "normalizedDistance": hands[0].normalizedDistance(to: hands[1])
+                ]
+            )
+            // #endregion
+            zoomPoseStreak = min(12, zoomPoseStreak + 1)
+        }
+
+        return true
+    }
+
     private func handleSingleHandZoomStep(point: HandPoint, at timestampMilliseconds: Int) -> Bool {
         let shape = point.shape
         guard shape == .openPalm || shape == .fist else {
@@ -873,10 +1185,10 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
 
         if last == .openPalm, shape == .fist {
             intent = .zoomIn
-            nextScale = min(1.8, zoomScale * stepFactor)
+            nextScale = min(3.0, zoomScale * stepFactor)
         } else if last == .fist, shape == .openPalm {
             intent = .zoomOut
-            nextScale = max(0.75, zoomScale / stepFactor)
+            nextScale = max(0.30, zoomScale / stepFactor)
         } else {
             return false
         }
@@ -1133,6 +1445,9 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         engine: GestureEngineBackend
     ) {
         latestHandPoints = []
+        latestHandGeometries = []
+        gestureModeLabel = "空闲"
+        lastReportedGestureMode = .idle
         detectedHandShapes = "未检测"
         gestureEngineLabel = engine.rawValue
         gestureZoneLabel = "热区待进入"
@@ -1156,10 +1471,12 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
     private func resetGestureTracking() {
         gestureSamples.removeAll()
         smoothedPoints.removeAll()
+        latestHandGeometries.removeAll()
         mediaPipeInferenceInFlight = false
         mediaPipeEmptyFrameStreak = 0
         lastMediaPipeFrameTimestampMilliseconds = 0
         continuousZoomTracker.reset(currentScale: 1)
+        gestureModeCoordinator.reset()
         gestureSessionCoordinator.reset()
         panX = 0
         panY = 0
@@ -1170,6 +1487,8 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         lastPanSentAtMilliseconds = 0
         lastSingleHandShape = nil
         lastSingleHandZoomAtMilliseconds = 0
+        lastReportedGestureMode = .idle
+        gestureModeLabel = "空闲"
         gestureGuidance = "先把手放到中央热区"
         gestureSessionLabel = "待命中"
         gestureZoneLabel = "热区待进入"
@@ -1203,8 +1522,8 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let url = URL(string: "http://127.0.0.1:7777/event") else { return }
         guard JSONSerialization.isValidJSONObject(data) else { return }
         let payload: [String: Any] = [
-            "sessionId": "gesture-regression-loop",
-            "runId": "post-fix",
+            "sessionId": "zoom-instability-v07",
+            "runId": "pre-fix",
             "hypothesisId": hypothesisId,
             "location": location,
             "msg": message,
@@ -1297,6 +1616,8 @@ private extension HandShape {
             return "握拳"
         case .fingerGun:
             return "指枪"
+        case .sword:
+            return "剑指"
         case .lShape:
             return "八字"
         }
