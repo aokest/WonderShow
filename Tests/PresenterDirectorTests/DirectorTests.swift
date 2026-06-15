@@ -4,10 +4,12 @@ import Testing
 @Test func mapsDirectionalGesturesToUniversalSlideKeys() {
     let director = PresentationDirector()
 
-    #expect(director.command(for: .swipeLeft, target: .powerPoint).presentationAction == .nextSlide)
-    #expect(director.command(for: .swipeRight, target: .wps).presentationAction == .previousSlide)
+    #expect(director.command(for: .swipeLeft, target: .powerPoint).presentationAction == .previousSlide)
+    #expect(director.command(for: .swipeRight, target: .wps).presentationAction == .nextSlide)
     #expect(director.command(for: .swipeLeft, target: .html(engine: .revealJS)).transport == .htmlBridge)
     #expect(director.command(for: .swipeLeft, target: .genericKeyboard).transport == .keyboardShortcut)
+    #expect(director.command(for: .swipeLeft, target: .word).transport == .keyboardShortcut)
+    #expect(director.command(for: .swipeLeft, target: .excel).transport == .keyboardShortcut)
 }
 
 @Test func protectsAgainstAccidentalRepeatedGestures() {

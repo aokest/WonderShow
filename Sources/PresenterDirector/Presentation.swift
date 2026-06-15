@@ -8,6 +8,8 @@ public enum PresentationTarget: Hashable, Sendable {
     case powerPoint
     case wps
     case keynote
+    case word
+    case excel
     case pdfViewer
     case genericKeyboard
     case html(engine: HtmlPresentationEngine)
@@ -31,9 +33,9 @@ public final class PresentationDirector {
 
         switch gesture {
         case .swipeLeft:
-            return DirectorCommand(presentationAction: .nextSlide, transport: transport)
-        case .swipeRight:
             return DirectorCommand(presentationAction: .previousSlide, transport: transport)
+        case .swipeRight:
+            return DirectorCommand(presentationAction: .nextSlide, transport: transport)
         case .zoomIn:
             return DirectorCommand(presentationAction: .zoomIn, transport: transport)
         case .zoomOut:
@@ -72,7 +74,7 @@ public final class PresentationDirector {
         switch target {
         case .html:
             return .inSlideCanvas
-        case .powerPoint, .wps, .keynote, .pdfViewer, .genericKeyboard:
+        case .powerPoint, .wps, .keynote, .word, .excel, .pdfViewer, .genericKeyboard:
             return .systemOverlay
         }
     }
@@ -81,7 +83,7 @@ public final class PresentationDirector {
         switch target {
         case .html:
             return .htmlBridge
-        case .powerPoint, .wps, .keynote, .pdfViewer, .genericKeyboard:
+        case .powerPoint, .wps, .keynote, .word, .excel, .pdfViewer, .genericKeyboard:
             return .keyboardShortcut
         }
     }

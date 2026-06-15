@@ -32,7 +32,8 @@
       place-items: center;
       padding: 6vh 7vw;
       transform-origin: center;
-      transition: transform 220ms ease;
+      transition: none;
+      will-change: transform;
     }
 
     .slide {
@@ -114,6 +115,20 @@
       color: var(--red);
       font-weight: 900;
     }
+
+    .bridge-status {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 20;
+      padding: 10px 13px;
+      border-radius: 10px;
+      background: rgba(16, 20, 28, .78);
+      color: white;
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: 0 14px 40px rgba(16, 20, 28, .2);
+    }
   </style>
 </head>
 <body>
@@ -158,15 +173,25 @@
       <div class="footer"><span class="badge">灵演 WonderShow</span><span>4 / 4</span></div>
     </section>
   </main>
+  <div class="bridge-status" id="bridgeStatus">灵演桥接：等待命令</div>
 
   <script>
     const slides = [...document.querySelectorAll('.slide')];
     const stage = document.getElementById('stage');
+    const bridgeStatus = document.getElementById('bridgeStatus');
     let index = 0;
     let zoom = 1;
+    let panX = 0;
+    let panY = 0;
+    let targetZoom = 1;
+    let targetPanX = 0;
+    let targetPanY = 0;
+    let animating = false;
 
     function render() {
-      slides.forEach((slide, i) => slide.classList.toggle('active', i === index));
+      slides.forEach((slide, i) => {
+        slide.classList.toggle('active', i === index);
+      });
     }
 
     function next() {
@@ -179,9 +204,84 @@
       render();
     }
 
+    /**
+     * 更新目标缩放值，并在回到接近原始大小时自动收回平移中心。
+     * @param {number} nextZoom 用户或桥接命令要求的目标缩放值。
+     */
     function setZoom(nextZoom) {
-      zoom = Math.max(0.75, Math.min(1.8, nextZoom));
-      stage.style.transform = `scale(${zoom})`;
+      targetZoom = Math.max(0.75, Math.min(1.8, Number(nextZoom || zoom)));
+      if (targetZoom <= 1.01) {
+        targetPanX = 0;
+        targetPanY = 0;
+      }
+      stage.dataset.wonderShowZoom = String(targetZoom);
+      requestAnimate();
+    }
+
+    /**
+     * 更新目标平移值，实际画面会在动画帧中逐步追上目标位置。
+     * @param {number} nextX 目标横向平移，范围 -1 到 1。
+     * @param {number} nextY 目标纵向平移，范围 -1 到 1。
+     */
+    function setPan(nextX, nextY) {
+      targetPanX = Math.max(-1, Math.min(1, Number(nextX || 0)));
+      targetPanY = Math.max(-1, Math.min(1, Number(nextY || 0)));
+      requestAnimate();
+    }
+
+    function requestAnimate() {
+      if (animating) return;
+      animating = true;
+      window.requestAnimationFrame(tick);
+    }
+
+    /**
+     * 用分段缓动替代弹簧速度模型，避免缩放出现明显过冲、晃动和“浮夸弹跳”。
+     */
+    function tick() {
+      const zoomDelta = targetZoom - zoom;
+      const zoomDistance = Math.abs(zoomDelta);
+      const zoomEase = zoomDistance > 0.16 ? 0.32
+        : zoomDistance > 0.08 ? 0.26
+        : zoomDistance > 0.03 ? 0.20
+        : 0.14;
+      const zoomStepCap = zoomDistance > 0.16 ? 0.040
+        : zoomDistance > 0.08 ? 0.030
+        : zoomDistance > 0.03 ? 0.018
+        : 0.010;
+      const zoomStep = Math.sign(zoomDelta) * Math.min(zoomDistance * zoomEase, zoomStepCap);
+      zoom += zoomStep;
+
+      const panDeltaX = targetPanX - panX;
+      const panDeltaY = targetPanY - panY;
+      const panStepX = panDeltaX * Math.min(0.28, 0.16 + Math.abs(panDeltaX) * 0.22);
+      const panStepY = panDeltaY * Math.min(0.28, 0.16 + Math.abs(panDeltaY) * 0.22);
+      panX += panStepX;
+      panY += panStepY;
+
+      const translateRangeX = Math.max(0, (zoom - 1) * 520);
+      const translateRangeY = Math.max(0, (zoom - 1) * 340);
+      const translateX = panX * translateRangeX;
+      const translateY = panY * translateRangeY;
+
+      stage.style.transform = `translate(${translateX.toFixed(1)}px, ${translateY.toFixed(1)}px) scale(${zoom.toFixed(4)})`;
+
+      const stableZoom = Math.abs(targetZoom - zoom) < 0.0008;
+      const stablePan = Math.abs(targetPanX - panX) < 0.0012
+        && Math.abs(targetPanY - panY) < 0.0012
+        && Math.abs(panStepX) < 0.0012
+        && Math.abs(panStepY) < 0.0012;
+
+      if (stableZoom && stablePan) {
+        zoom = targetZoom;
+        panX = targetPanX;
+        panY = targetPanY;
+        animating = false;
+        stage.style.transform = `translate(${(panX * Math.max(0, (zoom - 1) * 520)).toFixed(1)}px, ${(panY * Math.max(0, (zoom - 1) * 340)).toFixed(1)}px) scale(${zoom.toFixed(4)})`;
+        return;
+      }
+
+      window.requestAnimationFrame(tick);
     }
 
     window.addEventListener('keydown', (event) => {
@@ -189,23 +289,67 @@
       if (event.key === 'ArrowLeft' || event.key === 'PageUp') previous();
       if ((event.metaKey || event.ctrlKey) && (event.key === '=' || event.key === '+')) {
         event.preventDefault();
-        setZoom(zoom + 0.12);
+        setZoom(targetZoom + 0.08);
       }
       if ((event.metaKey || event.ctrlKey) && event.key === '-') {
         event.preventDefault();
-        setZoom(zoom - 0.12);
+        setZoom(targetZoom - 0.08);
       }
     });
 
-    window.wonderShowCommand = function(command) {
+    window.wonderShowCommand = function(command, value) {
       if (command === 'next') next();
       if (command === 'previous') previous();
-      if (command === 'zoomIn') setZoom(zoom + 0.12);
-      if (command === 'zoomOut') setZoom(zoom - 0.12);
+      if (command === 'zoomIn') setZoom(targetZoom + 0.08);
+      if (command === 'zoomOut') setZoom(targetZoom - 0.08);
+      if (command === 'setZoom') setZoom(Number(value || targetZoom));
+      if (command === 'setPan') {
+        const payload = typeof value === 'string'
+          ? (JSON.parse(value || '{"x":0,"y":0}'))
+          : (value || { x: 0, y: 0 });
+        setPan(payload.x, payload.y);
+      }
       if (command === 'start') document.body.classList.add('presenting');
       if (command === 'exit') document.body.classList.remove('presenting');
+      if (command === 'toggleAnnotation') document.body.classList.toggle('annotating');
+      if (command === 'clearAnnotations') {
+        document.querySelectorAll('[data-wondershow-annotation]').forEach(node => {
+          node.remove();
+        });
+      }
+      // #region debug-point D:html-command
+      fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"gesture-regression-loop",runId:"post-fix",hypothesisId:"D",location:"wondershow-demo.html:wonderShowCommand",msg:"[DEBUG] html page applied command",data:{command,value:value ?? null,index:index + 1,zoom},ts:Date.now()})}).catch(()=>{});
+      // #endregion
+      const zoomLabel = `${Math.round(targetZoom * 100)}%`;
+      const panLabel = (Math.abs(targetPanX) > 0.01 || Math.abs(targetPanY) > 0.01)
+        ? `，平移 ${targetPanX.toFixed(2)},${targetPanY.toFixed(2)}`
+        : '';
+      bridgeStatus.textContent = `灵演桥接：${command}，第 ${index + 1} / ${slides.length} 页，缩放 ${zoomLabel}${panLabel}`;
       return 'ok';
     };
+
+    async function pollLingYanCommand() {
+      try {
+        const response = await fetch('/api/command', { cache: 'no-store' });
+        const payload = await response.json();
+        // #region debug-point D:html-poll
+        fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"gesture-regression-loop",runId:"post-fix",hypothesisId:"D",location:"wondershow-demo.html:pollLingYanCommand",msg:"[DEBUG] html page polled bridge",data:{command:payload.command ?? null,value:payload.value ?? null},ts:Date.now()})}).catch(()=>{});
+        // #endregion
+        if (payload.command) window.wonderShowCommand(payload.command, payload.value);
+        if (!payload.command && bridgeStatus.textContent === '灵演桥接：等待命令') {
+          bridgeStatus.textContent = '灵演桥接：已连接，等待命令';
+        }
+      } catch (error) {
+        // #region debug-point D:html-poll-error
+        fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"gesture-regression-loop",runId:"post-fix",hypothesisId:"D",location:"wondershow-demo.html:pollLingYanCommand",msg:"[DEBUG] html page failed to poll bridge",data:{error:String(error)},ts:Date.now()})}).catch(()=>{});
+        // #endregion
+        bridgeStatus.textContent = '灵演桥接：未连接';
+      } finally {
+        window.setTimeout(pollLingYanCommand, 220);
+      }
+    }
+
+    pollLingYanCommand();
   </script>
 </body>
 </html>

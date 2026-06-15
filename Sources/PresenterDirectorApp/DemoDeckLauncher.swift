@@ -1,10 +1,18 @@
 import AppKit
 
 enum DemoDeckLauncher {
-    static func openDemoDeck() {
-        for candidate in candidateURLs() where FileManager.default.fileExists(atPath: candidate.path) {
-            openInChrome(candidate)
-            return
+    @discardableResult
+    static func openDemoDeck() -> Result<URL, Error> {
+        do {
+            try DemoControlServer.shared.start()
+            let url = DemoControlServer.shared.demoURL
+            openInChrome(url)
+            return .success(url)
+        } catch {
+            if let fallback = candidateURLs().first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+                openInChrome(fallback)
+            }
+            return .failure(error)
         }
     }
 

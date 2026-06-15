@@ -27,7 +27,8 @@ let package = Package(
         ),
         .executableTarget(
             name: "PresenterDirectorApp",
-            dependencies: ["PresenterDirector"]
+            dependencies: ["PresenterDirector"],
+            resources: [.process("Resources")]
         ),
         .testTarget(
             name: "PresenterDirectorTests",

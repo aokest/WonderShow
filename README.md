@@ -31,10 +31,26 @@ Run tests:
 swift test
 ```
 
-Run the current macOS prototype:
+Run the current macOS prototype from Terminal:
 
 ```bash
-swift run PresenterDirectorApp
+swift run --disable-sandbox PresenterDirectorApp
 ```
 
 The macOS prototype uses AVFoundation camera discovery and prefers a recognizable tracking camera such as `OsmoPocket3` when it is present, while still falling back to other available camera inputs.
+
+## Easiest Launch For Non-Developers
+
+Build a clickable macOS app bundle:
+
+```bash
+bash scripts/build-app.sh
+```
+
+Then open the app bundle:
+
+```bash
+open "dist/灵演.app"
+```
+
+If `dist/灵演.app` already exists, you can also open it directly from Finder by double-clicking it.
