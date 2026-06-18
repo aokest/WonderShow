@@ -2,14 +2,14 @@
 
 ## 目标
 
-- 用官方 MediaPipe Gesture Recognizer 替换当前原型级 Vision 规则链
+- 用官方 MediaPipe Hand Landmarker + Gesture Recognizer 替换当前原型级 Vision 规则链
 - 保持 SwiftUI 主程序职责清晰，不把复杂推理依赖混进 Swift Package
 - 本地完成推理，不把摄像头图像发到外网
 
 ## 设计原则
 
 - Swift 负责采集、UI、命令路由
-- Python sidecar 负责手部检测、手势分类、后续时序模型
+- Python sidecar 负责手部检测、21 点 landmarks、手势分类、后续时序模型
 - 双方通过本机 HTTP/JSON 通信
 - 旧 Vision 路径暂时保留为回退方案
 
@@ -20,6 +20,7 @@
 - 已准备安装脚本和模型目录
 - 已把 `CameraPreviewService` 接到 sidecar 实时推理链路
 - sidecar 在线时优先走 MediaPipe，离线时回退到 Vision
+- sidecar 现在以 `HandLandmarker` 作为双手与 21 点的权威来源，以 `GestureRecognizer` 作为分类标签来源
 
 ## 下一步
 
@@ -30,6 +31,7 @@
 ## 当前折中实现
 
 - sidecar 已返回完整 `21` 点 landmarks
+- Swift 侧会将 MediaPipe 顶左原点坐标转换到应用内底左原点坐标，保证热区、叠加层和识别状态机使用同一坐标系
 - Swift 主链路目前仍使用“每只手一个代表锚点”的轻量识别模型，以便兼容既有状态机与测试
 - 但代表锚点已不再是固定单点：
   - `Pointing_Up` 使用指尖与食指根部的加权锚点

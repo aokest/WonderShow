@@ -52,11 +52,11 @@
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      animation: enter 380ms ease both;
+      animation: enter var(--slide-duration, 380ms) cubic-bezier(.16, .84, .28, 1) both;
     }
 
     @keyframes enter {
-      from { opacity: 0; transform: translateY(18px) scale(.985); }
+      from { opacity: 0; transform: translateX(var(--slide-drift, 26px)) scale(.985); }
       to { opacity: 1; transform: translateY(0) scale(1); }
     }
 
@@ -137,9 +137,9 @@
       <div>
         <div class="eyebrow">LINGYAN / WONDERSHOW TEST DECK</div>
         <h1>用手势控制演示</h1>
-        <p>打开灵演，启用手势控制，然后用任意已接入摄像头对准你的手。指枪翻页，双手八字缩放。</p>
+        <p>打开灵演，启用手势控制，然后用任意已接入摄像头对准你的手。剑指翻页，双手枪指或八字缩放。</p>
       </div>
-      <div class="footer"><span class="badge">指枪左挥 / 右挥翻页</span><span>1 / 4</span></div>
+      <div class="footer"><span class="badge">剑指左挥 / 右挥翻页</span><span>1 / 4</span></div>
     </section>
 
     <section class="slide">
@@ -188,20 +188,25 @@
     let targetPanY = 0;
     let animating = false;
 
-    function render() {
+    function render(direction = 1, velocity = 0) {
+      const speed = Math.max(0, Math.min(1.8, Number(velocity || 0)));
+      const duration = Math.round(Math.max(180, 430 - speed * 110));
+      const drift = Math.round(Math.min(90, 28 + speed * 34)) * direction;
+      document.documentElement.style.setProperty('--slide-duration', `${duration}ms`);
+      document.documentElement.style.setProperty('--slide-drift', `${drift}px`);
       slides.forEach((slide, i) => {
         slide.classList.toggle('active', i === index);
       });
     }
 
-    function next() {
+    function next(meta = {}) {
       index = Math.min(slides.length - 1, index + 1);
-      render();
+      render(1, meta.velocity);
     }
 
-    function previous() {
+    function previous(meta = {}) {
       index = Math.max(0, index - 1);
-      render();
+      render(-1, meta.velocity);
     }
 
     /**
@@ -244,14 +249,14 @@
     function tick() {
       const zoomDelta = targetZoom - zoom;
       const zoomDistance = Math.abs(zoomDelta);
-      const zoomEase = zoomDistance > 0.16 ? 0.32
-        : zoomDistance > 0.08 ? 0.26
-        : zoomDistance > 0.03 ? 0.20
-        : 0.14;
-      const zoomStepCap = zoomDistance > 0.16 ? 0.040
-        : zoomDistance > 0.08 ? 0.030
-        : zoomDistance > 0.03 ? 0.018
-        : 0.010;
+      const zoomEase = zoomDistance > 0.16 ? 0.48
+        : zoomDistance > 0.08 ? 0.40
+        : zoomDistance > 0.03 ? 0.30
+        : 0.20;
+      const zoomStepCap = zoomDistance > 0.16 ? 0.090
+        : zoomDistance > 0.08 ? 0.060
+        : zoomDistance > 0.03 ? 0.034
+        : 0.018;
       const zoomStep = Math.sign(zoomDelta) * Math.min(zoomDistance * zoomEase, zoomStepCap);
       zoom += zoomStep;
 
@@ -304,10 +309,11 @@
     });
 
     window.wonderShowCommand = function(command, value) {
-      if (command === 'next') next();
-      if (command === 'previous') previous();
-      if (command === 'zoomIn') setZoom(targetZoom + 0.08);
-      if (command === 'zoomOut') setZoom(targetZoom - 0.08);
+      const motion = typeof value === 'object' && value !== null ? value : {};
+      if (command === 'next') next(motion);
+      if (command === 'previous') previous(motion);
+      if (command === 'zoomIn') setZoom(targetZoom * 1.20);
+      if (command === 'zoomOut') setZoom(targetZoom / 1.20);
       if (command === 'setZoom') setZoom(Number(value || targetZoom));
       if (command === 'setPan') {
         const payload = typeof value === 'string'

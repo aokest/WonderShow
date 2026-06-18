@@ -13,6 +13,7 @@
   - `ok`
   - `engine`
   - `model_path`
+  - `hand_model_path`
 
 ### `POST /infer`
 
@@ -30,10 +31,11 @@
 
 ## 模型文件
 
-- 当前使用：`sidecar/models/gesture_recognizer.task`
+- 当前使用：
+  - `sidecar/models/hand_landmarker.task`：双手检测与完整 `landmarks[21]`
+  - `sidecar/models/gesture_recognizer.task`：补充 `gesture_categories[]`
 - 后续可扩展：
   - 自定义 gesture classifier
-  - 仅 landmarks 模式
   - 自训练时序分类器
 
 ## 回退
@@ -48,3 +50,4 @@
   - `gesture_categories[]` 生成兼容 `HandShape`
   - `landmarks[21]` 生成 `palmSize`、`palmCenter`、`primaryShape`
 - 双手缩放要求两只手的 21 点都完整，且必须都能推导出严格 `L` 形
+- Swift 会先把 MediaPipe 顶左原点坐标转换为应用内底左原点坐标，再进入热区、叠加层和手势状态机
