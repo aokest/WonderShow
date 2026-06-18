@@ -18,6 +18,10 @@ let package = Package(
             name: "PresenterDirectorApp",
             targets: ["PresenterDirectorApp"]
         ),
+        .executable(
+            name: "screen-capture-diagnostic",
+            targets: ["ScreenCaptureDiagnostic"]
+        ),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -30,9 +34,17 @@ let package = Package(
             dependencies: ["PresenterDirector"],
             resources: [.process("Resources")]
         ),
+        .executableTarget(
+            name: "ScreenCaptureDiagnostic",
+            dependencies: ["PresenterDirector"]
+        ),
         .testTarget(
             name: "PresenterDirectorTests",
             dependencies: ["PresenterDirector"]
+        ),
+        .testTarget(
+            name: "PresenterDirectorAppTests",
+            dependencies: ["PresenterDirectorApp"]
         ),
     ],
     swiftLanguageModes: [.v6]

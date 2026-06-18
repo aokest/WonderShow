@@ -162,6 +162,87 @@ public struct HandPoint: Hashable, Sendable, Codable {
     }
 }
 
+public struct SingleHandZoomPulseUpdate: Hashable, Sendable {
+    public let intent: GestureIntent
+    public let scale: Double
+
+    public init(intent: GestureIntent, scale: Double) {
+        self.intent = intent
+        self.scale = scale
+    }
+}
+
+public struct SingleHandZoomPulseRecognizer: Sendable {
+    public let stepFactor: Double
+    public let minimumScale: Double
+    public let maximumScale: Double
+    public let cooldownMilliseconds: Int
+
+    private var lastShape: HandShape?
+    private var lastEmissionTimestampMilliseconds: Int
+
+    public init(
+        stepFactor: Double = 1.12,
+        minimumScale: Double = 0.30,
+        maximumScale: Double = 3.0,
+        cooldownMilliseconds: Int = 650
+    ) {
+        self.stepFactor = stepFactor
+        self.minimumScale = minimumScale
+        self.maximumScale = maximumScale
+        self.cooldownMilliseconds = cooldownMilliseconds
+        lastShape = nil
+        lastEmissionTimestampMilliseconds = -cooldownMilliseconds
+    }
+
+    public mutating func prime(with shape: HandShape) {
+        guard shape == .openPalm || shape == .pinch else { return }
+        lastShape = shape
+    }
+
+    public mutating func observe(
+        shape: HandShape,
+        currentScale: Double,
+        timestampMilliseconds: Int
+    ) -> SingleHandZoomPulseUpdate? {
+        guard shape == .openPalm || shape == .pinch else {
+            lastShape = shape
+            return nil
+        }
+
+        guard let previousShape = lastShape else {
+            lastShape = shape
+            return nil
+        }
+
+        lastShape = shape
+        guard previousShape != shape else { return nil }
+        guard timestampMilliseconds - lastEmissionTimestampMilliseconds >= cooldownMilliseconds else {
+            return nil
+        }
+
+        let intent: GestureIntent
+        let nextScale: Double
+        if previousShape == .openPalm, shape == .pinch {
+            intent = .zoomOut
+            nextScale = max(minimumScale, currentScale / stepFactor)
+        } else if previousShape == .pinch, shape == .openPalm {
+            intent = .zoomIn
+            nextScale = min(maximumScale, currentScale * stepFactor)
+        } else {
+            return nil
+        }
+
+        lastEmissionTimestampMilliseconds = timestampMilliseconds
+        return SingleHandZoomPulseUpdate(intent: intent, scale: nextScale)
+    }
+
+    public mutating func reset() {
+        lastShape = nil
+        lastEmissionTimestampMilliseconds = -cooldownMilliseconds
+    }
+}
+
 public struct GestureFrameSnapshot: Hashable, Sendable, Codable {
     public let points: [HandPoint]
     public let timestampMilliseconds: Int
@@ -176,13 +257,14 @@ public enum HandShape: String, Hashable, Sendable, Codable {
     case unknown
     case natural
     case openPalm
+    case pinch
     case fist
     case fingerGun
     case sword
     case lShape
 
     public var allowsSwipe: Bool {
-        self == .sword || self == .fingerGun
+        self == .sword
     }
 
     public func allowsSwipe(profile: GestureProfile) -> Bool {
@@ -191,6 +273,10 @@ public enum HandShape: String, Hashable, Sendable, Codable {
 
     public var allowsZoom: Bool {
         self == .lShape
+    }
+
+    public var allowsTwoHandZoom: Bool {
+        self == .lShape || self == .fingerGun
     }
 }
 
@@ -502,8 +588,10 @@ public struct ContinuousZoomTracker: Sendable {
     public let accelerationGain: Double
     public let accelerationActivationThreshold: Double
     public let directionConsistencyFrames: Int
+    public let absoluteScaleSensitivity: Double
 
     private var baselineDistance: Double?
+    private var baselineScale: Double
     private var lastEmittedScale: Double
     private var lastDistance: Double?
     private var quietFrameCount: Int
@@ -517,23 +605,24 @@ public struct ContinuousZoomTracker: Sendable {
     public init(
         minimumHandDistance: Double = 0.18,
         minimumRelativeChange: Double = 0.006,
-        minimumScaleStep: Double = 0.0025,
+        minimumScaleStep: Double = 0.003,
         scaleSensitivity: Double = 0.85,
         minimumScale: Double = 0.30,
         maximumScale: Double = 3.0,
         quietDistanceDeltaThreshold: Double = 0.0018,
         quietFramesToRebase: Int = 8,
-        minimumScaleDeltaPerUpdate: Double = 0.005,
-        maximumScaleDeltaPerUpdate: Double = 0.05,
-        dynamicScaleDeltaMultiplier: Double = 0.25,
+        minimumScaleDeltaPerUpdate: Double = 0.006,
+        maximumScaleDeltaPerUpdate: Double = 0.045,
+        dynamicScaleDeltaMultiplier: Double = 0.18,
         reverseDirectionSuppressionThreshold: Double = 0.040,
-        dwellMilliseconds: Int = 110,
+        dwellMilliseconds: Int = 60,
         graceMilliseconds: Int = 250,
         rebaseRelativeChangeThreshold: Double = 0.008,
         rebaseMinimumIntervalMilliseconds: Int = 320,
         accelerationGain: Double = 0.85,
         accelerationActivationThreshold: Double = 0.010,
-        directionConsistencyFrames: Int = 2
+        directionConsistencyFrames: Int = 1,
+        absoluteScaleSensitivity: Double = 1.0
     ) {
         self.minimumHandDistance = minimumHandDistance
         self.minimumRelativeChange = minimumRelativeChange
@@ -554,6 +643,8 @@ public struct ContinuousZoomTracker: Sendable {
         self.accelerationGain = accelerationGain
         self.accelerationActivationThreshold = accelerationActivationThreshold
         self.directionConsistencyFrames = directionConsistencyFrames
+        self.absoluteScaleSensitivity = absoluteScaleSensitivity
+        baselineScale = 1
         lastEmittedScale = 1
         lastDistance = nil
         quietFrameCount = 0
@@ -577,6 +668,7 @@ public struct ContinuousZoomTracker: Sendable {
     /// - Parameter currentScale: Current presentation scale used as the new baseline.
     public mutating func reset(currentScale: Double = 1) {
         baselineDistance = nil
+        baselineScale = currentScale
         lastEmittedScale = currentScale
         lastDistance = nil
         quietFrameCount = 0
@@ -606,7 +698,7 @@ public struct ContinuousZoomTracker: Sendable {
 
         let first = points[0]
         let second = points[1]
-        guard first.shape.allowsZoom, second.shape.allowsZoom else {
+        guard first.shape.allowsTwoHandZoom, second.shape.allowsTwoHandZoom else {
             reset(currentScale: currentScale)
             return nil
         }
@@ -641,16 +733,17 @@ public struct ContinuousZoomTracker: Sendable {
         }
 
         let hands = Array(geometries.prefix(2))
-        guard hands.allSatisfy(\.isStrictLShape) else {
+        guard hands.allSatisfy({ $0.primaryShape.allowsTwoHandZoom }) else {
             reset(currentScale: currentScale)
             return nil
         }
 
-        let distance = hands[0].normalizedDistance(to: hands[1])
-        guard distance >= 1.2 else {
+        let normalizedDistance = hands[0].normalizedDistance(to: hands[1])
+        guard normalizedDistance >= 0.55 else {
             reset(currentScale: currentScale)
             return nil
         }
+        let distance = hands[0].palmCenter.distance(to: hands[1].palmCenter)
 
         return updateDistance(
             distance: distance,
@@ -684,6 +777,7 @@ public struct ContinuousZoomTracker: Sendable {
 
         guard let baselineDistance else {
             self.baselineDistance = distance
+            baselineScale = currentScale
             lastEmittedScale = currentScale
             lastDistance = distance
             // #region debug-point B:zoom-baseline-init
@@ -721,6 +815,7 @@ public struct ContinuousZoomTracker: Sendable {
             )
             // #endregion
             self.baselineDistance = distance
+            baselineScale = currentScale
             lastEmittedScale = currentScale
             lastDistance = distance
             quietFrameCount = 0
@@ -815,11 +910,27 @@ public struct ContinuousZoomTracker: Sendable {
         } else {
             signedResponseChange = frameRelativeChange * 0.35
         }
-        let unclampedScale = clamp(
+        let targetScale = clamp(
+            baselineScale * (1 + relativeChange * absoluteScaleSensitivity),
+            minimumScale,
+            maximumScale
+        )
+        let incrementalScale = clamp(
             currentScale * (1 + signedResponseChange * scaleSensitivity),
             minimumScale,
             maximumScale
         )
+        let targetDelta = targetScale - lastEmittedScale
+        let incrementalDelta = incrementalScale - lastEmittedScale
+        let preferredDelta: Double
+        if targetDelta == 0 {
+            preferredDelta = incrementalDelta
+        } else if incrementalDelta == 0 || targetDelta * incrementalDelta > 0 {
+            preferredDelta = targetDelta
+        } else {
+            preferredDelta = abs(targetDelta) >= abs(incrementalDelta) ? targetDelta : incrementalDelta
+        }
+        let unclampedScale = clamp(lastEmittedScale + preferredDelta, minimumScale, maximumScale)
         let allowedScaleDelta = clamp(
             minimumScaleDeltaPerUpdate + motionEnergy * dynamicScaleDeltaMultiplier,
             minimumScaleDeltaPerUpdate,
@@ -857,6 +968,8 @@ public struct ContinuousZoomTracker: Sendable {
                 "acceleration": acceleration,
                 "motionEnergy": motionEnergy,
                 "signedResponseChange": signedResponseChange,
+                "targetScale": targetScale,
+                "baselineScale": baselineScale,
                 "currentScale": currentScale,
                 "nextScale": nextScale,
                 "allowedScaleDelta": allowedScaleDelta,
@@ -899,22 +1012,25 @@ public struct StreamingGestureRecognizer: Sendable {
     public let profile: GestureProfile
     public let minimumDecisionDurationMilliseconds: Int
     public let minimumDirectionConsistency: Double
+    public let minimumHorizontalVelocity: Double
 
     public init(
         profile: GestureProfile,
-        minimumDecisionDurationMilliseconds: Int = 120,
-        minimumDirectionConsistency: Double = 0.62
+        minimumDecisionDurationMilliseconds: Int = 70,
+        minimumDirectionConsistency: Double = 0.62,
+        minimumHorizontalVelocity: Double = 0.45
     ) {
         self.profile = profile
         self.minimumDecisionDurationMilliseconds = minimumDecisionDurationMilliseconds
         self.minimumDirectionConsistency = minimumDirectionConsistency
+        self.minimumHorizontalVelocity = minimumHorizontalVelocity
     }
 
     /// Scans the recent frame window and emits a symmetric left/right swipe when exactly one hand is clearly responsible.
     /// - Parameter frames: Recent frame snapshots ordered by time.
     /// - Returns: A discrete swipe intent when the motion is deliberate and directionally stable.
     public func recognize(frames: [GestureFrameSnapshot]) -> GestureIntent? {
-        guard frames.count >= 3, let last = frames.last else { return nil }
+        guard frames.count >= 2, let last = frames.last else { return nil }
 
         let pairedCount = frames.map(\.points.count).min() ?? 0
         guard pairedCount > 0 else { return nil }
@@ -939,6 +1055,14 @@ public struct StreamingGestureRecognizer: Sendable {
                 guard let gesture = recognizeSwipe(
                     for: handIndex,
                     frames: window
+                ) else {
+                    continue
+                }
+                guard !hasImmediateOppositeLeadIn(
+                    for: handIndex,
+                    frames: frames,
+                    windowStartIndex: startIndex,
+                    gesture: gesture
                 ) else {
                     continue
                 }
@@ -976,7 +1100,9 @@ public struct StreamingGestureRecognizer: Sendable {
         let last = lastFrame.points[handIndex]
         let horizontalTravel = last.x - first.x
         let verticalTravel = last.y - first.y
+        let durationSeconds = max(0.001, Double(lastFrame.timestampMilliseconds - firstFrame.timestampMilliseconds) / 1_000)
         guard abs(horizontalTravel) >= profile.minimumHorizontalTravel else { return nil }
+        guard abs(horizontalTravel) / durationSeconds >= minimumHorizontalVelocity else { return nil }
         guard abs(horizontalTravel) > abs(verticalTravel) * 1.18 else { return nil }
 
         let expectedSign = horizontalTravel > 0 ? 1.0 : -1.0
@@ -991,6 +1117,28 @@ public struct StreamingGestureRecognizer: Sendable {
         return expectedSign < 0 ? .swipeLeft : .swipeRight
     }
 
+    /// Rejects very short swipe windows that are just the last leg of a back-and-forth jitter.
+    private func hasImmediateOppositeLeadIn(
+        for handIndex: Int,
+        frames: [GestureFrameSnapshot],
+        windowStartIndex: Int,
+        gesture: GestureIntent
+    ) -> Bool {
+        guard windowStartIndex > 0 else { return false }
+        guard
+            frames[windowStartIndex - 1].points.indices.contains(handIndex),
+            frames[windowStartIndex].points.indices.contains(handIndex)
+        else {
+            return false
+        }
+
+        let expectedSign = gesture == .swipeRight ? 1.0 : -1.0
+        let leadIn = frames[windowStartIndex].points[handIndex].x
+            - frames[windowStartIndex - 1].points[handIndex].x
+        let significantLeadIn = profile.minimumHorizontalTravel * 0.25
+        return abs(leadIn) >= significantLeadIn && leadIn * expectedSign < 0
+    }
+
     /// Checks whether the frame-by-frame horizontal deltas stay aligned with the intended swipe direction.
     /// - Parameters:
     ///   - handIndex: Index of the hand to evaluate.
@@ -1002,7 +1150,7 @@ public struct StreamingGestureRecognizer: Sendable {
         frames: [GestureFrameSnapshot],
         expectedSign: Double
     ) -> Bool {
-        guard frames.count >= 3 else { return false }
+        guard frames.count >= 2 else { return false }
         guard frames.allSatisfy({ $0.points.indices.contains(handIndex) }) else { return false }
 
         let total = (frames.last?.points[handIndex].x ?? 0) - frames[0].points[handIndex].x
@@ -1020,6 +1168,9 @@ public struct StreamingGestureRecognizer: Sendable {
         }
 
         guard considered > 0 else { return false }
+        if considered == 1 {
+            return matching == 1
+        }
         return Double(matching) / Double(considered) >= minimumDirectionConsistency
     }
 }
@@ -1070,8 +1221,8 @@ public struct ContinuousZoomCandidateEvaluator: Sendable {
 
         let startHands = Array(start.prefix(2))
         let endHands = Array(end.prefix(2))
-        let canZoom = startHands.allSatisfy(\.shape.allowsZoom)
-            && endHands.allSatisfy(\.shape.allowsZoom)
+        let canZoom = startHands.allSatisfy(\.shape.allowsTwoHandZoom)
+            && endHands.allSatisfy(\.shape.allowsTwoHandZoom)
         guard canZoom else { return false }
 
         let leftTravel = endHands[0].x - startHands[0].x
@@ -1150,8 +1301,8 @@ public struct DiscreteGestureSuppressionEvaluator: Sendable {
         let recentFrames = Array((existingFrames + [incomingFrame]).suffix(recentWindowSize))
         let coverage = twoHandZoomPoseCoverage(frames: recentFrames)
         return zoomPoseStreak >= minimumZoomPoseStreak
-            || coverage.lShapeFrameCount >= minimumLShapeFrameCount
-            || coverage.lShapeCoverage >= minimumLShapeCoverage
+            || coverage.zoomPoseFrameCount >= minimumLShapeFrameCount
+            || coverage.zoomPoseCoverage >= minimumLShapeCoverage
     }
 
     /// Summarizes how often a recent frame window looks like a deliberate two-hand zoom pose.
@@ -1187,9 +1338,9 @@ public struct DiscreteGestureSuppressionEvaluator: Sendable {
     public func currentFrameLooksZoomLike(_ frame: GestureFrameSnapshot) -> Bool {
         guard frame.points.count >= 2 else { return false }
         let currentPoints = Array(frame.points.prefix(2))
-        let bothHandsAllowZoom = currentPoints.allSatisfy(\.shape.allowsZoom)
+        let bothHandsAllowZoom = currentPoints.allSatisfy(\.shape.allowsTwoHandZoom)
         let containsDistinctZoomPose = currentPoints.contains { point in
-            point.shape == .lShape || point.shape == .unknown
+            point.shape.allowsTwoHandZoom || point.shape == .unknown
         }
         return bothHandsAllowZoom && containsDistinctZoomPose
     }
@@ -1215,12 +1366,12 @@ public struct FrameGestureRecognizer: Sendable {
         guard pairedCount > 0 else { return nil }
 
         if pairedCount >= 2 {
-            let canZoom = start[0].shape.allowsZoom
-                && start[1].shape.allowsZoom
-                && end[0].shape.allowsZoom
-                && end[1].shape.allowsZoom
+            let canZoom = start[0].shape.allowsTwoHandZoom
+                && start[1].shape.allowsTwoHandZoom
+                && end[0].shape.allowsTwoHandZoom
+                && end[1].shape.allowsTwoHandZoom
             let zoomPoseEngaged = [start[0], start[1], end[0], end[1]].allSatisfy { point in
-                point.shape == .lShape || point.shape == .unknown
+                point.shape.allowsTwoHandZoom || point.shape == .unknown
             }
             let leftMotion = GestureMotion(
                 horizontalTravel: end[0].x - start[0].x,

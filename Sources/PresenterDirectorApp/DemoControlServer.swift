@@ -33,10 +33,10 @@ final class DemoControlServer: @unchecked Sendable {
         }
     }
 
-    func enqueue(_ command: String) throws {
+    func enqueue(_ command: String, swipeVelocity: Double? = nil) throws {
         try start()
         queue.async { [weak self] in
-            self?.pendingCommands.append(.simple(command))
+            self?.pendingCommands.append(.simple(command, swipeVelocity: swipeVelocity))
             // #region debug-point D:enqueue-command
             self?.debugReport(
                 hypothesisId: "D",
@@ -196,13 +196,16 @@ final class DemoControlServer: @unchecked Sendable {
 }
 
 private enum DemoBridgeCommand {
-    case simple(String)
+    case simple(String, swipeVelocity: Double?)
     case setZoom(Double)
     case setPan(x: Double, y: Double)
 
     var json: String {
         switch self {
-        case .simple(let command):
+        case .simple(let command, let swipeVelocity):
+            if let swipeVelocity {
+                return #"{"command":"\#(command)","value":{"velocity":\#(swipeVelocity)}}"#
+            }
             return #"{"command":"\#(command)"}"#
         case .setZoom(let scale):
             return #"{"command":"setZoom","value":\#(scale)}"#

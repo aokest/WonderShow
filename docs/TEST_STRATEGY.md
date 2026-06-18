@@ -17,6 +17,8 @@
 - v0.7 模式仲裁：缩放优先于翻页
 - v0.7 21 点几何：`剑指` / `L` 形 / palm-size 归一化
 - v0.7 连续缩放：快速动作识别、方向不反跳、grace/hysteresis 稳态
+- 录制工程模型：讲者摄像头原始轨、PPT/屏幕原始轨、program 输出轨
+- 时间轴视角模板：正式演讲的讲者全身/特写/画中画/PPT 全屏，以及培训录屏的特写画中画/纯 PPT
 
 ### 2. App 手工回归
 
@@ -32,11 +34,12 @@
 - 多设备、多光照场景识别回归
 - 端到端 UI 自动化
 - MediaPipe sidecar 健康检查与 `/infer` 接口回归
+- ScreenCaptureKit 真实屏幕采集、AVAssetWriter 写盘、program 渲染导出回归
 
 ## 本轮验收命令
 
 ```bash
-swift test
+swift test --disable-sandbox
 swift run PresenterDirectorApp
 bash scripts/build-app.sh
 ```
@@ -49,3 +52,5 @@ bash scripts/build-app.sh
 - 设备异常和权限异常必须有清晰提示
 - 双手缩放进入后不应再漏出上一页/下一页
 - 上一页和下一页的识别难度应尽量对称
+- 正式演讲和培训录屏应共享同一套双源采集模型，只在默认镜头景别、PiP 位置和时间轴视角模板上分化
+- 纯 PPT 视图不应混入讲者图层，避免后续导出高清 PPT 全屏时被摄像头素材污染

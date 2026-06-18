@@ -11,6 +11,8 @@ It is designed to:
 
 See [docs/architecture.md](docs/architecture.md) for the product architecture, feasibility notes, and staged development plan.
 
+See [docs/HANDOFF-2026-06-18.md](docs/HANDOFF-2026-06-18.md) for the latest handoff, current feature baseline, debug history, research notes, and next iteration plan.
+
 See [docs/recording-studio-roadmap.md](docs/recording-studio-roadmap.md) for the future recording editor, timeline zoom, picture-in-picture, and export roadmap.
 
 ## Repository Remote
@@ -21,12 +23,16 @@ See [docs/recording-studio-roadmap.md](docs/recording-studio-roadmap.md) for the
 
 ## Current Status
 
-This repository currently contains the tested Swift core logic layer:
+This repository currently contains a tested macOS recording-studio baseline:
 
 - gesture intent to presentation command mapping;
 - app compatibility strategy for Office, WPS, generic keyboard control, and HTML decks;
 - annotation strategy selection;
-- recording pipeline planning;
+- recording project planning and `.wondershow` project persistence;
+- camera, selected screen/window, and selected microphone raw recording;
+- monitor picture-in-picture with draggable position, size, and shape;
+- preview composition and video export through the real renderer;
+- export settings for resolution, frame rate, quality, and codec;
 - multi-camera capability modeling, with Pocket 3 as one verified UVC input.
 
 ## Development
@@ -34,13 +40,13 @@ This repository currently contains the tested Swift core logic layer:
 Run tests:
 
 ```bash
-swift test
+rtk swift test --disable-sandbox
 ```
 
 Run the current macOS prototype from Terminal:
 
 ```bash
-swift run --disable-sandbox PresenterDirectorApp
+rtk swift run --disable-sandbox PresenterDirectorApp
 ```
 
 The macOS prototype uses AVFoundation camera discovery and prefers a recognizable tracking camera such as `OsmoPocket3` when it is present, while still falling back to other available camera inputs.
@@ -50,7 +56,7 @@ The macOS prototype uses AVFoundation camera discovery and prefers a recognizabl
 Build a clickable macOS app bundle:
 
 ```bash
-bash scripts/build-app.sh
+rtk bash scripts/build-app.sh
 ```
 
 Then open the app bundle:

@@ -49,8 +49,8 @@ import Testing
 @Test func avoidsSingleHandSwipeWhenTwoHandsMoveAmbiguously() {
     let recognizer = FrameGestureRecognizer(profile: .default)
     let ambiguous = recognizer.recognize(
-        start: [.init(x: 0.25, y: 0.5, shape: .fingerGun), .init(x: 0.72, y: 0.5, shape: .fingerGun)],
-        end: [.init(x: 0.43, y: 0.5, shape: .fingerGun), .init(x: 0.90, y: 0.5, shape: .fingerGun)],
+        start: [.init(x: 0.25, y: 0.5, shape: .sword), .init(x: 0.72, y: 0.5, shape: .sword)],
+        end: [.init(x: 0.43, y: 0.5, shape: .sword), .init(x: 0.90, y: 0.5, shape: .sword)],
         durationMilliseconds: 420
     )
 
@@ -60,15 +60,26 @@ import Testing
 @Test func allowsSingleHandSwipeWhenSecondHandIsStable() {
     let recognizer = FrameGestureRecognizer(profile: .default)
     let swipe = recognizer.recognize(
-        start: [.init(x: 0.25, y: 0.5, shape: .fingerGun), .init(x: 0.72, y: 0.5, shape: .natural)],
-        end: [.init(x: 0.03, y: 0.5, shape: .fingerGun), .init(x: 0.73, y: 0.5, shape: .natural)],
+        start: [.init(x: 0.25, y: 0.5, shape: .sword), .init(x: 0.72, y: 0.5, shape: .natural)],
+        end: [.init(x: 0.03, y: 0.5, shape: .sword), .init(x: 0.73, y: 0.5, shape: .natural)],
         durationMilliseconds: 420
     )
 
     #expect(swipe == .swipeLeft)
 }
 
-@Test func rejectsSwipeWithoutFingerGunShape() {
+@Test func rejectsFingerGunAsSwipeGesture() {
+    let recognizer = FrameGestureRecognizer(profile: .default)
+    let fingerGunSwipe = recognizer.recognize(
+        start: [.init(x: 0.25, y: 0.5, shape: .fingerGun)],
+        end: [.init(x: 0.02, y: 0.5, shape: .fingerGun)],
+        durationMilliseconds: 420
+    )
+
+    #expect(fingerGunSwipe == nil)
+}
+
+@Test func rejectsSwipeWithoutSwordShape() {
     let recognizer = FrameGestureRecognizer(profile: .default)
     let naturalHandSwipe = recognizer.recognize(
         start: [.init(x: 0.25, y: 0.5, shape: .natural)],
@@ -77,6 +88,17 @@ import Testing
     )
 
     #expect(naturalHandSwipe == nil)
+}
+
+@Test func rejectsPinchAsSwipeGesture() {
+    let recognizer = FrameGestureRecognizer(profile: .default)
+    let pinchSwipe = recognizer.recognize(
+        start: [.init(x: 0.25, y: 0.5, shape: .pinch)],
+        end: [.init(x: 0.02, y: 0.5, shape: .pinch)],
+        durationMilliseconds: 420
+    )
+
+    #expect(pinchSwipe == nil)
 }
 
 @Test func easyTestingProfileAllowsNaturalHandSwipe() {
@@ -112,6 +134,41 @@ import Testing
     ]
 
     #expect(recognizer.recognize(frames: frames) == .swipeRight)
+}
+
+@Test func streamingRecognizerDetectsTwoFrameFastSwordSwipe() {
+    let recognizer = StreamingGestureRecognizer(
+        profile: .default,
+        minimumDecisionDurationMilliseconds: 80
+    )
+    let frames = [
+        GestureFrameSnapshot(points: [.init(x: 0.74, y: 0.50, shape: .sword)], timestampMilliseconds: 0),
+        GestureFrameSnapshot(points: [.init(x: 0.36, y: 0.51, shape: .sword)], timestampMilliseconds: 90)
+    ]
+
+    #expect(recognizer.recognize(frames: frames) == .swipeLeft)
+}
+
+@Test func streamingRecognizerDetectsShortFastSwordSwipeWithDefaultTiming() {
+    let recognizer = StreamingGestureRecognizer(profile: .default)
+    let frames = [
+        GestureFrameSnapshot(points: [.init(x: 0.72, y: 0.50, shape: .sword)], timestampMilliseconds: 0),
+        GestureFrameSnapshot(points: [.init(x: 0.50, y: 0.50, shape: .sword)], timestampMilliseconds: 70)
+    ]
+
+    #expect(recognizer.recognize(frames: frames) == .swipeLeft)
+}
+
+@Test func streamingRecognizerRejectsSlowSwordDriftThatCouldMultiTrigger() {
+    let recognizer = StreamingGestureRecognizer(profile: .default)
+    let frames = [
+        GestureFrameSnapshot(points: [.init(x: 0.72, y: 0.50, shape: .sword)], timestampMilliseconds: 0),
+        GestureFrameSnapshot(points: [.init(x: 0.66, y: 0.50, shape: .sword)], timestampMilliseconds: 180),
+        GestureFrameSnapshot(points: [.init(x: 0.59, y: 0.50, shape: .sword)], timestampMilliseconds: 360),
+        GestureFrameSnapshot(points: [.init(x: 0.52, y: 0.50, shape: .sword)], timestampMilliseconds: 540)
+    ]
+
+    #expect(recognizer.recognize(frames: frames) == nil)
 }
 
 @Test func streamingRecognizerRejectsJitteryBackAndForthMotion() {
@@ -255,7 +312,7 @@ import Testing
     #expect(initial == nil)
     #expect(tiny == nil)
     #expect((larger?.scale ?? 0) > 1.0)
-    #expect((larger?.scale ?? 0) <= 1.05)
+    #expect((larger?.scale ?? 0) <= 1.12)
 }
 
 @Test func continuousZoomTrackerScalesFineAndFastMotionsWithDifferentStepSizes() {
@@ -302,6 +359,104 @@ import Testing
     #expect((fine?.scale ?? 0) > 1.0)
     #expect((fine?.scale ?? 0) < (fast?.scale ?? 0))
     #expect((fast?.scale ?? 0) <= 1.03)
+}
+
+@Test func continuousZoomTrackerDefaultCapsFastMotionForFineZoom() {
+    var tracker = ContinuousZoomTracker()
+    let frames = [
+        (0, 0.30, 0.70),
+        (60, 0.24, 0.76),
+        (120, 0.16, 0.84),
+        (180, 0.10, 0.90)
+    ]
+    var scale = 1.0
+    var emittedDeltas: [Double] = []
+
+    for (timestamp, leftX, rightX) in frames {
+        if let update = tracker.update(
+            points: [
+                .init(x: leftX, y: 0.5, shape: .lShape),
+                .init(x: rightX, y: 0.5, shape: .lShape)
+            ],
+            currentScale: scale,
+            timestampMilliseconds: timestamp
+        ) {
+            emittedDeltas.append(abs(update.scale - scale))
+            scale = update.scale
+        }
+    }
+
+    #expect(!emittedDeltas.isEmpty)
+    #expect(emittedDeltas.allSatisfy { $0 <= 0.05 })
+}
+
+@Test func continuousZoomTrackerUsesAccumulatedDistanceForResponsiveInwardZoom() {
+    var tracker = ContinuousZoomTracker(
+        minimumRelativeChange: 0.006,
+        minimumScaleStep: 0.003,
+        minimumScaleDeltaPerUpdate: 0.02,
+        maximumScaleDeltaPerUpdate: 0.08,
+        dynamicScaleDeltaMultiplier: 0.30,
+        dwellMilliseconds: 60
+    )
+
+    let frames = [
+        (0, 0.26, 0.74, 1.00),
+        (60, 0.30, 0.70, 1.00),
+        (120, 0.35, 0.65, 1.00),
+        (180, 0.40, 0.60, 0.96),
+        (240, 0.44, 0.56, 0.92)
+    ]
+
+    let updates = frames.compactMap { timestamp, leftX, rightX, currentScale in
+        tracker.update(
+            points: [
+                .init(x: leftX, y: 0.5, shape: .lShape),
+                .init(x: rightX, y: 0.5, shape: .lShape)
+            ],
+            currentScale: currentScale,
+            timestampMilliseconds: timestamp
+        )
+    }
+
+    #expect(updates.count >= 2)
+    #expect(updates.allSatisfy { $0.relativeDistanceChange < 0 })
+    #expect((updates.last?.scale ?? 1) < 0.94)
+}
+
+@Test func continuousZoomTrackerAcceptsTwoHandFingerGunForZoom() {
+    var tracker = ContinuousZoomTracker(
+        minimumRelativeChange: 0.006,
+        minimumScaleStep: 0.003,
+        dwellMilliseconds: 60
+    )
+
+    _ = tracker.update(
+        points: [
+            .init(x: 0.30, y: 0.5, shape: .fingerGun),
+            .init(x: 0.70, y: 0.5, shape: .fingerGun)
+        ],
+        currentScale: 1,
+        timestampMilliseconds: 0
+    )
+    _ = tracker.update(
+        points: [
+            .init(x: 0.27, y: 0.5, shape: .fingerGun),
+            .init(x: 0.73, y: 0.5, shape: .fingerGun)
+        ],
+        currentScale: 1,
+        timestampMilliseconds: 60
+    )
+    let update = tracker.update(
+        points: [
+            .init(x: 0.22, y: 0.5, shape: .fingerGun),
+            .init(x: 0.78, y: 0.5, shape: .fingerGun)
+        ],
+        currentScale: 1,
+        timestampMilliseconds: 120
+    )
+
+    #expect((update?.scale ?? 0) > 1.0)
 }
 
 @Test func continuousZoomTrackerResetsWhenZoomPoseDisappears() {
@@ -380,7 +535,7 @@ import Testing
     )
 }
 
-@Test func discreteGestureSuppressionEvaluatorDoesNotSuppressTwoHandFingerGunSwipe() {
+@Test func discreteGestureSuppressionEvaluatorSuppressesTwoHandFingerGunZoomPose() {
     let evaluator = DiscreteGestureSuppressionEvaluator()
     let existingFrames = [
         GestureFrameSnapshot(
@@ -400,7 +555,7 @@ import Testing
     )
 
     #expect(
-        !evaluator.shouldSuppressDiscreteGesture(
+        evaluator.shouldSuppressDiscreteGesture(
             existingFrames: existingFrames,
             incomingFrame: incomingFrame,
             zoomPoseStreak: 0
@@ -462,7 +617,7 @@ import Testing
     #expect(uncertainSwipe == nil)
 }
 
-@Test func requiresLShapeOnBothHandsForZoom() {
+@Test func requiresZoomCapablePoseOnBothHandsForZoom() {
     let recognizer = FrameGestureRecognizer(profile: .default)
     let zoom = recognizer.recognize(
         start: [.init(x: 0.32, y: 0.5, shape: .lShape), .init(x: 0.66, y: 0.5, shape: .lShape)],
@@ -611,6 +766,64 @@ import Testing
     #expect(MediaPipeGestureAdapter.shape(for: fist) == .fist)
 }
 
+@Test func mediaPipeAdapterPrefersCustomGestureClassifierOverOfficialCategory() {
+    let hand = MediaPipeHandPrediction(
+        handedness: "Right",
+        handednessScore: 0.99,
+        landmarks: Array(repeating: .init(x: 0.5, y: 0.5, z: 0), count: 21),
+        gestureCategories: [.init(name: "Closed_Fist", score: 0.92)],
+        customGesture: .init(name: "pinch", score: 0.91)
+    )
+
+    #expect(MediaPipeGestureAdapter.shape(for: hand) == .pinch)
+}
+
+@Test func mediaPipeAdapterAcceptsClearMarginCustomGestureBelowLegacyThreshold() {
+    let hand = MediaPipeHandPrediction(
+        handedness: "Right",
+        handednessScore: 0.99,
+        landmarks: Array(repeating: .init(x: 0.5, y: 0.5, z: 0), count: 21),
+        gestureCategories: [.init(name: "Closed_Fist", score: 0.92)],
+        customGesture: .init(
+            name: "grab",
+            score: 0.46,
+            scores: ["grab": 0.46, "pinch": 0.24, "open_palm": 0.11],
+            margin: 0.22
+        )
+    )
+
+    #expect(MediaPipeGestureAdapter.shape(for: hand) == .fist)
+}
+
+@Test func mediaPipeAdapterIgnoresLowConfidenceCustomGesture() {
+    let hand = MediaPipeHandPrediction(
+        handedness: "Right",
+        handednessScore: 0.99,
+        landmarks: Array(repeating: .init(x: 0.5, y: 0.5, z: 0), count: 21),
+        gestureCategories: [.init(name: "Closed_Fist", score: 0.92)],
+        customGesture: .init(name: "pinch", score: 0.30)
+    )
+
+    #expect(MediaPipeGestureAdapter.shape(for: hand) == .fist)
+}
+
+@Test func mediaPipeAdapterRejectsAmbiguousCustomGestureBelowLegacyThreshold() {
+    let hand = MediaPipeHandPrediction(
+        handedness: "Right",
+        handednessScore: 0.99,
+        landmarks: Array(repeating: .init(x: 0.5, y: 0.5, z: 0), count: 21),
+        gestureCategories: [.init(name: "Closed_Fist", score: 0.92)],
+        customGesture: .init(
+            name: "pinch",
+            score: 0.46,
+            scores: ["pinch": 0.46, "grab": 0.42, "open_palm": 0.08],
+            margin: 0.04
+        )
+    )
+
+    #expect(MediaPipeGestureAdapter.shape(for: hand) == .fist)
+}
+
 @Test func mediaPipeAdapterBuildsAnchorPointsFromLandmarks() {
     var landmarks = Array(repeating: MediaPipeNormalizedLandmark(x: 0, y: 0, z: 0), count: 21)
     landmarks[0] = .init(x: 0.2, y: 0.6, z: 0)
@@ -630,6 +843,57 @@ import Testing
     #expect(point?.shape == .openPalm)
     #expect(point?.x == 0.5)
     #expect(point?.y == 0.45)
+}
+
+@Test func mediaPipeAdapterConvertsSidecarCoordinatesToGestureSpace() {
+    let rawFrame = MediaPipeInferenceFrame(
+        timestampMilliseconds: 42,
+        hands: [
+            MediaPipeHandPrediction(
+                handedness: "Right",
+                handednessScore: 0.99,
+                landmarks: [
+                    MediaPipeNormalizedLandmark(x: 0.25, y: 0.20, z: 0),
+                    MediaPipeNormalizedLandmark(x: 0.40, y: 0.80, z: 0)
+                ],
+                gestureCategories: []
+            )
+        ]
+    )
+
+    let converted = MediaPipeGestureAdapter.gestureCoordinateFrame(from: rawFrame)
+
+    #expect(converted.timestampMilliseconds == 42)
+    #expect(converted.hands[0].landmarks[0].x == 0.25)
+    #expect(converted.hands[0].landmarks[0].y == 0.80)
+    #expect(abs(converted.hands[0].landmarks[1].y - 0.20) < 0.0001)
+}
+
+@Test func mediaPipePalmAnchorsUseConvertedGestureCoordinates() {
+    var landmarks = Array(repeating: MediaPipeNormalizedLandmark(x: 0.0, y: 0.0, z: 0.0), count: 21)
+    landmarks[0] = .init(x: 0.50, y: 0.80, z: 0.0)
+    landmarks[5] = .init(x: 0.50, y: 0.70, z: 0.0)
+    landmarks[9] = .init(x: 0.50, y: 0.60, z: 0.0)
+    landmarks[13] = .init(x: 0.50, y: 0.70, z: 0.0)
+    landmarks[17] = .init(x: 0.50, y: 0.80, z: 0.0)
+    let rawFrame = MediaPipeInferenceFrame(
+        timestampMilliseconds: 1,
+        hands: [
+            .init(
+                handedness: "Right",
+                handednessScore: 0.99,
+                landmarks: landmarks,
+                gestureCategories: [.init(name: "Open_Palm", score: 0.95)]
+            )
+        ]
+    )
+
+    let converted = MediaPipeGestureAdapter.gestureCoordinateFrame(from: rawFrame)
+    let point = MediaPipeGestureAdapter.palmHandPoints(from: converted.hands).first
+
+    #expect(point?.shape == .openPalm)
+    #expect(point?.x == 0.50)
+    #expect(abs((point?.y ?? 0) - 0.28) < 0.0001)
 }
 
 @Test func mediaPipeAdapterPreservesTimestampAndSortsHandsLeftToRight() {
@@ -673,6 +937,33 @@ import Testing
     #expect(snapshot.points[1].shape == .fingerGun)
 }
 
+@Test func mediaPipeSnapshotConvertsRawSidecarCoordinates() {
+    var landmarks = Array(repeating: MediaPipeNormalizedLandmark(x: 0.0, y: 0.0, z: 0.0), count: 21)
+    landmarks[0] = .init(x: 0.50, y: 0.80, z: 0.0)
+    landmarks[5] = .init(x: 0.50, y: 0.70, z: 0.0)
+    landmarks[9] = .init(x: 0.50, y: 0.60, z: 0.0)
+    landmarks[13] = .init(x: 0.50, y: 0.70, z: 0.0)
+    landmarks[17] = .init(x: 0.50, y: 0.80, z: 0.0)
+    let frame = MediaPipeInferenceFrame(
+        timestampMilliseconds: 7,
+        hands: [
+            .init(
+                handedness: "Right",
+                handednessScore: 0.99,
+                landmarks: landmarks,
+                gestureCategories: [.init(name: "Open_Palm", score: 0.95)]
+            )
+        ]
+    )
+
+    let snapshot = MediaPipeGestureAdapter.snapshot(from: frame)
+
+    #expect(snapshot.timestampMilliseconds == 7)
+    #expect(snapshot.points.count == 1)
+    #expect(snapshot.points[0].x == 0.50)
+    #expect(abs(snapshot.points[0].y - 0.28) < 0.0001)
+}
+
 @Test func mediaPipePayloadDecodesSnakeCaseSidecarResponse() throws {
     let payload = """
     {
@@ -686,7 +977,13 @@ import Testing
           ],
           "gesture_categories": [
             { "name": "Pointing_Up", "score": 0.91 }
-          ]
+          ],
+          "custom_gesture": {
+            "name": "pinch",
+            "score": 0.87,
+            "margin": 0.42,
+            "scores": { "pinch": 0.87, "grab": 0.45 }
+          }
         }
       ]
     }
@@ -698,6 +995,39 @@ import Testing
     #expect(frame.hands.count == 1)
     #expect(frame.hands[0].handednessScore == 0.98)
     #expect(frame.hands[0].gestureCategories.first?.name == "Pointing_Up")
+    #expect(frame.hands[0].customGesture?.name == "pinch")
+    #expect(frame.hands[0].customGesture?.score == 0.87)
+    #expect(frame.hands[0].customGesture?.margin == 0.42)
+    #expect(frame.hands[0].customGesture?.scores?["grab"] == 0.45)
+}
+
+@Test func singleHandZoomPulseCanBePrimedByOpenPalmUnlock() {
+    var recognizer = SingleHandZoomPulseRecognizer()
+
+    recognizer.prime(with: .openPalm)
+    let update = recognizer.observe(
+        shape: .pinch,
+        currentScale: 1.0,
+        timestampMilliseconds: 100
+    )
+
+    #expect(update?.intent == .zoomOut)
+    #expect((update?.scale ?? 1.0) < 1.0)
+}
+
+@Test func singleHandZoomPulseDefaultUsesFineStep() {
+    var recognizer = SingleHandZoomPulseRecognizer()
+
+    recognizer.prime(with: .openPalm)
+    let update = recognizer.observe(
+        shape: .pinch,
+        currentScale: 1.0,
+        timestampMilliseconds: 100
+    )
+
+    #expect(update?.intent == .zoomOut)
+    #expect((update?.scale ?? 0.0) > 0.88)
+    #expect((update?.scale ?? 1.0) < 1.0)
 }
 
 @Test func mediaPipeAdapterBlendsPointingAnchorForStability() {

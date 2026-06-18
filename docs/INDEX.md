@@ -4,11 +4,12 @@
 
 ## 必读顺序
 
-1. `docs/PRD.md`
-2. `docs/ARCH.md`
-3. `docs/RISK_MODEL.md`
-4. `docs/TEST_STRATEGY.md`
-5. 本次改动关联模块文档
+1. `docs/HANDOFF-2026-06-18.md`
+2. `docs/PRD.md`
+3. `docs/ARCH.md`
+4. `docs/RISK_MODEL.md`
+5. `docs/TEST_STRATEGY.md`
+6. 本次改动关联模块文档
    - `docs/modules/dashboard/DESIGN.md`
    - `docs/modules/dashboard/SPEC.md`
    - `docs/modules/dashboard/TEST.md`
@@ -18,15 +19,16 @@
    - `docs/modules/mediapipe-sidecar/DESIGN.md`
    - `docs/modules/mediapipe-sidecar/SPEC.md`
    - `docs/modules/mediapipe-sidecar/TEST.md`
-6. 历史补充资料
+7. 历史补充资料
    - `docs/architecture.md`
    - `docs/recording-studio-roadmap.md`
 
 ## 当前阶段
 
-- 阶段：`v0.6 稳定基线`
-- 目标：冻结当前可运行的导演台 + MediaPipe 手势版本，作为下一轮结构性手势改造的可回退基线。
-- 原则：先固化可启动、可测试、可打包的稳定版本，再在新分支做大刀阔斧的交互与识别重构。
+- 阶段：`v0.7.20260618 录制工作室阶段基线`
+- 当前包：`dist/灵演.app`，版本 `0.7.20260618 (202606181959)`。
+- 目标：冻结当前已通过用户复测的录制源选择、讲者/屏幕/麦克风录制、画中画监视器、预览合成、视频导出、项目管理和录制状态控制能力，作为下一轮时间轴、画质增强、菜单栏常驻/桌面 mini toolbar、授权商业化、多端点、多主题和手势准确度提升的起点。
+- 原则：已测试通过的录制主链路不要随意重构；后续改动先补回归测试，再小步替换。
 
 ## 仓库约定
 
@@ -37,10 +39,12 @@
 
 ## 本轮改动范围
 
-- Dashboard 主界面信息架构重构
-- 手势引擎稳态控制重构
-- 文档体系补齐
-- MediaPipe sidecar 方案落地
+- 录制工作室主链路：视频输入、屏幕/窗口输入、音频输入、项目保存、预览、导出。
+- 监视器画中画：拖拽、缩放、形状、keyframe 与导出一致性。
+- 录制状态控制：开始、暂停、继续、终止保存/放弃、倒计时与时间清零。
+- 导出体验：真实进度、文件大小、成功弹窗、Finder 入口。
+- 手势主链路继续保留 MediaPipe/Vision 视觉识别方向，后续重点转向动态手势准确度和远距离鲁棒性。
+- 未来产品计划：桌面可拖拽 mini toolbar、可选时间片段/多段时间轴导出、授权验证与付费激活、多端点支持、多主题皮肤。
 
 ## 约束
 

@@ -21,11 +21,14 @@ from typing import Any
 import cv2
 import mediapipe as mp
 import numpy as np
+from gesture_model import GestureMLP
 
 
 BaseOptions = mp.tasks.BaseOptions
 GestureRecognizer = mp.tasks.vision.GestureRecognizer
 GestureRecognizerOptions = mp.tasks.vision.GestureRecognizerOptions
+HandLandmarker = mp.tasks.vision.HandLandmarker
+HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
 VisionRunningMode = mp.tasks.vision.RunningMode
 
 
@@ -42,6 +45,8 @@ class SidecarConfig:
     host: str
     port: int
     model_path: Path
+    hand_model_path: Path
+    custom_model_path: Path | None
 
 
 class GestureSidecar:
@@ -61,6 +66,16 @@ class GestureSidecar:
                 f"MediaPipe task model not found: {config.model_path}. "
                 "Please download gesture_recognizer.task into sidecar/models/."
             )
+        if not config.hand_model_path.exists():
+            raise FileNotFoundError(
+                f"MediaPipe hand landmarker model not found: {config.hand_model_path}. "
+                "Please download hand_landmarker.task into sidecar/models/."
+            )
+        self._custom_model = (
+            GestureMLP.load(config.custom_model_path)
+            if config.custom_model_path and config.custom_model_path.exists()
+            else None
+        )
         options = GestureRecognizerOptions(
             base_options=BaseOptions(model_asset_path=str(config.model_path)),
             running_mode=VisionRunningMode.IMAGE,
@@ -71,8 +86,18 @@ class GestureSidecar:
         )
         try:
             self._recognizer = GestureRecognizer.create_from_options(options)
+            self._hand_landmarker = HandLandmarker.create_from_options(
+                HandLandmarkerOptions(
+                    base_options=BaseOptions(model_asset_path=str(config.hand_model_path)),
+                    running_mode=VisionRunningMode.IMAGE,
+                    num_hands=2,
+                    min_hand_detection_confidence=0.25,
+                    min_hand_presence_confidence=0.25,
+                    min_tracking_confidence=0.25,
+                )
+            )
         except Exception as exc:  # pragma: no cover - direct wrapper for native init
-            raise RuntimeError(f"Failed to initialize MediaPipe recognizer: {exc}") from exc
+            raise RuntimeError(f"Failed to initialize MediaPipe tasks: {exc}") from exc
 
     def health_payload(self) -> dict[str, Any]:
         """Builds a health response for liveness checks.
@@ -83,8 +108,11 @@ class GestureSidecar:
 
         return {
             "ok": True,
-            "engine": "MediaPipe Gesture Recognizer",
+            "engine": "MediaPipe Hand Landmarker + Gesture Recognizer",
             "model_path": str(self._config.model_path),
+            "hand_model_path": str(self._config.hand_model_path),
+            "custom_model_path": str(self._config.custom_model_path) if self._config.custom_model_path else None,
+            "custom_model_loaded": self._custom_model is not None,
         }
 
     def infer(self, image_bytes: bytes, timestamp_ms: int) -> dict[str, Any]:
@@ -106,16 +134,18 @@ class GestureSidecar:
 
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = self._recognizer.recognize(mp_image)
+        gesture_result = self._recognizer.recognize(mp_image)
+        hand_result = self._hand_landmarker.detect(mp_image)
 
         hands: list[dict[str, Any]] = []
-        handedness_list = result.handedness or []
-        gesture_list = result.gestures or []
-        landmark_list = result.hand_landmarks or []
+        handedness_list = hand_result.handedness or []
+        landmark_list = hand_result.hand_landmarks or []
+        gesture_matches = self._gesture_matches(gesture_result)
 
         for index, landmarks in enumerate(landmark_list):
             handedness = handedness_list[index][0] if index < len(handedness_list) and handedness_list[index] else None
-            gestures = gesture_list[index] if index < len(gesture_list) else []
+            gestures = self._nearest_gestures(landmarks=landmarks, gesture_matches=gesture_matches)
+            custom_gesture = self._predict_custom_gesture(landmarks)
             hands.append(
                 {
                     "handedness": handedness.category_name if handedness else "Unknown",
@@ -128,6 +158,7 @@ class GestureSidecar:
                         {"name": category.category_name, "score": category.score}
                         for category in gestures
                     ],
+                    "custom_gesture": custom_gesture,
                 }
             )
 
@@ -135,6 +166,73 @@ class GestureSidecar:
             "ok": True,
             "timestamp_ms": timestamp_ms,
             "hands": hands,
+        }
+
+    def _gesture_matches(self, gesture_result: Any) -> list[dict[str, Any]]:
+        """Builds palm-center indexed gesture categories from the classifier output."""
+
+        landmark_list = gesture_result.hand_landmarks or []
+        gesture_list = gesture_result.gestures or []
+        matches: list[dict[str, Any]] = []
+        for index, landmarks in enumerate(landmark_list):
+            gestures = gesture_list[index] if index < len(gesture_list) else []
+            matches.append(
+                {
+                    "center": self._palm_center(landmarks),
+                    "gestures": gestures,
+                }
+            )
+        return matches
+
+    def _nearest_gestures(self, landmarks: Any, gesture_matches: list[dict[str, Any]]) -> Any:
+        """Returns classifier categories for the nearest detected hand when available."""
+
+        if not gesture_matches:
+            return []
+
+        center = self._palm_center(landmarks)
+        nearest = min(
+            gesture_matches,
+            key=lambda match: self._distance_squared(center, match["center"]),
+        )
+        return nearest["gestures"]
+
+    def _palm_center(self, landmarks: Any) -> tuple[float, float]:
+        """Computes the same wrist/MCP palm center used by the Swift geometry code."""
+
+        anchor_indices = [0, 5, 9, 13, 17]
+        anchors = [landmarks[index] for index in anchor_indices if index < len(landmarks)]
+        if not anchors:
+            return (0.0, 0.0)
+        return (
+            sum(point.x for point in anchors) / len(anchors),
+            sum(point.y for point in anchors) / len(anchors),
+        )
+
+    def _distance_squared(self, lhs: tuple[float, float], rhs: tuple[float, float]) -> float:
+        """Computes squared distance between two normalized centers."""
+
+        dx = lhs[0] - rhs[0]
+        dy = lhs[1] - rhs[1]
+        return dx * dx + dy * dy
+
+    def _predict_custom_gesture(self, landmarks: Any) -> dict[str, Any] | None:
+        """Runs the optional WonderShow-specific gesture classifier."""
+
+        if not self._custom_model:
+            return None
+        prediction = self._custom_model.predict(landmarks)
+        sorted_scores = sorted(prediction["scores"].values(), reverse=True)
+        margin = (
+            float(sorted_scores[0] - sorted_scores[1])
+            if len(sorted_scores) >= 2
+            else float(sorted_scores[0]) if sorted_scores else 0.0
+        )
+        return {
+            "name": prediction["name"],
+            "score": prediction["score"],
+            "scores": prediction["scores"],
+            "margin": margin,
         }
 
 
@@ -227,6 +325,29 @@ def default_model_path(project_root: Path) -> Path:
     return project_root / "sidecar" / "models" / "gesture_recognizer.task"
 
 
+def default_hand_model_path(project_root: Path) -> Path:
+    """Builds the default hand landmarker model location within the repository."""
+
+    return project_root / "sidecar" / "models" / "hand_landmarker.task"
+
+
+def default_custom_model_path(project_root: Path) -> Path:
+    """Builds the default WonderShow custom gesture model location."""
+
+    return project_root / "sidecar" / "models" / "wondershow_gesture_model.json"
+
+
+def resolve_existing_path(preferred: Path, fallbacks: list[Path] | None = None) -> Path:
+    """Returns the first existing path while preserving the preferred path for diagnostics."""
+
+    if preferred.exists():
+        return preferred
+    for fallback in fallbacks or []:
+        if fallback.exists():
+            return fallback
+    return preferred
+
+
 def parse_args(argv: list[str]) -> SidecarConfig:
     """Parses CLI arguments into a typed sidecar configuration.
 
@@ -241,8 +362,22 @@ def parse_args(argv: list[str]) -> SidecarConfig:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18777)
     parser.add_argument("--model-path", default=str(default_model_path(project_root)))
+    parser.add_argument("--hand-model-path", default=str(default_hand_model_path(project_root)))
+    parser.add_argument("--custom-model-path", default=str(default_custom_model_path(project_root)))
     args = parser.parse_args(argv)
-    return SidecarConfig(host=args.host, port=args.port, model_path=Path(args.model_path))
+    return SidecarConfig(
+        host=args.host,
+        port=args.port,
+        model_path=Path(args.model_path),
+        hand_model_path=Path(args.hand_model_path),
+        custom_model_path=resolve_existing_path(
+            Path(args.custom_model_path),
+            [
+                Path(sys.executable).resolve().parents[1] / "Resources" / "sidecar" / "models" / "wondershow_gesture_model.json",
+                Path.cwd() / "sidecar" / "models" / "wondershow_gesture_model.json",
+            ],
+        ) if args.custom_model_path else None,
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -273,6 +408,8 @@ def main(argv: list[str]) -> int:
                 "health_url": f"http://{config.host}:{config.port}/health",
                 "infer_url": f"http://{config.host}:{config.port}/infer",
                 "model_path": str(config.model_path),
+                "hand_model_path": str(config.hand_model_path),
+                "custom_model_path": str(config.custom_model_path) if config.custom_model_path else None,
             },
             ensure_ascii=True,
         )

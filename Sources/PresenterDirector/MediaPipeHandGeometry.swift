@@ -27,10 +27,20 @@ public struct GestureNormalizedPoint: Hashable, Sendable, Codable {
 /// - Important: All derived values are normalized by palm size so the same thresholds
 ///   keep working across different camera distances.
 public struct MediaPipeHandGeometry: Hashable, Sendable, Codable {
+    public static let landmarkConnections: [(Int, Int)] = [
+        (0, 1), (1, 2), (2, 3), (3, 4),
+        (0, 5), (5, 6), (6, 7), (7, 8),
+        (5, 9), (9, 10), (10, 11), (11, 12),
+        (9, 13), (13, 14), (14, 15), (15, 16),
+        (13, 17), (17, 18), (18, 19), (19, 20),
+        (0, 17)
+    ]
+
     public let handedness: String
     public let handednessScore: Double
     public let landmarks: [MediaPipeNormalizedLandmark]
     public let gestureCategory: String?
+    public let customGesture: MediaPipeCustomGesture?
 
     public init?(prediction: MediaPipeHandPrediction) {
         guard prediction.landmarks.count >= 21 else {
@@ -40,6 +50,7 @@ public struct MediaPipeHandGeometry: Hashable, Sendable, Codable {
         handednessScore = prediction.handednessScore
         landmarks = prediction.landmarks
         gestureCategory = prediction.topGestureCategory?.name
+        customGesture = prediction.customGesture
     }
 
     /// Returns the wrist point for the current hand.
@@ -87,6 +98,11 @@ public struct MediaPipeHandGeometry: Hashable, Sendable, Codable {
         point(at: 4).distance(to: point(at: 8)) / palmSize
     }
 
+    /// Returns the thumb tip distance from the index MCP, normalized by palm size.
+    public var normalizedThumbSpread: Double {
+        point(at: 4).distance(to: point(at: 5)) / palmSize
+    }
+
     /// Returns whether the index finger is clearly extended.
     /// - Returns: `true` when the wrist-to-tip ratio exceeds the extension threshold.
     public var indexExtended: Bool {
@@ -129,21 +145,35 @@ public struct MediaPipeHandGeometry: Hashable, Sendable, Codable {
         return abs(delta) > threshold
     }
 
+    /// Returns whether the thumb is visibly spread away from the palm regardless of palm/back orientation.
+    public var thumbSpread: Bool {
+        normalizedThumbSpread >= 0.82 && thumbIndexPinch >= 0.92
+    }
+
     /// Returns whether the hand looks like a deliberate sword pose.
     /// - Returns: `true` when index and middle fingers are extended together while the others stay folded.
     public var isSwordPose: Bool {
-        guard indexExtended, middleExtended, !ringExtended, !pinkyExtended else {
+        guard indexExtended, middleExtended else {
             return false
         }
         let verticalGap = abs(indexTip.y - middleTip.y)
         let horizontalGap = abs(indexTip.x - middleTip.x)
-        return verticalGap <= palmSize * 0.35 && horizontalGap <= palmSize * 0.45
+        let indexMiddleTogether = verticalGap <= palmSize * 0.35 && horizontalGap <= palmSize * 0.45
+        guard indexMiddleTogether else {
+            return false
+        }
+
+        let ringTip = point(at: 16)
+        let pinkyTip = point(at: 20)
+        let foldedFingerLimit = palmSize * 1.8
+        return wrist.distance(to: ringTip) <= foldedFingerLimit
+            && wrist.distance(to: pinkyTip) <= foldedFingerLimit
     }
 
     /// Returns whether the hand looks like a strict L shape for two-hand zoom.
     /// - Returns: `true` when thumb and index are extended but middle, ring, and pinky stay folded.
     public var isStrictLShape: Bool {
-        thumbExtended && indexExtended && !middleExtended && !ringExtended && !pinkyExtended
+        thumbSpread && indexExtended && !middleExtended && !ringExtended && !pinkyExtended
     }
 
     /// Returns whether the hand looks like a one-finger pointing pose.
@@ -164,12 +194,41 @@ public struct MediaPipeHandGeometry: Hashable, Sendable, Codable {
     /// Returns whether the hand looks like a fist.
     /// - Returns: `true` when none of the non-thumb fingers are extended and the thumb stays tucked.
     public var isFist: Bool {
-        !thumbExtended && !indexExtended && !middleExtended && !ringExtended && !pinkyExtended
+        let nonThumbFolded = !indexExtended && !middleExtended && !ringExtended && !pinkyExtended
+        if nonThumbFolded && !thumbSpread {
+            return true
+        }
+
+        let foldedTipLimit = palmSize * 1.75
+        let foldedTips = [8, 12, 16, 20].map(point(at:)).filter { tip in
+            palmCenter.distance(to: tip) <= foldedTipLimit
+        }
+        return foldedTips.count >= 3 && !isSwordPose && !isStrictLShape
+    }
+
+    /// Returns whether the hand looks like the single-hand pinch/pick gesture used for pulsed zoom.
+    /// - Returns: `true` when fingertips curl near the palm without becoming a compact fist.
+    public var isPinchPose: Bool {
+        guard !isOpenPalm, !isSwordPose, !isStrictLShape else {
+            return false
+        }
+
+        let curledTips = [8, 12, 16, 20].map(point(at:)).filter { tip in
+            palmCenter.distance(to: tip) <= palmSize * 2.25
+        }.count
+        let compactTips = [8, 12, 16, 20].map(point(at:)).filter { tip in
+            palmCenter.distance(to: tip) <= palmSize * 1.25
+        }.count
+
+        return curledTips >= 3 && compactTips < 3
     }
 
     /// Returns the primary local hand shape for downstream recognizers.
     /// - Returns: A stable `HandShape` derived from geometry rather than MediaPipe categories.
     public var primaryShape: HandShape {
+        if let customShape = MediaPipeGestureAdapter.customShape(for: customGesture) {
+            return customShape
+        }
         if isStrictLShape {
             return .lShape
         }
@@ -182,6 +241,9 @@ public struct MediaPipeHandGeometry: Hashable, Sendable, Codable {
         if isOpenPalm {
             return .openPalm
         }
+        if isPinchPose {
+            return .pinch
+        }
         if isFist {
             return .fist
         }
@@ -192,6 +254,14 @@ public struct MediaPipeHandGeometry: Hashable, Sendable, Codable {
     /// - Returns: A `HandPoint` anchored at the palm center with the derived shape attached.
     public func asHandPoint() -> HandPoint {
         HandPoint(x: palmCenter.x, y: palmCenter.y, shape: primaryShape)
+    }
+
+    /// Converts all 21 MediaPipe landmarks into lightweight points for on-screen diagnostics.
+    /// - Returns: Landmark points in the app's gesture coordinate space, each tagged with the derived hand shape.
+    public func landmarkHandPoints() -> [HandPoint] {
+        landmarks.map { landmark in
+            HandPoint(x: landmark.x, y: landmark.y, shape: primaryShape)
+        }
     }
 
     /// Computes the normalized two-hand distance against another hand.
@@ -229,7 +299,7 @@ public struct MediaPipeHandGeometry: Hashable, Sendable, Codable {
 public struct SwipeReadyDetector: Sendable {
     public let acceptedShapes: [HandShape]
 
-    public init(acceptedShapes: [HandShape] = [.sword, .fingerGun]) {
+    public init(acceptedShapes: [HandShape] = [.sword]) {
         self.acceptedShapes = acceptedShapes
     }
 
@@ -254,39 +324,39 @@ public struct SwipeReadyDetector: Sendable {
     }
 }
 
-/// Detects whether two hands form the strict zoom pose required by the v0.7 gesture engine.
+/// Detects whether two hands form the zoom pose required by the v0.7 gesture engine.
 /// - Parameters:
 ///   - minimumNormalizedHandDistance: Minimum palm-center separation in palm-size units.
 public struct TwoHandZoomPoseDetector: Sendable {
     public let minimumNormalizedHandDistance: Double
 
-    public init(minimumNormalizedHandDistance: Double = 1.2) {
+    public init(minimumNormalizedHandDistance: Double = 0.55) {
         self.minimumNormalizedHandDistance = minimumNormalizedHandDistance
     }
 
     /// Returns whether two MediaPipe hands form a deliberate two-hand zoom pose.
     /// - Parameter geometries: The current active hands sorted from left to right.
-    /// - Returns: `true` when both hands are strict L shapes and sufficiently separated.
+    /// - Returns: `true` when both hands are gun/L zoom-capable poses and sufficiently separated.
     public func isZoomReady(geometries: [MediaPipeHandGeometry]) -> Bool {
         guard geometries.count >= 2 else {
             return false
         }
 
         let hands = Array(geometries.prefix(2))
-        guard hands.allSatisfy(\.isStrictLShape) else {
+        guard hands.allSatisfy({ $0.primaryShape.allowsTwoHandZoom }) else {
             return false
         }
 
         return hands[0].normalizedDistance(to: hands[1]) >= minimumNormalizedHandDistance
     }
 
-    /// Returns whether two lightweight hand points still look like the strict zoom pose.
+    /// Returns whether two lightweight hand points still look like the zoom pose.
     /// - Parameter points: The current active points sorted from left to right.
-    /// - Returns: `true` when both points are already classified as `.lShape`.
+    /// - Returns: `true` when both points are already classified as zoom-capable.
     public func isZoomReady(points: [HandPoint]) -> Bool {
         guard points.count >= 2 else {
             return false
         }
-        return Array(points.prefix(2)).allSatisfy { $0.shape == .lShape }
+        return Array(points.prefix(2)).allSatisfy { $0.shape.allowsTwoHandZoom }
     }
 }

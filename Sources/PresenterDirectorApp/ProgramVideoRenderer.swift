@@ -1,0 +1,1083 @@
+@preconcurrency import AVFoundation
+import CoreImage
+import Foundation
+import PresenterDirector
+
+struct ProgramVideoRenderProgress: Equatable, Sendable {
+    let fraction: Double
+    let width: Int
+    let height: Int
+    let writtenBytes: Int64
+    let outputURL: URL
+}
+
+enum ProgramVideoRendererError: Error, LocalizedError {
+    case missingCameraTrack
+    case missingScreenTrack
+    case missingExportSession
+    case invalidProgramExport(String)
+    case exportFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingCameraTrack:
+            return "缺少讲者摄像头原始视频"
+        case .missingScreenTrack:
+            return "缺少 PPT/屏幕原始视频"
+        case .missingExportSession:
+            return "无法创建导出会话"
+        case .invalidProgramExport(let message):
+            return "合成视频不可预览：\(message)"
+        case .exportFailed(let message):
+            return "program 视频导出失败：\(message)"
+        }
+    }
+}
+
+struct ProgramVideoRenderer {
+    private let fileManager: FileManager
+
+    init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+    }
+
+    static func validatePlayableVideo(at url: URL, fileManager: FileManager = .default) async throws {
+        guard fileManager.fileExists(atPath: url.path) else {
+            throw ProgramVideoRendererError.invalidProgramExport("文件不存在")
+        }
+        let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        guard fileSize > 0 else {
+            throw ProgramVideoRendererError.invalidProgramExport("文件为空")
+        }
+
+        let asset = AVURLAsset(url: url)
+        let duration = try await asset.load(.duration)
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        guard duration.isValid, duration.seconds > 0 else {
+            throw ProgramVideoRendererError.invalidProgramExport("没有可播放时长")
+        }
+        guard !videoTracks.isEmpty else {
+            throw ProgramVideoRendererError.invalidProgramExport("没有视频轨道")
+        }
+    }
+
+    func render(
+        session: RecordingSessionRecord,
+        settings: RecordingExportSettings = .presentationDefault,
+        outputURL: URL? = nil,
+        progress: (@Sendable (ProgramVideoRenderProgress) -> Void)? = nil
+    ) async throws -> URL {
+        let timeline = session.manifest.project.timeline
+        let requirements = mediaRequirements(for: timeline)
+        let cameraAsset = AVURLAsset(url: session.presenterCameraURL)
+        let screenAsset = AVURLAsset(url: session.slidesScreenURL)
+
+        let cameraSourceTrack = try await sourceTrack(
+            asset: cameraAsset,
+            url: session.presenterCameraURL,
+            isRequired: requirements.camera,
+            missingError: .missingCameraTrack
+        )
+        let screenSourceTrack = try await sourceTrack(
+            asset: screenAsset,
+            url: session.slidesScreenURL,
+            isRequired: requirements.screen,
+            missingError: .missingScreenTrack
+        )
+
+        if requirements.camera, cameraSourceTrack == nil {
+            throw ProgramVideoRendererError.missingCameraTrack
+        }
+        if requirements.screen, screenSourceTrack == nil {
+            throw ProgramVideoRendererError.missingScreenTrack
+        }
+
+        let composition = AVMutableComposition()
+        let cameraTrack = cameraSourceTrack == nil ? nil : composition.addMutableTrack(
+            withMediaType: .video,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+        )
+        let screenTrack = screenSourceTrack == nil ? nil : composition.addMutableTrack(
+            withMediaType: .video,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+        )
+
+        let duration = await bestDuration(
+            cameraAsset: cameraSourceTrack == nil ? nil : cameraAsset,
+            screenAsset: screenSourceTrack == nil ? nil : screenAsset
+        )
+        try await insertMicrophoneAudioIfAvailable(
+            into: composition,
+            session: session,
+            duration: duration
+        )
+        let cameraNaturalSize = if let cameraSourceTrack {
+            (try? await cameraSourceTrack.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
+        } else {
+            CGSize(width: 1920, height: 1080)
+        }
+        let screenNaturalSize = if let screenSourceTrack {
+            (try? await screenSourceTrack.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
+        } else {
+            cameraNaturalSize
+        }
+        let timeRange = CMTimeRange(start: .zero, duration: duration)
+        if let cameraTrack, let cameraSourceTrack {
+            try cameraTrack.insertTimeRange(timeRange, of: cameraSourceTrack, at: .zero)
+        }
+        if let screenTrack, let screenSourceTrack {
+            try screenTrack.insertTimeRange(timeRange, of: screenSourceTrack, at: .zero)
+        }
+
+        let renderSize = renderSize(
+            settings: settings,
+            primaryNaturalSize: primaryNaturalSize(
+                cameraNaturalSize: cameraNaturalSize,
+                screenNaturalSize: screenNaturalSize,
+                requirements: requirements
+            )
+        )
+        let videoComposition = AVMutableVideoComposition()
+        videoComposition.renderSize = renderSize
+        videoComposition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(settings.frameRate.rawValue))
+        videoComposition.renderScale = 1
+        videoComposition.customVideoCompositorClass = ProgramVideoCompositor.self
+        videoComposition.instructions = try instructions(
+            for: timeline,
+            duration: duration,
+            cameraTrack: cameraTrack,
+            cameraNaturalSize: cameraNaturalSize,
+            screenTrack: screenTrack,
+            screenNaturalSize: screenNaturalSize,
+            renderSize: renderSize
+        )
+
+        let destinationURL = outputURL ?? session.programOutputURL
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            try fileManager.removeItem(at: destinationURL)
+        }
+
+        try await export(
+            asset: composition,
+            videoComposition: videoComposition,
+            settings: settings,
+            renderSize: renderSize,
+            destinationURL: destinationURL,
+            duration: duration,
+            progress: progress
+        )
+        try await Self.validatePlayableVideo(at: destinationURL, fileManager: fileManager)
+        progress?(
+            ProgramVideoRenderProgress(
+                fraction: 1,
+                width: Int(renderSize.width),
+                height: Int(renderSize.height),
+                writtenBytes: fileSize(at: destinationURL),
+                outputURL: destinationURL
+            )
+        )
+        return destinationURL
+    }
+
+    private func mediaRequirements(for timeline: RecordingTimeline) -> (camera: Bool, screen: Bool) {
+        var requiresCamera = false
+        var requiresScreen = false
+        for segment in timeline.segments {
+            for layer in segment.scene.layers {
+                switch layer.source {
+                case .presenterCamera:
+                    requiresCamera = true
+                case .slidesScreen:
+                    requiresScreen = true
+                }
+            }
+        }
+        return (requiresCamera, requiresScreen)
+    }
+
+    private func sourceTrack(
+        asset: AVURLAsset,
+        url: URL,
+        isRequired: Bool,
+        missingError: ProgramVideoRendererError
+    ) async throws -> AVAssetTrack? {
+        guard fileManager.fileExists(atPath: url.path) else {
+            if isRequired {
+                throw missingError
+            }
+            return nil
+        }
+
+        let track = try await asset.loadTracks(withMediaType: .video).first
+        if track == nil, isRequired {
+            throw missingError
+        }
+        return track
+    }
+
+    private func renderSize(
+        settings: RecordingExportSettings,
+        primaryNaturalSize: CGSize
+    ) -> CGSize {
+        if let pixelSize = settings.resolution.pixelSize {
+            return CGSize(width: pixelSize.width, height: pixelSize.height)
+        }
+
+        let width = max(1, Int(abs(primaryNaturalSize.width)))
+        let height = max(1, Int(abs(primaryNaturalSize.height)))
+        return CGSize(width: width, height: height)
+    }
+
+    private func primaryNaturalSize(
+        cameraNaturalSize: CGSize,
+        screenNaturalSize: CGSize,
+        requirements: (camera: Bool, screen: Bool)
+    ) -> CGSize {
+        if requirements.screen {
+            return screenNaturalSize
+        }
+        return cameraNaturalSize
+    }
+
+    private func videoOutputSettings(
+        settings: RecordingExportSettings,
+        renderSize: CGSize
+    ) -> [String: Any] {
+        [
+            AVVideoCodecKey: videoCodecType(for: settings),
+            AVVideoWidthKey: Int(renderSize.width),
+            AVVideoHeightKey: Int(renderSize.height),
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: settings.bitrateBitsPerSecond,
+                AVVideoExpectedSourceFrameRateKey: settings.frameRate.rawValue,
+                AVVideoMaxKeyFrameIntervalKey: settings.frameRate.rawValue * 2,
+                AVVideoAllowFrameReorderingKey: false
+            ]
+        ]
+    }
+
+    private func audioOutputSettings(settings: RecordingExportSettings) -> [String: Any] {
+        [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVNumberOfChannelsKey: 2,
+            AVSampleRateKey: 48_000,
+            AVEncoderBitRateKey: settings.audioBitrateBitsPerSecond
+        ]
+    }
+
+    private func videoCodecType(for settings: RecordingExportSettings) -> AVVideoCodecType {
+        switch settings.codec {
+        case .h264:
+            return .h264
+        case .hevc:
+            return .hevc
+        }
+    }
+
+    private func insertMicrophoneAudioIfAvailable(
+        into composition: AVMutableComposition,
+        session: RecordingSessionRecord,
+        duration: CMTime
+    ) async throws {
+        guard fileManager.fileExists(atPath: session.microphoneAudioURL.path) else {
+            return
+        }
+
+        let microphoneAsset = AVURLAsset(url: session.microphoneAudioURL)
+        guard let microphoneSourceTrack = try await microphoneAsset.loadTracks(withMediaType: .audio).first,
+              let audioTrack = composition.addMutableTrack(
+                withMediaType: .audio,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+              ) else {
+            return
+        }
+
+        let audioDuration = (try? await microphoneAsset.load(.duration)) ?? duration
+        let insertDuration = min(duration, audioDuration)
+        guard insertDuration.isValid, insertDuration.seconds > 0 else {
+            return
+        }
+        try audioTrack.insertTimeRange(
+            CMTimeRange(start: .zero, duration: insertDuration),
+            of: microphoneSourceTrack,
+            at: .zero
+        )
+    }
+
+    private func bestDuration(cameraAsset: AVAsset?, screenAsset: AVAsset?) async -> CMTime {
+        let cameraDuration = if let cameraAsset {
+            (try? await cameraAsset.load(.duration)) ?? .invalid
+        } else {
+            CMTime.invalid
+        }
+        let screenDuration = if let screenAsset {
+            (try? await screenAsset.load(.duration)) ?? .invalid
+        } else {
+            CMTime.invalid
+        }
+        if cameraDuration.isValid, cameraDuration.seconds > 0,
+           screenDuration.isValid, screenDuration.seconds > 0 {
+            return min(cameraDuration, screenDuration)
+        }
+        if screenDuration.isValid, screenDuration.seconds > 0 {
+            return screenDuration
+        }
+        if cameraDuration.isValid, cameraDuration.seconds > 0 {
+            return cameraDuration
+        }
+        return CMTime(seconds: 1, preferredTimescale: 600)
+    }
+
+    private func instructions(
+        for timeline: RecordingTimeline,
+        duration: CMTime,
+        cameraTrack: AVCompositionTrack?,
+        cameraNaturalSize: CGSize,
+        screenTrack: AVCompositionTrack?,
+        screenNaturalSize: CGSize,
+        renderSize: CGSize
+    ) throws -> [AVVideoCompositionInstructionProtocol] {
+        let totalMilliseconds = max(1, timeline.durationMilliseconds)
+        var instructions: [AVVideoCompositionInstructionProtocol] = []
+
+        for segment in timeline.segments {
+            let startSeconds = duration.seconds * Double(segment.startMilliseconds) / Double(totalMilliseconds)
+            let endSeconds = duration.seconds * Double(segment.endMilliseconds) / Double(totalMilliseconds)
+            let segmentRange = CMTimeRange(
+                start: CMTime(seconds: startSeconds, preferredTimescale: 600),
+                end: CMTime(seconds: endSeconds, preferredTimescale: 600)
+            )
+
+            let instruction = try ProgramVideoCompositionInstruction(
+                timeRange: segmentRange,
+                layers: renderLayers(
+                    for: segment.scene,
+                    cameraTrack: cameraTrack,
+                    cameraNaturalSize: cameraNaturalSize,
+                    screenTrack: screenTrack,
+                    screenNaturalSize: screenNaturalSize
+                )
+            )
+            instructions.append(instruction)
+        }
+
+        return instructions
+    }
+
+    private func renderLayers(
+        for scene: ProgramScene,
+        cameraTrack: AVCompositionTrack?,
+        cameraNaturalSize: CGSize,
+        screenTrack: AVCompositionTrack?,
+        screenNaturalSize: CGSize
+    ) throws -> [ProgramVideoRenderLayer] {
+        switch scene.view {
+        case .speakerFullBody:
+            guard let cameraTrack else {
+                throw ProgramVideoRendererError.missingCameraTrack
+            }
+            return [
+                ProgramVideoRenderLayer(
+                    trackID: cameraTrack.trackID,
+                    naturalSize: cameraNaturalSize,
+                    placement: .fullCanvas,
+                    fillMode: .fit
+                )
+            ]
+        case .speakerCloseUp:
+            guard let cameraTrack else {
+                throw ProgramVideoRendererError.missingCameraTrack
+            }
+            return [
+                ProgramVideoRenderLayer(
+                    trackID: cameraTrack.trackID,
+                    naturalSize: cameraNaturalSize,
+                    placement: .fullCanvas,
+                    fillMode: .closeUp
+                )
+            ]
+        case .slidesFullScreen:
+            guard let screenTrack else {
+                throw ProgramVideoRendererError.missingScreenTrack
+            }
+            return [
+                ProgramVideoRenderLayer(
+                    trackID: screenTrack.trackID,
+                    naturalSize: screenNaturalSize,
+                    placement: .fullCanvas,
+                    fillMode: .fit
+                )
+            ]
+        case .slidesWithSpeakerPictureInPicture:
+            guard let screenTrack else {
+                throw ProgramVideoRendererError.missingScreenTrack
+            }
+            guard let cameraTrack else {
+                throw ProgramVideoRendererError.missingCameraTrack
+            }
+            let speakerLayer = scene.speakerLayer ?? ProgramLayer(
+                source: .presenterCamera,
+                placement: .pictureInPicture(corner: .bottomRight, size: .medium),
+                speakerShot: .closeUp
+            )
+            return [
+                ProgramVideoRenderLayer(
+                    trackID: cameraTrack.trackID,
+                    naturalSize: cameraNaturalSize,
+                    placement: speakerLayer.placement,
+                    fillMode: speakerLayer.speakerShot == .fullBody ? .fit : .fill
+                ),
+                ProgramVideoRenderLayer(
+                    trackID: screenTrack.trackID,
+                    naturalSize: screenNaturalSize,
+                    placement: .fullCanvas,
+                    fillMode: .fit
+                )
+            ]
+        case .speakerWithSlidesPictureInPicture:
+            guard let cameraTrack else {
+                throw ProgramVideoRendererError.missingCameraTrack
+            }
+            guard let screenTrack else {
+                throw ProgramVideoRendererError.missingScreenTrack
+            }
+            return [
+                ProgramVideoRenderLayer(
+                    trackID: screenTrack.trackID,
+                    naturalSize: screenNaturalSize,
+                    placement: scene.layers.first(where: { $0.source == .slidesScreen })?.placement ?? .pictureInPicture(corner: .topRight, size: .medium),
+                    fillMode: .fit
+                ),
+                ProgramVideoRenderLayer(
+                    trackID: cameraTrack.trackID,
+                    naturalSize: cameraNaturalSize,
+                    placement: .fullCanvas,
+                    fillMode: .fit
+                )
+            ]
+        case .sideBySide:
+            guard let screenTrack else {
+                throw ProgramVideoRendererError.missingScreenTrack
+            }
+            guard let cameraTrack else {
+                throw ProgramVideoRendererError.missingCameraTrack
+            }
+            return [
+                ProgramVideoRenderLayer(
+                    trackID: cameraTrack.trackID,
+                    naturalSize: cameraNaturalSize,
+                    placement: .rightHalf,
+                    fillMode: .fill
+                ),
+                ProgramVideoRenderLayer(
+                    trackID: screenTrack.trackID,
+                    naturalSize: screenNaturalSize,
+                    placement: .leftHalf,
+                    fillMode: .fit
+                )
+            ]
+        }
+    }
+
+    private func export(
+        asset: AVAsset,
+        videoComposition: AVVideoComposition,
+        settings: RecordingExportSettings,
+        renderSize: CGSize,
+        destinationURL: URL,
+        duration: CMTime,
+        progress: (@Sendable (ProgramVideoRenderProgress) -> Void)?
+    ) async throws {
+        let reader = try AVAssetReader(asset: asset)
+        let writer = try AVAssetWriter(outputURL: destinationURL, fileType: .mp4)
+        let progressEmitter = ProgramVideoRenderProgressEmitter(
+            duration: duration,
+            renderSize: renderSize,
+            destinationURL: destinationURL,
+            fileManager: fileManager,
+            progress: progress
+        )
+        progressEmitter.emit(fraction: 0, force: true)
+
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        guard !videoTracks.isEmpty else {
+            throw ProgramVideoRendererError.missingScreenTrack
+        }
+
+        let videoOutput = AVAssetReaderVideoCompositionOutput(
+            videoTracks: videoTracks,
+            videoSettings: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ]
+        )
+        videoOutput.videoComposition = videoComposition
+        videoOutput.alwaysCopiesSampleData = false
+
+        guard reader.canAdd(videoOutput) else {
+            throw ProgramVideoRendererError.exportFailed("无法读取合成视频轨")
+        }
+        reader.add(videoOutput)
+
+        let videoInput = AVAssetWriterInput(
+            mediaType: .video,
+            outputSettings: videoOutputSettings(settings: settings, renderSize: renderSize)
+        )
+        videoInput.expectsMediaDataInRealTime = false
+        guard writer.canAdd(videoInput) else {
+            throw ProgramVideoRendererError.exportFailed("无法写入所选视频编码参数")
+        }
+        writer.add(videoInput)
+
+        let audioPair = try await makeAudioReaderOutputAndWriterInput(
+            asset: asset,
+            settings: settings,
+            reader: reader,
+            writer: writer
+        )
+
+        let exportBox = ReaderWriterExportBox(
+            reader: reader,
+            writer: writer,
+            videoOutput: videoOutput,
+            videoInput: videoInput,
+            audioOutput: audioPair?.output,
+            audioInput: audioPair?.input
+        )
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            guard exportBox.writer.startWriting() else {
+                let message = exportBox.writer.error?.localizedDescription ?? "writer 启动失败"
+                continuation.resume(throwing: ProgramVideoRendererError.exportFailed(message))
+                return
+            }
+            guard exportBox.reader.startReading() else {
+                exportBox.writer.cancelWriting()
+                let message = exportBox.reader.error?.localizedDescription ?? "reader 启动失败"
+                continuation.resume(throwing: ProgramVideoRendererError.exportFailed(message))
+                return
+            }
+
+            exportBox.writer.startSession(atSourceTime: .zero)
+            let group = DispatchGroup()
+            let queue = DispatchQueue(label: "com.lingyan.program-video-renderer.export")
+
+            group.enter()
+            let videoFinishState = PumpFinishState()
+            let videoRetimer = SampleRetimer(frameRate: settings.frameRate.rawValue)
+            exportBox.videoInput.requestMediaDataWhenReady(on: queue) {
+                while exportBox.videoInput.isReadyForMoreMediaData, videoFinishState.isActive {
+                    if let sampleBuffer = exportBox.videoOutput.copyNextSampleBuffer() {
+                        let timedSampleBuffer = videoRetimer.retimed(sampleBuffer) ?? sampleBuffer
+                        if !exportBox.videoInput.append(timedSampleBuffer) {
+                            videoFinishState.finish {
+                                exportBox.videoInput.markAsFinished()
+                                exportBox.reader.cancelReading()
+                                group.leave()
+                            }
+                            break
+                        }
+                        progressEmitter.emit(sampleBuffer: timedSampleBuffer)
+                    } else {
+                        videoFinishState.finish {
+                            exportBox.videoInput.markAsFinished()
+                            group.leave()
+                        }
+                        break
+                    }
+                }
+            }
+
+            if exportBox.audioOutput != nil, exportBox.audioInput != nil {
+                group.enter()
+                let audioFinishState = PumpFinishState()
+                exportBox.audioInput?.requestMediaDataWhenReady(on: queue) {
+                    guard let audioOutput = exportBox.audioOutput,
+                          let audioInput = exportBox.audioInput else {
+                        audioFinishState.finish {
+                            group.leave()
+                        }
+                        return
+                    }
+                    while audioInput.isReadyForMoreMediaData, audioFinishState.isActive {
+                        if let sampleBuffer = audioOutput.copyNextSampleBuffer() {
+                            if !audioInput.append(sampleBuffer) {
+                                audioFinishState.finish {
+                                    audioInput.markAsFinished()
+                                    exportBox.reader.cancelReading()
+                                    group.leave()
+                                }
+                                break
+                            }
+                        } else {
+                            audioFinishState.finish {
+                                audioInput.markAsFinished()
+                                group.leave()
+                            }
+                            break
+                        }
+                    }
+                }
+            }
+
+            group.notify(queue: queue) {
+                if exportBox.reader.status == .failed || exportBox.reader.status == .cancelled {
+                    exportBox.writer.cancelWriting()
+                    let message = exportBox.reader.error?.localizedDescription ?? "reader 状态异常"
+                    continuation.resume(throwing: ProgramVideoRendererError.exportFailed(message))
+                    return
+                }
+
+                progressEmitter.emit(fraction: 0.98, force: true)
+                exportBox.writer.finishWriting {
+                    switch exportBox.writer.status {
+                    case .completed:
+                        progressEmitter.emit(fraction: 1, force: true)
+                        continuation.resume()
+                    case .failed, .cancelled:
+                        let message = exportBox.writer.error?.localizedDescription ?? "writer 状态异常"
+                        continuation.resume(throwing: ProgramVideoRendererError.exportFailed(message))
+                    default:
+                        continuation.resume(throwing: ProgramVideoRendererError.exportFailed("writer 未正常完成"))
+                    }
+                }
+            }
+        }
+    }
+
+    private func fileSize(at url: URL) -> Int64 {
+        let size = try? fileManager.attributesOfItem(atPath: url.path)[.size] as? NSNumber
+        return size?.int64Value ?? 0
+    }
+
+    private func makeAudioReaderOutputAndWriterInput(
+        asset: AVAsset,
+        settings: RecordingExportSettings,
+        reader: AVAssetReader,
+        writer: AVAssetWriter
+    ) async throws -> (output: AVAssetReaderTrackOutput, input: AVAssetWriterInput)? {
+        guard let audioTrack = try await asset.loadTracks(withMediaType: .audio).first else {
+            return nil
+        }
+
+        let audioOutput = AVAssetReaderTrackOutput(
+            track: audioTrack,
+            outputSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsNonInterleaved: false
+            ]
+        )
+        audioOutput.alwaysCopiesSampleData = false
+        guard reader.canAdd(audioOutput) else {
+            return nil
+        }
+        reader.add(audioOutput)
+
+        let audioInput = AVAssetWriterInput(
+            mediaType: .audio,
+            outputSettings: audioOutputSettings(settings: settings)
+        )
+        audioInput.expectsMediaDataInRealTime = false
+        guard writer.canAdd(audioInput) else {
+            return nil
+        }
+        writer.add(audioInput)
+        return (audioOutput, audioInput)
+    }
+}
+
+private final class PumpFinishState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+
+    var isActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !finished
+    }
+
+    func finish(_ body: () -> Void) {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        lock.unlock()
+        body()
+    }
+}
+
+private final class SampleRetimer: @unchecked Sendable {
+    private let frameDuration: CMTime
+    private var frameIndex: CMTimeValue = 0
+
+    init(frameRate: Int) {
+        frameDuration = CMTime(value: 1, timescale: CMTimeScale(max(1, frameRate)))
+    }
+
+    func retimed(_ sampleBuffer: CMSampleBuffer) -> CMSampleBuffer? {
+        var timing = CMSampleTimingInfo(
+            duration: frameDuration,
+            presentationTimeStamp: CMTimeMultiply(frameDuration, multiplier: Int32(frameIndex)),
+            decodeTimeStamp: .invalid
+        )
+        frameIndex += 1
+
+        var output: CMSampleBuffer?
+        let status = CMSampleBufferCreateCopyWithNewTiming(
+            allocator: kCFAllocatorDefault,
+            sampleBuffer: sampleBuffer,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleBufferOut: &output
+        )
+        guard status == noErr else {
+            return nil
+        }
+        return output
+    }
+}
+
+private final class ReaderWriterExportBox: @unchecked Sendable {
+    let reader: AVAssetReader
+    let writer: AVAssetWriter
+    let videoOutput: AVAssetReaderVideoCompositionOutput
+    let videoInput: AVAssetWriterInput
+    let audioOutput: AVAssetReaderTrackOutput?
+    let audioInput: AVAssetWriterInput?
+
+    init(
+        reader: AVAssetReader,
+        writer: AVAssetWriter,
+        videoOutput: AVAssetReaderVideoCompositionOutput,
+        videoInput: AVAssetWriterInput,
+        audioOutput: AVAssetReaderTrackOutput?,
+        audioInput: AVAssetWriterInput?
+    ) {
+        self.reader = reader
+        self.writer = writer
+        self.videoOutput = videoOutput
+        self.videoInput = videoInput
+        self.audioOutput = audioOutput
+        self.audioInput = audioInput
+    }
+}
+
+private final class ProgramVideoRenderProgressEmitter: @unchecked Sendable {
+    private let durationSeconds: Double
+    private let width: Int
+    private let height: Int
+    private let destinationURL: URL
+    private let fileManager: FileManager
+    private let progress: (@Sendable (ProgramVideoRenderProgress) -> Void)?
+    private let lock = NSLock()
+    private var lastFraction: Double = -1
+    private var lastEmitDate = Date.distantPast
+
+    init(
+        duration: CMTime,
+        renderSize: CGSize,
+        destinationURL: URL,
+        fileManager: FileManager,
+        progress: (@Sendable (ProgramVideoRenderProgress) -> Void)?
+    ) {
+        durationSeconds = duration.isValid && duration.seconds.isFinite ? max(0.001, duration.seconds) : 1
+        width = Int(renderSize.width)
+        height = Int(renderSize.height)
+        self.destinationURL = destinationURL
+        self.fileManager = fileManager
+        self.progress = progress
+    }
+
+    func emit(sampleBuffer: CMSampleBuffer) {
+        let seconds = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+        guard seconds.isFinite else {
+            return
+        }
+        emit(fraction: min(max(seconds / durationSeconds, 0), 0.98), force: false)
+    }
+
+    func emit(fraction: Double, force: Bool) {
+        guard let progress else {
+            return
+        }
+
+        let boundedFraction = min(max(fraction, 0), 1)
+        let now = Date()
+        lock.lock()
+        let shouldEmit = force
+            || boundedFraction - lastFraction >= 0.01
+            || now.timeIntervalSince(lastEmitDate) >= 0.20
+        if shouldEmit {
+            lastFraction = boundedFraction
+            lastEmitDate = now
+        }
+        lock.unlock()
+
+        guard shouldEmit else {
+            return
+        }
+
+        let size = (try? fileManager.attributesOfItem(atPath: destinationURL.path)[.size] as? NSNumber)?
+            .int64Value ?? 0
+        progress(
+            ProgramVideoRenderProgress(
+                fraction: boundedFraction,
+                width: width,
+                height: height,
+                writtenBytes: size,
+                outputURL: destinationURL
+            )
+        )
+    }
+}
+
+private enum ProgramVideoFillMode: Hashable, Sendable {
+    case fit
+    case fill
+    case closeUp
+}
+
+private struct ProgramVideoRenderLayer: Hashable, Sendable {
+    let trackID: CMPersistentTrackID
+    let naturalSize: CGSize
+    let placement: ProgramLayerPlacement
+    let fillMode: ProgramVideoFillMode
+}
+
+private final class ProgramVideoCompositionInstruction: NSObject, AVVideoCompositionInstructionProtocol, @unchecked Sendable {
+    let timeRange: CMTimeRange
+    let enablePostProcessing = false
+    let containsTweening = true
+    let passthroughTrackID = kCMPersistentTrackID_Invalid
+    let layers: [ProgramVideoRenderLayer]
+
+    init(timeRange: CMTimeRange, layers: [ProgramVideoRenderLayer]) {
+        self.timeRange = timeRange
+        self.layers = layers
+    }
+
+    var requiredSourceTrackIDs: [NSValue]? {
+        layers.map { NSNumber(value: $0.trackID) as NSValue }
+    }
+}
+
+private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
+    private let context = CIContext()
+    private var renderSize = CGSize(width: 1920, height: 1080)
+
+    var sourcePixelBufferAttributes: [String: any Sendable]? {
+        [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+        ]
+    }
+
+    var requiredPixelBufferAttributesForRenderContext: [String: any Sendable] {
+        [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+        ]
+    }
+
+    func renderContextChanged(_ newRenderContext: AVVideoCompositionRenderContext) {
+        renderSize = newRenderContext.size
+    }
+
+    func startRequest(_ request: AVAsynchronousVideoCompositionRequest) {
+        guard let instruction = request.videoCompositionInstruction as? ProgramVideoCompositionInstruction else {
+            request.finish(with: ProgramVideoRendererError.exportFailed("合成指令类型不匹配"))
+            return
+        }
+        guard let outputBuffer = request.renderContext.newPixelBuffer() else {
+            request.finish(with: ProgramVideoRendererError.exportFailed("无法创建合成帧"))
+            return
+        }
+
+        let renderRect = CGRect(origin: .zero, size: renderSize)
+        var composedImage = CIImage(color: .black).cropped(to: renderRect)
+
+        for layer in instruction.layers.reversed() {
+            guard let sourceBuffer = request.sourceFrame(byTrackID: layer.trackID) else {
+                continue
+            }
+            let geometry = ProgramLayerGeometry(
+                naturalSize: layer.naturalSize,
+                placement: layer.placement,
+                renderSize: renderSize,
+                fillMode: layer.fillMode
+            )
+            let sourceImage = CIImage(cvPixelBuffer: sourceBuffer)
+            let fittedImage = sourceImage
+                .transformed(by: geometry.imageTransform)
+            let clippedImage = fittedImage
+                .cropped(to: geometry.rect)
+                .applyingFilter("CIBlendWithAlphaMask", parameters: [
+                    kCIInputBackgroundImageKey: composedImage,
+                    kCIInputMaskImageKey: geometry.maskImage
+                ])
+            composedImage = clippedImage.cropped(to: renderRect)
+        }
+
+        context.render(composedImage, to: outputBuffer)
+        request.finish(withComposedVideoFrame: outputBuffer)
+    }
+
+    func cancelAllPendingVideoCompositionRequests() {}
+}
+
+private struct ProgramLayerGeometry {
+    let rect: CGRect
+    let imageTransform: CGAffineTransform
+    let maskImage: CIImage
+
+    init(
+        naturalSize: CGSize,
+        placement: ProgramLayerPlacement,
+        renderSize: CGSize,
+        fillMode: ProgramVideoFillMode
+    ) {
+        let sourceSize = CGSize(
+            width: max(1, abs(naturalSize.width)),
+            height: max(1, abs(naturalSize.height))
+        )
+        let rect = Self.targetRect(
+            placement: placement,
+            sourceSize: sourceSize,
+            renderSize: renderSize
+        )
+        let scale: CGFloat
+        switch fillMode {
+        case .fit:
+            scale = min(rect.width / sourceSize.width, rect.height / sourceSize.height)
+        case .fill:
+            scale = max(rect.width / sourceSize.width, rect.height / sourceSize.height)
+        case .closeUp:
+            scale = max(rect.width / sourceSize.width, rect.height / sourceSize.height) * 1.35
+        }
+        let scaledSize = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+        self.rect = rect
+        self.imageTransform = CGAffineTransform(
+            a: scale,
+            b: 0,
+            c: 0,
+            d: scale,
+            tx: rect.midX - scaledSize.width / 2,
+            ty: rect.midY - scaledSize.height / 2
+        )
+        self.maskImage = Self.maskImage(for: placement, rect: rect)
+    }
+
+    private static func targetRect(
+        placement: ProgramLayerPlacement,
+        sourceSize: CGSize,
+        renderSize: CGSize
+    ) -> CGRect {
+        switch placement {
+        case .fullCanvas:
+            return CGRect(origin: .zero, size: renderSize)
+        case .pictureInPicture(let corner, let size):
+            let widthFraction: CGFloat
+            switch size {
+            case .small:
+                widthFraction = 0.22
+            case .medium:
+                widthFraction = 0.28
+            case .large:
+                widthFraction = 0.34
+            }
+            let targetWidth = renderSize.width * widthFraction
+            let targetHeight = sourceSize.height * (targetWidth / sourceSize.width)
+            let margin: CGFloat = 36
+            let x: CGFloat
+            let y: CGFloat
+            switch corner {
+            case .topLeft:
+                x = margin
+                y = renderSize.height - targetHeight - margin
+            case .topRight:
+                x = renderSize.width - targetWidth - margin
+                y = renderSize.height - targetHeight - margin
+            case .bottomLeft:
+                x = margin
+                y = margin
+            case .bottomRight:
+                x = renderSize.width - targetWidth - margin
+                y = margin
+            }
+            return CGRect(x: x, y: y, width: targetWidth, height: targetHeight)
+        case .customPictureInPicture(let geometry):
+            let targetWidth = max(1, renderSize.width * CGFloat(geometry.width))
+            let targetHeight = max(1, renderSize.height * CGFloat(geometry.height))
+            let centerX = renderSize.width * CGFloat(geometry.centerX)
+            let centerYFromTop = renderSize.height * CGFloat(geometry.centerY)
+            return CGRect(
+                x: centerX - targetWidth / 2,
+                y: renderSize.height - centerYFromTop - targetHeight / 2,
+                width: targetWidth,
+                height: targetHeight
+            )
+        case .leftHalf:
+            return CGRect(x: 0, y: 0, width: renderSize.width / 2, height: renderSize.height)
+        case .rightHalf:
+            return CGRect(x: renderSize.width / 2, y: 0, width: renderSize.width / 2, height: renderSize.height)
+        }
+    }
+
+    private static func maskImage(for placement: ProgramLayerPlacement, rect: CGRect) -> CIImage {
+        let shape: ProgramPictureInPictureShape
+        switch placement {
+        case .customPictureInPicture(let geometry):
+            shape = geometry.shape
+        case .pictureInPicture:
+            shape = .roundedRectangle
+        case .fullCanvas, .leftHalf, .rightHalf:
+            return CIImage(color: .white).cropped(to: rect)
+        }
+
+        switch shape {
+        case .square:
+            return CIImage(color: .white).cropped(to: rect)
+        case .circle:
+            let radius = min(rect.width, rect.height) / 2
+            return CIImage(color: .white)
+                .cropped(to: rect)
+                .applyingFilter("CIRadialGradient", parameters: [
+                    "inputCenter": CIVector(x: rect.midX, y: rect.midY),
+                    "inputRadius0": radius - 1,
+                    "inputRadius1": radius,
+                    "inputColor0": CIColor.white,
+                    "inputColor1": CIColor.clear
+                ])
+                .cropped(to: rect)
+        case .roundedRectangle:
+            return roundedRectangleMask(rect: rect, radius: min(22, min(rect.width, rect.height) * 0.14))
+        }
+    }
+
+    private static func roundedRectangleMask(rect: CGRect, radius: CGFloat) -> CIImage {
+        let base = CIImage(color: .white).cropped(to: rect.insetBy(dx: radius, dy: 0))
+            .composited(over: CIImage(color: .white).cropped(to: rect.insetBy(dx: 0, dy: radius)))
+        let corners = [
+            CGPoint(x: rect.minX + radius, y: rect.minY + radius),
+            CGPoint(x: rect.maxX - radius, y: rect.minY + radius),
+            CGPoint(x: rect.minX + radius, y: rect.maxY - radius),
+            CGPoint(x: rect.maxX - radius, y: rect.maxY - radius)
+        ]
+        return corners.reduce(base) { image, center in
+            CIImage(color: .white)
+                .cropped(to: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+                .applyingFilter("CIRadialGradient", parameters: [
+                    "inputCenter": CIVector(cgPoint: center),
+                    "inputRadius0": radius - 1,
+                    "inputRadius1": radius,
+                    "inputColor0": CIColor.white,
+                    "inputColor1": CIColor.clear
+                ])
+                .cropped(to: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+                .composited(over: image)
+        }
+    }
+}

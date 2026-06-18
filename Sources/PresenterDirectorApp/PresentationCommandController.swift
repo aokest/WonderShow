@@ -1,5 +1,36 @@
 import AppKit
 import PresenterDirector
+import UniformTypeIdentifiers
+
+struct ProgramPreviewRequest: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+struct ProgramVideoExportResult: Sendable {
+    let url: URL
+    let width: Int
+    let height: Int
+    let fileSize: Int64
+    let settings: RecordingExportSettings
+}
+
+enum PresentationCommandControllerError: Error, LocalizedError {
+    case noRecordingSession
+    case rawTrackValidationFailed
+    case exportCancelled
+
+    var errorDescription: String? {
+        switch self {
+        case .noRecordingSession:
+            return "尚未创建录制项目"
+        case .rawTrackValidationFailed:
+            return "原始轨道未通过导出检查"
+        case .exportCancelled:
+            return "用户取消导出"
+        }
+    }
+}
 
 @MainActor
 final class PresentationCommandController: ObservableObject {
@@ -11,8 +42,13 @@ final class PresentationCommandController: ObservableObject {
     @Published private(set) var lastDeliveryDetail = "等待命令"
     @Published private(set) var isRecording = false
     @Published private(set) var isRehearsing = false
+    @Published private(set) var lastRecordingSession: RecordingSessionRecord?
+    @Published var programPreviewRequest: ProgramPreviewRequest?
 
     private let director = PresentationDirector()
+    private let recordingSessionService = RecordingSessionService()
+    private let projectStore = RecordingProjectStore()
+    private var activeRecordingSession: RecordingSessionRecord?
 
     func refreshAccessibilityStatus() {
         accessibilityStatus = AXIsProcessTrusted() ? .granted : .missing
@@ -30,6 +66,10 @@ final class PresentationCommandController: ObservableObject {
 
     func openAutomationSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
+    }
+
+    func openScreenRecordingSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
     }
 
     func requestChromeAutomationPermission() {
@@ -61,7 +101,328 @@ final class PresentationCommandController: ObservableObject {
         lastDeliveryDetail = message
     }
 
-    func handle(_ gesture: GestureIntent, target: PresentationTarget) {
+    func reportRecordingIssue(_ message: String) {
+        lastActionDescription = "录制准备异常"
+        lastDeliveryBackend = "录制工程"
+        lastDeliveryDetail = message
+    }
+
+    func reportRecordingProgress(_ message: String) {
+        lastActionDescription = "录制工程更新"
+        lastDeliveryBackend = "录制工程"
+        lastDeliveryDetail = message
+    }
+
+    func revealLastRecordingProject() {
+        guard let session = lastRecordingSession else {
+            reportRecordingIssue("尚未创建录制项目")
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([session.url])
+        lastActionDescription = "录制项目已定位"
+        lastDeliveryBackend = "录制工程"
+        lastDeliveryDetail = session.url.path
+    }
+
+    func openLastRecordingProject() {
+        guard let session = lastRecordingSession else {
+            reportRecordingIssue("尚未创建录制项目")
+            return
+        }
+        NSWorkspace.shared.open(session.url)
+        lastActionDescription = "录制项目已打开"
+        lastDeliveryBackend = "录制工程"
+        lastDeliveryDetail = session.url.path
+    }
+
+    func discardLastRecordingSession(deleteFiles: Bool) {
+        let url = lastRecordingSession?.url
+        lastRecordingSession = nil
+        activeRecordingSession = nil
+        if deleteFiles, let url {
+            try? FileManager.default.removeItem(at: url)
+        }
+        lastActionDescription = "录制已丢弃"
+        lastDeliveryBackend = "录制工程"
+        lastDeliveryDetail = url?.path ?? "未保留项目"
+    }
+
+    func previewLastProgramExport() {
+        guard let session = lastRecordingSession else {
+            reportRecordingIssue("尚未创建录制项目")
+            return
+        }
+        guard validateRawTracksForRendering(session: session) else {
+            return
+        }
+
+        if FileManager.default.fileExists(atPath: session.programOutputURL.path) {
+            lastActionDescription = "正在检查预览"
+            lastDeliveryBackend = "录制工程"
+            lastDeliveryDetail = "正在检查已生成的合成视频"
+
+            Task { @MainActor in
+                do {
+                    try await ProgramVideoRenderer.validatePlayableVideo(at: session.programOutputURL)
+                    openProgramPreview(session.programOutputURL)
+                } catch {
+                    do {
+                        let outputURL = try await ProgramVideoRenderer().render(
+                            session: session,
+                            settings: .presentationDefault
+                        )
+                        openProgramPreview(outputURL)
+                    } catch {
+                        reportRecordingIssue("预览生成失败：\(error.localizedDescription)")
+                    }
+                }
+            }
+            return
+        }
+
+        lastActionDescription = "正在生成预览"
+        lastDeliveryBackend = "录制工程"
+        lastDeliveryDetail = "正在从原始轨合成预览视频"
+
+        Task { @MainActor in
+            do {
+                let outputURL = try await ProgramVideoRenderer().render(
+                    session: session,
+                    settings: .presentationDefault
+                )
+                openProgramPreview(outputURL)
+            } catch {
+                reportRecordingIssue("预览生成失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    func updateLastRecordingPictureInPictureGeometry(_ geometry: ProgramPictureInPictureGeometry?) {
+        guard let geometry,
+              let session = lastRecordingSession else {
+            return
+        }
+
+        updateRecordingSessionManifest(
+            session: session,
+            manifest: session.manifest.updatingPictureInPictureGeometry(geometry)
+        )
+    }
+
+    func updateLastRecordingPictureInPictureKeyframes(_ keyframes: [RecordingPiPKeyframe]) {
+        guard !keyframes.isEmpty,
+              let session = lastRecordingSession else {
+            return
+        }
+
+        updateRecordingSessionManifest(
+            session: session,
+            manifest: session.manifest.updatingPictureInPictureKeyframes(keyframes)
+        )
+    }
+
+    func finalizeLastRecordingTimeline(
+        durationMilliseconds: Int,
+        pictureInPictureKeyframes keyframes: [RecordingPiPKeyframe]
+    ) {
+        guard let session = lastRecordingSession else {
+            return
+        }
+
+        var manifest = session.manifest.updatingTimelineDuration(milliseconds: durationMilliseconds)
+        if !keyframes.isEmpty {
+            manifest = manifest.updatingPictureInPictureKeyframes(keyframes)
+        }
+
+        updateRecordingSessionManifest(session: session, manifest: manifest)
+    }
+
+    private func updateRecordingSessionManifest(
+        session: RecordingSessionRecord,
+        manifest updatedManifest: RecordingProjectManifest
+    ) {
+        guard updatedManifest != session.manifest else {
+            return
+        }
+
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(updatedManifest).write(to: session.manifestURL, options: .atomic)
+            let updatedSession = session.replacingManifest(updatedManifest)
+            lastRecordingSession = updatedSession
+            if activeRecordingSession?.url == session.url {
+                activeRecordingSession = updatedSession
+            }
+            if FileManager.default.fileExists(atPath: session.programOutputURL.path) {
+                try? FileManager.default.removeItem(at: session.programOutputURL)
+            }
+        } catch {
+            reportRecordingIssue("画中画合成位置保存失败：\(error.localizedDescription)")
+        }
+    }
+
+    #if DEBUG
+    func replaceLastRecordingSessionForTesting(_ session: RecordingSessionRecord) {
+        lastRecordingSession = session
+        activeRecordingSession = nil
+    }
+    #endif
+
+    private func openProgramPreview(_ url: URL) {
+        programPreviewRequest = ProgramPreviewRequest(url: url)
+        lastActionDescription = "合成视频预览已打开"
+        lastDeliveryBackend = "录制工程"
+        lastDeliveryDetail = url.path
+    }
+
+    func importRecordingProject() {
+        let panel = NSOpenPanel()
+        panel.title = "导入灵演项目"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.json, .folder]
+        panel.directoryURL = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            let session = try projectStore.load(from: url)
+            lastRecordingSession = session
+            activeRecordingSession = nil
+            lastActionDescription = "录制项目已导入"
+            lastDeliveryBackend = "录制工程"
+            lastDeliveryDetail = session.url.path
+        } catch {
+            reportRecordingIssue("导入失败：\(error.localizedDescription)")
+        }
+    }
+
+    func exportRecordingProject() {
+        guard let session = lastRecordingSession else {
+            reportRecordingIssue("尚未创建录制项目")
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.title = "导出灵演项目"
+        panel.nameFieldStringValue = session.url.lastPathComponent
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            try projectStore.copyProject(session: session, to: url)
+            lastActionDescription = "录制项目已导出"
+            lastDeliveryBackend = "录制工程"
+            lastDeliveryDetail = url.path
+        } catch {
+            reportRecordingIssue("导出项目失败：\(error.localizedDescription)")
+        }
+    }
+
+    func exportProgramVideo(
+        settings: RecordingExportSettings = .presentationDefault,
+        onProgress: (@MainActor (ProgramVideoRenderProgress) -> Void)? = nil,
+        completion: (@MainActor (Result<ProgramVideoExportResult, Error>) -> Void)? = nil
+    ) {
+        guard let session = lastRecordingSession else {
+            reportRecordingIssue("尚未创建录制项目")
+            completion?(.failure(PresentationCommandControllerError.noRecordingSession))
+            return
+        }
+        guard validateRawTracksForRendering(session: session) else {
+            completion?(.failure(PresentationCommandControllerError.rawTrackValidationFailed))
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.title = "导出合成视频"
+        panel.nameFieldStringValue = exportFileName(settings: settings)
+        panel.allowedContentTypes = [.mpeg4Movie]
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            completion?(.failure(PresentationCommandControllerError.exportCancelled))
+            return
+        }
+
+        lastActionDescription = "合成视频导出中"
+        lastDeliveryBackend = "录制工程"
+        lastDeliveryDetail = "\(settings.userFacingSummary) → \(url.path)"
+        let progressCache = ProgramVideoExportProgressCache()
+
+        Task { @MainActor in
+            do {
+                let outputURL = try await ProgramVideoRenderer().render(
+                    session: session,
+                    settings: settings,
+                    outputURL: url,
+                    progress: { progress in
+                        progressCache.store(progress)
+                        Task { @MainActor in
+                            onProgress?(progress)
+                        }
+                    }
+                )
+                let fileSize = fileSize(at: outputURL)
+                let finalProgress = progressCache.load()
+                let finalWidth = finalProgress?.width ?? settings.exportWidthFallback
+                let finalHeight = finalProgress?.height ?? settings.exportHeightFallback
+                lastActionDescription = "合成视频已导出"
+                lastDeliveryBackend = "录制工程"
+                lastDeliveryDetail = outputURL.path
+                completion?(
+                    .success(
+                        ProgramVideoExportResult(
+                            url: outputURL,
+                            width: finalWidth,
+                            height: finalHeight,
+                            fileSize: fileSize,
+                            settings: settings
+                        )
+                    )
+                )
+            } catch {
+                reportRecordingIssue("导出视频失败：\(error.localizedDescription)")
+                completion?(.failure(error))
+            }
+        }
+    }
+
+    private func fileSize(at url: URL) -> Int64 {
+        let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber
+        return size?.int64Value ?? 0
+    }
+
+    private func validateRawTracksForRendering(session: RecordingSessionRecord) -> Bool {
+        let requiredFiles: [(label: String, url: URL)] = [
+            session.requiresSlidesScreenTrack ? ("PPT/屏幕原始轨", session.slidesScreenURL) : nil,
+            session.requiresPresenterCameraTrack ? ("讲者摄像头原始轨", session.presenterCameraURL) : nil
+        ].compactMap { $0 }
+
+        for item in requiredFiles {
+            guard FileManager.default.fileExists(atPath: item.url.path) else {
+                reportRecordingIssue("\(item.label)不存在，无法合成：\(item.url.path)")
+                return false
+            }
+            let size = (try? FileManager.default.attributesOfItem(atPath: item.url.path)[.size] as? NSNumber)?
+                .int64Value ?? 0
+            guard size > 0 else {
+                reportRecordingIssue("\(item.label)为空，无法合成。请重新选择录制源后再录制。")
+                return false
+            }
+        }
+
+        return true
+    }
+
+    func handle(_ gesture: GestureIntent, target: PresentationTarget, swipeVelocity: Double? = nil) {
         refreshAccessibilityStatus()
         // #region debug-point C:handle-gesture
         debugReport(
@@ -75,7 +436,7 @@ final class PresentationCommandController: ObservableObject {
         )
         // #endregion
         let command = director.command(for: gesture, target: target)
-        let result = sendCommand(command.presentationAction, target: target)
+        let result = sendCommand(command.presentationAction, target: target, swipeVelocity: swipeVelocity)
         lastActionDescription = result.userFacingAction(action: command.presentationAction)
         // #region debug-point C:handle-result
         debugReport(
@@ -138,30 +499,57 @@ final class PresentationCommandController: ObservableObject {
         lastActionDescription = "\(state)：\(result.detail)"
     }
 
-    func toggleRecording() {
-        let result = sendCommand(.toggleRecording, target: .genericKeyboard)
+    func toggleRecording(
+        scenario: RecordingScenario = .stagePresentation,
+        cameraName: String = "未连接",
+        mode: RecordingMode = .cameraAndScreen,
+        layout: RecordingLayout = .screenWithCameraPictureInPicture(corner: .bottomRight),
+        pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil
+    ) {
+        let result = sendCommand(
+            .toggleRecording,
+            target: .genericKeyboard,
+            recordingScenario: scenario,
+            cameraName: cameraName,
+            recordingMode: mode,
+            recordingLayout: layout,
+            pictureInPictureGeometry: pictureInPictureGeometry
+        )
         lastActionDescription = result.userFacingAction(action: .toggleRecording)
     }
 
     @discardableResult
-    private func sendCommand(_ action: PresentationAction, target: PresentationTarget) -> CommandDeliveryResult {
+    private func sendCommand(
+        _ action: PresentationAction,
+        target: PresentationTarget,
+        swipeVelocity: Double? = nil,
+        recordingScenario: RecordingScenario = .stagePresentation,
+        cameraName: String = "未连接",
+        recordingMode: RecordingMode = .cameraAndScreen,
+        recordingLayout: RecordingLayout = .screenWithCameraPictureInPicture(corner: .bottomRight),
+        pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil
+    ) -> CommandDeliveryResult {
         updateFrontmostApplication()
 
         if action == .toggleRecording {
-            isRecording.toggle()
-            let detail = isRecording
-                ? "录制状态：开启；当前版本只标记录制流程，尚未写出视频文件"
-                : "录制状态：关闭；当前版本未生成视频文件"
-            return finishDelivery(.success(backend: "内部状态", detail: detail))
+            return finishDelivery(
+                toggleRecordingSession(
+                    scenario: recordingScenario,
+                    cameraName: cameraName,
+                    mode: recordingMode,
+                    layout: recordingLayout,
+                    pictureInPictureGeometry: pictureInPictureGeometry
+                )
+            )
         }
 
         if case .html = target {
-            let localBridgeResult = sendLocalDemoBridgeCommand(action)
+            let localBridgeResult = sendLocalDemoBridgeCommand(action, swipeVelocity: swipeVelocity)
             if localBridgeResult.succeeded {
                 return finishDelivery(localBridgeResult)
             }
 
-            let htmlResult = sendHTMLCommand(action)
+            let htmlResult = sendHTMLCommand(action, swipeVelocity: swipeVelocity)
             if htmlResult.succeeded {
                 return finishDelivery(htmlResult)
             }
@@ -225,16 +613,54 @@ final class PresentationCommandController: ObservableObject {
         case .toggleAnnotation, .drawAnnotation, .clearAnnotations, .none:
             return .skipped(backend: "未实现", detail: "\(action.label) 暂未接入当前目标")
         case .toggleRecording:
-            isRecording.toggle()
-            let detail = isRecording
-                ? "录制状态：开启；当前版本只标记录制流程，尚未写出视频文件"
-                : "录制状态：关闭；当前版本未生成视频文件"
-            return .success(backend: "内部状态", detail: detail)
+            return toggleRecordingSession()
         }
     }
 
-    private func sendHTMLCommand(_ action: PresentationAction) -> CommandDeliveryResult {
-        guard let javascript = action.htmlJavaScript else {
+    private func toggleRecordingSession(
+        scenario: RecordingScenario = .stagePresentation,
+        cameraName: String = "未连接",
+        mode: RecordingMode = .cameraAndScreen,
+        layout: RecordingLayout = .screenWithCameraPictureInPicture(corner: .bottomRight),
+        pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil
+    ) -> CommandDeliveryResult {
+        if isRecording {
+            isRecording = false
+            let detail = activeRecordingSession.map {
+                "录制状态：关闭；工程已保留在 \($0.url.path)"
+            } ?? "录制状态：关闭；当前版本未生成视频文件"
+            activeRecordingSession = nil
+            return .success(backend: "录制工程", detail: detail)
+        }
+
+        do {
+            let session = try recordingSessionService.start(
+                scenario: scenario,
+                cameraName: cameraName,
+                mode: mode,
+                layout: layout,
+                pictureInPictureGeometry: pictureInPictureGeometry
+            )
+            activeRecordingSession = session
+            lastRecordingSession = session
+            isRecording = true
+            return .success(
+                backend: "录制工程",
+                detail: "录制状态：开启；已创建工程 \(session.manifestURL.path)，正在写入 \(session.manifest.project.rawTracks.count) 条原始轨"
+            )
+        } catch {
+            isRecording = false
+            activeRecordingSession = nil
+            return .failed(backend: "录制工程", detail: "录制工程创建失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func exportFileName(settings: RecordingExportSettings) -> String {
+        "program-\(settings.fileNameSuffix).mp4"
+    }
+
+    private func sendHTMLCommand(_ action: PresentationAction, swipeVelocity: Double? = nil) -> CommandDeliveryResult {
+        guard let javascript = action.htmlJavaScript(swipeVelocity: swipeVelocity) else {
             return .skipped(backend: "HTML 直连", detail: "\(action.label) 暂无 HTML 测试页命令")
         }
         let compactJavaScript = javascript
@@ -269,7 +695,7 @@ final class PresentationCommandController: ObservableObject {
         return runChromeAutomationScript(source, actionLabel: action.label)
     }
 
-    private func sendLocalDemoBridgeCommand(_ action: PresentationAction) -> CommandDeliveryResult {
+    private func sendLocalDemoBridgeCommand(_ action: PresentationAction, swipeVelocity: Double? = nil) -> CommandDeliveryResult {
         if case .setZoom(let scale) = action {
             do {
                 try DemoControlServer.shared.enqueueZoom(scale: scale)
@@ -307,6 +733,18 @@ final class PresentationCommandController: ObservableObject {
 
         guard let command = action.demoBridgeCommand else {
             return .skipped(backend: "本地测试页桥接", detail: "\(action.label) 暂无测试页命令")
+        }
+
+        if action == .nextSlide || action == .previousSlide, let swipeVelocity {
+            do {
+                try DemoControlServer.shared.enqueue(command, swipeVelocity: swipeVelocity)
+                return .success(
+                    backend: "本地测试页桥接",
+                    detail: "\(action.label) 已发送到 \(DemoControlServer.shared.demoURL.absoluteString)"
+                )
+            } catch {
+                return .failed(backend: "本地测试页桥接", detail: "无法启动本地测试页桥接：\(error.localizedDescription)")
+            }
         }
 
         do {
@@ -433,6 +871,23 @@ private enum VirtualKey: CGKeyCode {
     case returnKey = 0x24
 }
 
+private final class ProgramVideoExportProgressCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var progress: ProgramVideoRenderProgress?
+
+    func store(_ progress: ProgramVideoRenderProgress) {
+        lock.lock()
+        self.progress = progress
+        lock.unlock()
+    }
+
+    func load() -> ProgramVideoRenderProgress? {
+        lock.lock()
+        defer { lock.unlock() }
+        return progress
+    }
+}
+
 private extension PresentationTarget {
     var debugLabel: String {
         switch self {
@@ -491,6 +946,85 @@ private extension PresentationTarget {
     }
 }
 
+private extension RecordingExportSettings {
+    var fileNameSuffix: String {
+        [
+            resolution.fileNameToken,
+            "\(frameRate.rawValue)fps",
+            quality.fileNameToken,
+            codec.rawValue
+        ].joined(separator: "-")
+    }
+
+    var userFacingSummary: String {
+        "\(resolution.label) / \(frameRate.rawValue)fps / \(quality.label) / \(codec.label)"
+    }
+
+    var exportWidthFallback: Int {
+        resolution.pixelSize?.width ?? 0
+    }
+
+    var exportHeightFallback: Int {
+        resolution.pixelSize?.height ?? 0
+    }
+}
+
+private extension RecordingExportResolution {
+    var label: String {
+        switch self {
+        case .source:
+            return "源分辨率"
+        case .hd1080:
+            return "1080p"
+        case .qhd1440:
+            return "1440p"
+        case .uhd4k:
+            return "4K"
+        }
+    }
+
+    var fileNameToken: String {
+        switch self {
+        case .source:
+            return "source"
+        case .hd1080:
+            return "1080p"
+        case .qhd1440:
+            return "1440p"
+        case .uhd4k:
+            return "4k"
+        }
+    }
+}
+
+private extension RecordingExportQuality {
+    var label: String {
+        switch self {
+        case .standard:
+            return "标准"
+        case .high:
+            return "高"
+        case .archival:
+            return "归档"
+        }
+    }
+
+    var fileNameToken: String {
+        rawValue
+    }
+}
+
+private extension RecordingExportCodec {
+    var label: String {
+        switch self {
+        case .h264:
+            return "H.264"
+        case .hevc:
+            return "HEVC"
+        }
+    }
+}
+
 private extension CommandTransport {
     var debugLabel: String {
         switch self {
@@ -538,11 +1072,16 @@ private extension PresentationAction {
         }
     }
 
-    var htmlJavaScript: String? {
+    func htmlJavaScript(swipeVelocity: Double? = nil) -> String? {
         switch self {
         case .nextSlide:
+            let velocity = swipeVelocity ?? 0
             return """
             (() => {
+              if (typeof window.wonderShowCommand === 'function') {
+                window.wonderShowCommand('next', { velocity: \(velocity) });
+                return 'next';
+              }
               const slides = Array.from(document.querySelectorAll('.slide'));
               const current = Math.max(0, slides.findIndex(slide => slide.classList.contains('active')));
               const next = Math.min(slides.length - 1, current + 1);
@@ -551,8 +1090,13 @@ private extension PresentationAction {
             })()
             """
         case .previousSlide:
+            let velocity = swipeVelocity ?? 0
             return """
             (() => {
+              if (typeof window.wonderShowCommand === 'function') {
+                window.wonderShowCommand('previous', { velocity: \(velocity) });
+                return 'previous';
+              }
               const slides = Array.from(document.querySelectorAll('.slide'));
               const current = Math.max(0, slides.findIndex(slide => slide.classList.contains('active')));
               const next = Math.max(0, current - 1);

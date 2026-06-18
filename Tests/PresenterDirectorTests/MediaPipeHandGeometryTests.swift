@@ -16,6 +16,30 @@ import Testing
     #expect(geometry?.primaryShape == .sword)
 }
 
+@Test func mediaPipeHandGeometryAcceptsSwordWithSoftFoldedRingAndPinky() {
+    let base = makeHandPrediction(
+        pose: .sword,
+        centerX: 0.42,
+        centerY: 0.62,
+        scale: 1.0,
+        handedness: "Right"
+    )
+    var landmarks = base.landmarks
+    landmarks[16] = point(0.49, 0.59)
+    landmarks[20] = point(0.54, 0.59)
+    let prediction = MediaPipeHandPrediction(
+        handedness: base.handedness,
+        handednessScore: base.handednessScore,
+        landmarks: landmarks,
+        gestureCategories: []
+    )
+    let geometry = MediaPipeHandGeometry(prediction: prediction)
+
+    #expect(geometry?.ringExtended == true)
+    #expect(geometry?.pinkyExtended == true)
+    #expect(geometry?.primaryShape == .sword)
+}
+
 @Test func mediaPipeHandGeometryRecognizesStrictLShapeForZoom() {
     let geometry = MediaPipeHandGeometry(
         prediction: makeHandPrediction(
@@ -27,6 +51,29 @@ import Testing
         )
     )
 
+    #expect(geometry?.primaryShape == .lShape)
+}
+
+@Test func mediaPipeHandGeometryRecognizesLShapeWhenThumbDirectionDoesNotMatchHandedness() {
+    let base = makeHandPrediction(
+        pose: .strictLShape,
+        centerX: 0.42,
+        centerY: 0.62,
+        scale: 1.0,
+        handedness: "Right"
+    )
+    var landmarks = base.landmarks
+    landmarks[4] = point(0.60, 0.60)
+    let prediction = MediaPipeHandPrediction(
+        handedness: base.handedness,
+        handednessScore: base.handednessScore,
+        landmarks: landmarks,
+        gestureCategories: []
+    )
+    let geometry = MediaPipeHandGeometry(prediction: prediction)
+
+    #expect(geometry?.thumbExtended == false)
+    #expect(geometry?.thumbSpread == true)
     #expect(geometry?.primaryShape == .lShape)
 }
 
@@ -57,7 +104,7 @@ import Testing
     #expect(graceZoom == .zoom)
 }
 
-@Test func twoHandZoomPoseDetectorRequiresStrictLShapeOnBothHands() {
+@Test func twoHandZoomPoseDetectorRejectsNonZoomHands() {
     let detector = TwoHandZoomPoseDetector()
     let geometries = [
         MediaPipeHandGeometry(
@@ -71,7 +118,7 @@ import Testing
         ),
         MediaPipeHandGeometry(
             prediction: makeHandPrediction(
-                pose: .natural,
+                pose: .openPalm,
                 centerX: 0.68,
                 centerY: 0.62,
                 scale: 1.0,
@@ -81,6 +128,55 @@ import Testing
     ].compactMap { $0 }
 
     #expect(detector.isZoomReady(geometries: geometries) == false)
+}
+
+@Test func twoHandZoomPoseDetectorAllowsHandsToComeCloseForZoomOut() {
+    let detector = TwoHandZoomPoseDetector()
+    let geometries = [
+        MediaPipeHandGeometry(
+            prediction: makeHandPrediction(
+                pose: .strictLShape,
+                centerX: 0.45,
+                centerY: 0.62,
+                scale: 1.0,
+                handedness: "Left"
+            )
+        ),
+        MediaPipeHandGeometry(
+            prediction: makeHandPrediction(
+                pose: .strictLShape,
+                centerX: 0.55,
+                centerY: 0.62,
+                scale: 1.0,
+                handedness: "Right"
+            )
+        )
+    ].compactMap { $0 }
+
+    #expect(geometries.count == 2)
+    #expect(geometries[0].normalizedDistance(to: geometries[1]) < 1.2)
+    #expect(detector.isZoomReady(geometries: geometries))
+}
+
+@Test func mediaPipePalmAnchorsKeepZoomHandsInZoneWhenLegacyTipAnchorWouldExit() {
+    let zone = GestureActivationZone(minX: 0.18, maxX: 0.82, minY: 0.20, maxY: 0.82)
+    let prediction = makeHandPrediction(
+        pose: .strictLShape,
+        centerX: 0.32,
+        centerY: 0.22,
+        scale: 1.0,
+        handedness: "Right",
+        categories: [.init(name: "Victory", score: 0.96)]
+    )
+
+    let legacyAnchor = MediaPipeGestureAdapter.handPoints(from: [prediction]).first
+    let palmAnchor = MediaPipeGestureAdapter.palmHandPoints(from: [prediction]).first
+
+    #expect(legacyAnchor != nil)
+    #expect(palmAnchor != nil)
+    #expect(zone.contains(legacyAnchor!) == false)
+    #expect(zone.contains(palmAnchor!) == true)
+    #expect(palmAnchor?.shape == .lShape)
 }
 
 @Test func continuousZoomTrackerDoesNotReverseDirectionOnTinyJitter() {
@@ -165,6 +261,86 @@ import Testing
     #expect((fast?.relativeDistanceChange ?? 0) > 0)
 }
 
+@Test func continuousZoomTrackerEmitsInwardMotionAfterDwellAndKeepsShrinkingAtCloseDistance() {
+    var tracker = ContinuousZoomTracker()
+    let frames = [
+        (0, 0.30, 0.70, 1.0),
+        (60, 0.34, 0.66, 1.0),
+        (120, 0.40, 0.60, 1.0),
+        (180, 0.45, 0.55, 0.95)
+    ]
+
+    let updates = frames.compactMap { timestamp, leftX, rightX, currentScale in
+        tracker.update(
+            geometries: [
+                MediaPipeHandGeometry(
+                    prediction: makeHandPrediction(
+                        pose: .strictLShape,
+                        centerX: leftX,
+                        centerY: 0.62,
+                        scale: 1.0,
+                        handedness: "Left"
+                    )
+                ),
+                MediaPipeHandGeometry(
+                    prediction: makeHandPrediction(
+                        pose: .strictLShape,
+                        centerX: rightX,
+                        centerY: 0.62,
+                        scale: 1.0,
+                        handedness: "Right"
+                    )
+                )
+            ].compactMap { $0 },
+            currentScale: currentScale,
+            timestampMilliseconds: timestamp
+        )
+    }
+
+    #expect(updates.contains { $0.relativeDistanceChange < 0 && $0.scale < 1.0 })
+    #expect(updates.last?.relativeDistanceChange ?? 0 < 0)
+}
+
+@Test func continuousZoomTrackerUsesScreenDistanceForGeometryDirectionWhenPalmSizeChanges() {
+    var tracker = ContinuousZoomTracker()
+    let frames = [
+        (0, 0.26, 0.74, 0.75, 1.0),
+        (60, 0.30, 0.70, 1.00, 1.0),
+        (120, 0.36, 0.64, 1.20, 1.0),
+        (180, 0.42, 0.58, 1.35, 0.96)
+    ]
+
+    let updates = frames.compactMap { timestamp, leftX, rightX, handScale, currentScale in
+        tracker.update(
+            geometries: [
+                MediaPipeHandGeometry(
+                    prediction: makeHandPrediction(
+                        pose: .strictLShape,
+                        centerX: leftX,
+                        centerY: 0.62,
+                        scale: handScale,
+                        handedness: "Left"
+                    )
+                ),
+                MediaPipeHandGeometry(
+                    prediction: makeHandPrediction(
+                        pose: .strictLShape,
+                        centerX: rightX,
+                        centerY: 0.62,
+                        scale: handScale,
+                        handedness: "Right"
+                    )
+                )
+            ].compactMap { $0 },
+            currentScale: currentScale,
+            timestampMilliseconds: timestamp
+        )
+    }
+
+    #expect(updates.contains { $0.relativeDistanceChange < 0 })
+    #expect((updates.last?.scale ?? 1.0) < 1.0)
+}
+
 @Test func streamingGestureRecognizerTreatsPreviousAndNextSymmetrically() {
     let recognizer = StreamingGestureRecognizer(profile: .easyTesting)
     let leftFrames = [
@@ -186,6 +362,7 @@ import Testing
 
 private enum TestHandPose {
     case natural
+    case openPalm
     case sword
     case strictLShape
 }
@@ -203,7 +380,8 @@ private func makeHandPrediction(
     centerX: Double,
     centerY: Double,
     scale: Double,
-    handedness: String
+    handedness: String,
+    categories: [MediaPipeGestureCategory] = []
 ) -> MediaPipeHandPrediction {
     var landmarks = Array(
         repeating: MediaPipeNormalizedLandmark(x: centerX, y: centerY, z: 0),
@@ -213,17 +391,18 @@ private func makeHandPrediction(
     let wrist = point(centerX, centerY + 0.12 * scale)
     landmarks[0] = wrist
 
-    let thumbMCP = point(centerX - 0.10 * scale, centerY + 0.04 * scale)
-    let thumbIP = point(centerX - 0.13 * scale, centerY)
+    let thumbDirection = handedness.lowercased().contains("left") ? 1.0 : -1.0
+    let thumbMCP = point(centerX + thumbDirection * 0.10 * scale, centerY + 0.04 * scale)
+    let thumbIP = point(centerX + thumbDirection * 0.13 * scale, centerY)
     let thumbTip: MediaPipeNormalizedLandmark
     switch pose {
     case .strictLShape:
-        thumbTip = point(centerX - 0.20 * scale, centerY - 0.02 * scale)
-    case .natural, .sword:
-        thumbTip = point(centerX - 0.06 * scale, centerY + 0.06 * scale)
+        thumbTip = point(centerX + thumbDirection * 0.20 * scale, centerY - 0.02 * scale)
+    case .natural, .openPalm, .sword:
+        thumbTip = point(centerX + thumbDirection * 0.06 * scale, centerY + 0.06 * scale)
     }
 
-    landmarks[1] = point(centerX - 0.07 * scale, centerY + 0.08 * scale)
+    landmarks[1] = point(centerX + thumbDirection * 0.07 * scale, centerY + 0.08 * scale)
     landmarks[2] = thumbMCP
     landmarks[3] = thumbIP
     landmarks[4] = thumbTip
@@ -245,7 +424,7 @@ private func makeHandPrediction(
         dipIndex: 11,
         tipIndex: 12,
         mcp: point(centerX, centerY),
-        extended: pose == .sword,
+        extended: pose == .sword || pose == .openPalm,
         horizontalOffset: 0
     )
     applyFinger(
@@ -255,7 +434,7 @@ private func makeHandPrediction(
         dipIndex: 15,
         tipIndex: 16,
         mcp: point(centerX + 0.05 * scale, centerY + 0.02 * scale),
-        extended: false,
+        extended: pose == .openPalm,
         horizontalOffset: 0.01 * scale
     )
     applyFinger(
@@ -265,7 +444,7 @@ private func makeHandPrediction(
         dipIndex: 19,
         tipIndex: 20,
         mcp: point(centerX + 0.09 * scale, centerY + 0.05 * scale),
-        extended: false,
+        extended: pose == .openPalm,
         horizontalOffset: 0.02 * scale
     )
 
@@ -273,7 +452,7 @@ private func makeHandPrediction(
         handedness: handedness,
         handednessScore: 0.99,
         landmarks: landmarks,
-        gestureCategories: []
+        gestureCategories: categories
     )
 }
 
