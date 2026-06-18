@@ -152,6 +152,7 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
         let writer: AVAssetWriter
         let input: AVAssetWriterInput
         let adaptor: AVAssetWriterInputPixelBufferAdaptor
+        let pixelSize: CapturePixelSize
     }
 
     private let queue = DispatchQueue(label: "com.lingyan.screen-archive-recorder")
@@ -168,7 +169,9 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
     private var isPaused = false
     private var framePump: DispatchSourceTimer?
     private var latestPixelBuffer: CVPixelBuffer?
+    private var latestContentRect: CGRect?
     private var writerError: String?
+    private var isUpdatingSource = false
     var onPreviewImage: (@MainActor (CGImage) -> Void)?
 
     init(fileManager: FileManager = .default) {
@@ -235,6 +238,7 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
             self.frameIndex = 0
             self.isPaused = false
             self.latestPixelBuffer = nil
+            self.latestContentRect = nil
             self.writerError = nil
             self.startFramePumpOnQueue()
         }
@@ -269,9 +273,21 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
         guard let stream = queue.sync(execute: { self.stream }) else {
             throw ScreenArchiveRecorderError.noActiveCaptureStream
         }
-        try await stream.updateContentFilter(selection.filter)
+        let configuration = Self.streamConfiguration(for: selection)
+        queue.sync {
+            self.beginSourceUpdateOnQueue()
+        }
+        do {
+            try await stream.updateConfiguration(configuration)
+            try await stream.updateContentFilter(selection.filter)
+        } catch {
+            queue.async { [weak self] in
+                self?.finishSourceUpdateOnQueue()
+            }
+            throw error
+        }
         queue.async { [weak self] in
-            self?.lastPreviewTimestamp = .distantPast
+            self?.finishSourceUpdateOnQueue()
         }
     }
 
@@ -320,8 +336,9 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
 
     static func streamConfiguration(for selection: CaptureSelection) -> SCStreamConfiguration {
         let configuration = SCStreamConfiguration()
-        configuration.width = max(1, selection.width)
-        configuration.height = max(1, selection.height)
+        let outputSize = streamOutputSize(selectionWidth: selection.width, selectionHeight: selection.height)
+        configuration.width = outputSize.width
+        configuration.height = outputSize.height
         configuration.showsCursor = true
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.scalesToFit = true
@@ -331,6 +348,31 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
             configuration.shouldBeOpaque = true
         }
         return configuration
+    }
+
+    static func streamOutputSize(
+        selectionWidth: Int,
+        selectionHeight: Int
+    ) -> CapturePixelSize {
+        return CapturePixelSize(
+            width: max(1, selectionWidth),
+            height: max(1, selectionHeight)
+        )
+    }
+
+    static func aspectFitRect(sourceSize: CGSize, targetSize: CGSize) -> CGRect {
+        let sourceWidth = max(1, sourceSize.width)
+        let sourceHeight = max(1, sourceSize.height)
+        let targetWidth = max(1, targetSize.width)
+        let targetHeight = max(1, targetSize.height)
+        let scale = min(targetWidth / sourceWidth, targetHeight / sourceHeight)
+        let fittedSize = CGSize(width: sourceWidth * scale, height: sourceHeight * scale)
+        return CGRect(
+            x: (targetWidth - fittedSize.width) / 2,
+            y: (targetHeight - fittedSize.height) / 2,
+            width: fittedSize.width,
+            height: fittedSize.height
+        )
     }
 
     private static func evenPixelDimension(_ value: Int) -> Int {
@@ -364,13 +406,22 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
         guard sampleBuffer.isValid else {
             return
         }
+        guard !isUpdatingSource else {
+            return
+        }
         framesReceived += 1
 
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return
         }
+        let pixelSize = CGSize(
+            width: CVPixelBufferGetWidth(imageBuffer),
+            height: CVPixelBufferGetHeight(imageBuffer)
+        )
+        let contentRect = Self.frameContentRect(from: sampleBuffer, pixelSize: pixelSize)
         latestPixelBuffer = imageBuffer
-        publishPreviewIfNeeded(from: sampleBuffer)
+        latestContentRect = contentRect
+        publishPreviewIfNeeded(from: sampleBuffer, contentRect: contentRect)
     }
 
     private func makeRecording(url: URL, width: Int, height: Int) throws -> ActiveRecording {
@@ -406,7 +457,13 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
             )
         }
         writer.startSession(atSourceTime: .zero)
-        return ActiveRecording(url: url, writer: writer, input: input, adaptor: adaptor)
+        return ActiveRecording(
+            url: url,
+            writer: writer,
+            input: input,
+            adaptor: adaptor,
+            pixelSize: CapturePixelSize(width: width, height: height)
+        )
     }
 
     private func startFramePumpOnQueue() {
@@ -440,7 +497,12 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
             return
         }
 
-        if recording.adaptor.append(latestPixelBuffer, withPresentationTime: presentationTime) {
+        let pixelBufferToAppend = normalizedPixelBuffer(
+            latestPixelBuffer,
+            contentRect: latestContentRect,
+            for: recording
+        ) ?? latestPixelBuffer
+        if recording.adaptor.append(pixelBufferToAppend, withPresentationTime: presentationTime) {
             framesWritten += 1
         } else {
             writerError = recording.writer.error?.localizedDescription ?? "屏幕视频写入器拒绝了最新画面"
@@ -451,7 +513,9 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
         framePump?.cancel()
         framePump = nil
         latestPixelBuffer = nil
+        latestContentRect = nil
         isPaused = false
+        isUpdatingSource = false
         let finishedOutputURL = outputURL
         stream = nil
         outputURL = nil
@@ -490,6 +554,172 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
         }
     }
 
+    private func beginSourceUpdateOnQueue() {
+        isUpdatingSource = true
+        lastPreviewTimestamp = .distantPast
+    }
+
+    private func finishSourceUpdateOnQueue() {
+        lastPreviewTimestamp = .distantPast
+        isUpdatingSource = false
+    }
+
+    private func normalizedPixelBuffer(
+        _ pixelBuffer: CVPixelBuffer,
+        contentRect: CGRect?,
+        for recording: ActiveRecording
+    ) -> CVPixelBuffer? {
+        let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let targetWidth = max(1, recording.pixelSize.width)
+        let targetHeight = max(1, recording.pixelSize.height)
+        guard sourceWidth != targetWidth || sourceHeight != targetHeight || contentRect != nil else {
+            return pixelBuffer
+        }
+
+        guard let pool = recording.adaptor.pixelBufferPool else {
+            return nil
+        }
+        var outputBuffer: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outputBuffer) == kCVReturnSuccess,
+              let outputBuffer else {
+            return nil
+        }
+
+        let targetRect = CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight)
+        let sourceImage = Self.sourceImage(from: pixelBuffer, contentRect: contentRect)
+        let fittedRect = Self.aspectFitRect(
+            sourceSize: sourceImage.extent.size,
+            targetSize: CGSize(width: targetWidth, height: targetHeight)
+        )
+        let scale = fittedRect.width / max(1, sourceImage.extent.width)
+        let transformedImage = sourceImage.transformed(
+            by: CGAffineTransform(
+                a: scale,
+                b: 0,
+                c: 0,
+                d: scale,
+                tx: fittedRect.minX,
+                ty: fittedRect.minY
+            )
+        )
+        let composedImage = transformedImage.composited(
+            over: CIImage(color: .black).cropped(to: targetRect)
+        )
+        previewContext.render(composedImage, to: outputBuffer)
+        return outputBuffer
+    }
+
+    static func normalizedContentRect(
+        _ contentRect: CGRect?,
+        pixelSize: CGSize,
+        scaleFactor: CGFloat? = nil
+    ) -> CGRect? {
+        guard let contentRect else {
+            return nil
+        }
+
+        let pixelBounds = CGRect(origin: .zero, size: pixelSize)
+        guard pixelBounds.width > 0, pixelBounds.height > 0 else {
+            return nil
+        }
+
+        var rect = contentRect.standardized
+        if let scaleFactor, scaleFactor > 1 {
+            let scaledRect = CGRect(
+                x: rect.minX * scaleFactor,
+                y: rect.minY * scaleFactor,
+                width: rect.width * scaleFactor,
+                height: rect.height * scaleFactor
+            )
+            if scaledRect.width <= pixelBounds.width + 1,
+               scaledRect.height <= pixelBounds.height + 1,
+               scaledRect.maxX <= pixelBounds.maxX + 1,
+               scaledRect.maxY <= pixelBounds.maxY + 1 {
+                rect = scaledRect
+            }
+        }
+
+        let roundedRect = CGRect(
+            x: rect.minX.rounded(.down),
+            y: rect.minY.rounded(.down),
+            width: rect.width.rounded(.up),
+            height: rect.height.rounded(.up)
+        ).intersection(pixelBounds).integral
+
+        guard roundedRect.width > 1, roundedRect.height > 1 else {
+            return nil
+        }
+
+        let coversAlmostAllWidth = abs(roundedRect.width - pixelBounds.width) <= 1
+        let coversAlmostAllHeight = abs(roundedRect.height - pixelBounds.height) <= 1
+        let startsAtOrigin = roundedRect.minX <= 1 && roundedRect.minY <= 1
+        if coversAlmostAllWidth, coversAlmostAllHeight, startsAtOrigin {
+            return nil
+        }
+
+        let areaRatio = (roundedRect.width * roundedRect.height) / max(1, pixelBounds.width * pixelBounds.height)
+        guard areaRatio >= 0.02 else {
+            return nil
+        }
+        return roundedRect
+    }
+
+    private static func frameContentRect(from sampleBuffer: CMSampleBuffer, pixelSize: CGSize) -> CGRect? {
+        guard let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(
+            sampleBuffer,
+            createIfNecessary: false
+        ) as? [[SCStreamFrameInfo: Any]],
+              let attachments = attachmentsArray.first else {
+            return nil
+        }
+
+        return normalizedContentRect(
+            rectValue(from: attachments[.contentRect]),
+            pixelSize: pixelSize,
+            scaleFactor: cgFloatValue(from: attachments[.scaleFactor])
+        )
+    }
+
+    private static func sourceImage(from pixelBuffer: CVPixelBuffer, contentRect: CGRect?) -> CIImage {
+        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        guard let contentRect else {
+            return image
+        }
+        return image
+            .cropped(to: contentRect)
+            .transformed(by: CGAffineTransform(translationX: -contentRect.minX, y: -contentRect.minY))
+    }
+
+    private static func rectValue(from value: Any?) -> CGRect? {
+        if let rect = value as? CGRect {
+            return rect
+        }
+        if let value = value as? NSValue {
+            return value.rectValue
+        }
+        return nil
+    }
+
+    private static func cgFloatValue(from value: Any?) -> CGFloat? {
+        if let value = value as? CGFloat {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return CGFloat(truncating: value)
+        }
+        if let value = value as? Double {
+            return CGFloat(value)
+        }
+        if let value = value as? Float {
+            return CGFloat(value)
+        }
+        if let value = value as? Int {
+            return CGFloat(value)
+        }
+        return nil
+    }
+
     private func makeSummary(outputURL: URL?) -> RecordingSummary {
         let size: Int64
         if let outputURL {
@@ -518,7 +748,7 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
         ]
     }
 
-    private func publishPreviewIfNeeded(from sampleBuffer: CMSampleBuffer) {
+    private func publishPreviewIfNeeded(from sampleBuffer: CMSampleBuffer, contentRect: CGRect?) {
         guard let onPreviewImage else {
             return
         }
@@ -533,7 +763,7 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
             return
         }
 
-        let ciImage = CIImage(cvPixelBuffer: imageBuffer)
+        let ciImage = Self.sourceImage(from: imageBuffer, contentRect: contentRect)
         guard let image = previewContext.createCGImage(ciImage, from: ciImage.extent) else {
             return
         }

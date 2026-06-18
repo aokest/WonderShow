@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hmac
 import json
 import os
 import sys
@@ -47,6 +48,7 @@ class SidecarConfig:
     model_path: Path
     hand_model_path: Path
     custom_model_path: Path | None
+    local_token: str | None
 
 
 class GestureSidecar:
@@ -113,6 +115,7 @@ class GestureSidecar:
             "hand_model_path": str(self._config.hand_model_path),
             "custom_model_path": str(self._config.custom_model_path) if self._config.custom_model_path else None,
             "custom_model_loaded": self._custom_model is not None,
+            "auth_required": self._config.local_token is not None,
         }
 
     def infer(self, image_bytes: bytes, timestamp_ms: int) -> dict[str, Any]:
@@ -240,11 +243,16 @@ class SidecarRequestHandler(BaseHTTPRequestHandler):
     """Handles local HTTP requests for health and inference endpoints."""
 
     sidecar: GestureSidecar | None = None
+    local_token: str | None = None
+    max_body_bytes = 6 * 1024 * 1024
 
     def do_GET(self) -> None:  # noqa: N802
         """Handles GET requests for health checks."""
 
         if self.path == "/health":
+            if not self._is_authorized():
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "Unauthorized"})
+                return
             self._send_json(HTTPStatus.OK, self.sidecar.health_payload() if self.sidecar else {"ok": False})
             return
 
@@ -255,6 +263,10 @@ class SidecarRequestHandler(BaseHTTPRequestHandler):
 
         if self.path != "/infer":
             self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found"})
+            return
+
+        if not self._is_authorized():
+            self._send_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "Unauthorized"})
             return
 
         if not self.sidecar:
@@ -290,13 +302,23 @@ class SidecarRequestHandler(BaseHTTPRequestHandler):
         """
 
         length = int(self.headers.get("Content-Length", "0"))
+        if length > self.max_body_bytes:
+            raise ValueError("Request body is too large.")
         body = self.rfile.read(length)
         if not body:
             raise ValueError("Request body is empty.")
         return json.loads(body.decode("utf-8"))
 
+    def _is_authorized(self) -> bool:
+        """Validates the per-app local token when one is configured."""
+
+        if not self.local_token:
+            return True
+        supplied = self.headers.get("X-WonderShow-Local-Token")
+        return supplied is not None and hmac.compare_digest(supplied, self.local_token)
+
     def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
-        """Sends a JSON response with permissive local CORS headers.
+        """Sends a JSON response.
 
         Args:
             status: HTTP status code.
@@ -308,7 +330,6 @@ class SidecarRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
@@ -364,7 +385,15 @@ def parse_args(argv: list[str]) -> SidecarConfig:
     parser.add_argument("--model-path", default=str(default_model_path(project_root)))
     parser.add_argument("--hand-model-path", default=str(default_hand_model_path(project_root)))
     parser.add_argument("--custom-model-path", default=str(default_custom_model_path(project_root)))
+    parser.add_argument("--token", default=os.environ.get("WONDERSHOW_LOCAL_TOKEN"))
+    parser.add_argument(
+        "--allow-unauthenticated-local-dev",
+        action="store_true",
+        help="Allow unauthenticated localhost requests for short-lived development only.",
+    )
     args = parser.parse_args(argv)
+    if not args.token and not args.allow_unauthenticated_local_dev:
+        parser.error("set WONDERSHOW_LOCAL_TOKEN or pass --token; unauthenticated sidecar is disabled by default")
     return SidecarConfig(
         host=args.host,
         port=args.port,
@@ -377,6 +406,7 @@ def parse_args(argv: list[str]) -> SidecarConfig:
                 Path.cwd() / "sidecar" / "models" / "wondershow_gesture_model.json",
             ],
         ) if args.custom_model_path else None,
+        local_token=args.token,
     )
 
 
@@ -397,6 +427,7 @@ def main(argv: list[str]) -> int:
         return 1
 
     SidecarRequestHandler.sidecar = sidecar
+    SidecarRequestHandler.local_token = config.local_token
     server = ThreadingHTTPServer((config.host, config.port), SidecarRequestHandler)
     print(
         json.dumps(

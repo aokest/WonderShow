@@ -92,12 +92,14 @@ struct DashboardView: View {
     @State private var audioInputDevices: [AudioInputDeviceOption] = MicrophoneArchiveRecorder.availableInputDevices()
     @State private var selectedAudioInputDeviceID = AudioInputDeviceOption.systemDefault.id
     @State private var latestScreenPreviewImage: CGImage?
+    @State private var screenPreviewGeneration = 0
     @State private var pipOffset = CGSize(width: 18, height: -18)
     @State private var pipScale: CGFloat = 1
     @State private var pipShape: PiPShape = .roundedRectangle
     @State private var monitorCanvasSize = CGSize(width: 1280, height: 720)
     @State private var recordingStartedAt: Date?
     @State private var recordingPiPKeyframes: [RecordingPiPKeyframe] = []
+    @State private var recordingLayoutKeyframes: [RecordingLayoutKeyframe] = []
     @State private var lastPiPKeyframeDate: Date?
     @StateObject private var recordingCountdownPresenter = RecordingCountdownPresenter()
 
@@ -254,9 +256,7 @@ struct DashboardView: View {
         .onAppear {
             commandController.refreshAccessibilityStatus()
             updateGestureHandler()
-            screenArchiveRecorder.onPreviewImage = { image in
-                latestScreenPreviewImage = image
-            }
+            installScreenArchivePreviewHandler()
             camera.start()
             refreshAudioInputDevices()
             restartScreenPreviewIfNeeded()
@@ -271,6 +271,7 @@ struct DashboardView: View {
         }
         .onChange(of: layout) {
             restartScreenPreviewIfNeeded()
+            recordCurrentLayoutKeyframeIfNeeded(force: true)
         }
         .onChange(of: commandController.isRecording) {
             if commandController.isRecording {
@@ -413,6 +414,7 @@ struct DashboardView: View {
         latestScreenPreviewImage = nil
         recordingStartedAt = now
         recordingPiPKeyframes = initialPiPKeyframes()
+        recordingLayoutKeyframes = initialLayoutKeyframes()
         lastPiPKeyframeDate = now
         recordingControlState = .recording
     }
@@ -499,6 +501,7 @@ struct DashboardView: View {
         accumulatedRecordingDuration = 0
         recordingActiveStartedAt = nil
         recordingStartedAt = nil
+        recordingLayoutKeyframes = []
         lastPiPKeyframeDate = nil
         shouldRenderStoppedRecording = true
         discardStoppedRecording = false
@@ -1056,7 +1059,7 @@ struct DashboardView: View {
                         Menu {
                             ForEach(availableLayoutOptions) { option in
                                 Button(option.label) {
-                                    layout = option.layout
+                                    applyLayoutSelection(option.layout)
                                 }
                             }
                         } label: {
@@ -1453,11 +1456,17 @@ struct DashboardView: View {
     private func applyRecordingPreset(mode: RecordingMode, layout: RecordingLayout) {
         self.mode = mode
         self.layout = normalizedLayout(layout, for: mode)
+        recordCurrentLayoutKeyframeIfNeeded(force: true)
         if mode == .cameraOnly {
             latestScreenPreviewImage = nil
             screenPreview.resetImage()
         }
         restartScreenPreviewIfNeeded()
+    }
+
+    private func applyLayoutSelection(_ selectedLayout: RecordingLayout) {
+        layout = normalizedLayout(selectedLayout, for: mode)
+        recordCurrentLayoutKeyframeIfNeeded(force: true)
     }
 
     private var availableLayoutOptions: [RecordingLayoutOption] {
@@ -1635,11 +1644,24 @@ struct DashboardView: View {
 
     private func finalizeRecordingTimelineForLastRecording() {
         recordCurrentPiPKeyframeIfNeeded(force: true)
+        recordCurrentLayoutKeyframeIfNeeded(force: true)
         let durationMilliseconds = currentRecordingDurationMilliseconds()
         commandController.finalizeLastRecordingTimeline(
             durationMilliseconds: durationMilliseconds,
-            pictureInPictureKeyframes: normalizedRecordingPiPKeyframes()
+            pictureInPictureKeyframes: normalizedRecordingPiPKeyframes(),
+            layoutKeyframes: normalizedRecordingLayoutKeyframes()
         )
+    }
+
+    private func initialLayoutKeyframes() -> [RecordingLayoutKeyframe] {
+        [
+            RecordingLayoutKeyframe(
+                milliseconds: 0,
+                mode: mode,
+                layout: normalizedLayout(layout, for: mode),
+                pictureInPictureGeometry: currentPictureInPictureGeometry
+            )
+        ]
     }
 
     private func initialPiPKeyframes() -> [RecordingPiPKeyframe] {
@@ -1700,7 +1722,52 @@ struct DashboardView: View {
         return normalized
     }
 
+    private func recordCurrentLayoutKeyframeIfNeeded(force: Bool = false) {
+        guard commandController.isRecording,
+              recordingControlState == .recording,
+              recordingStartedAt != nil else {
+            return
+        }
+
+        let keyframe = RecordingLayoutKeyframe(
+            milliseconds: max(0, Int(currentActiveRecordingDuration() * 1_000)),
+            mode: mode,
+            layout: normalizedLayout(layout, for: mode),
+            pictureInPictureGeometry: currentPictureInPictureGeometry
+        )
+        if !force, recordingLayoutKeyframes.last == keyframe {
+            return
+        }
+        if recordingLayoutKeyframes.last?.mode == keyframe.mode,
+           recordingLayoutKeyframes.last?.layout == keyframe.layout,
+           recordingLayoutKeyframes.last?.pictureInPictureGeometry == keyframe.pictureInPictureGeometry {
+            return
+        }
+        recordingLayoutKeyframes.append(keyframe)
+    }
+
+    private func normalizedRecordingLayoutKeyframes() -> [RecordingLayoutKeyframe] {
+        var normalized: [RecordingLayoutKeyframe] = []
+        for keyframe in recordingLayoutKeyframes.sorted(by: { $0.milliseconds < $1.milliseconds }) {
+            if let last = normalized.last, last.milliseconds == keyframe.milliseconds {
+                normalized[normalized.count - 1] = keyframe
+                continue
+            }
+            if let last = normalized.last,
+               last.mode == keyframe.mode,
+               last.layout == keyframe.layout,
+               last.pictureInPictureGeometry == keyframe.pictureInPictureGeometry {
+                continue
+            }
+            normalized.append(keyframe)
+        }
+        return normalized
+    }
+
     private func handleScreenCaptureSourceChange() {
+        screenPreviewGeneration += 1
+        installScreenArchivePreviewHandler()
+
         guard commandController.isRecording, currentProgramUsesScreen else {
             restartScreenPreviewIfNeeded()
             return
@@ -1726,6 +1793,14 @@ struct DashboardView: View {
                     commandController.reportRecordingIssue("录制源切换失败：\(error.localizedDescription)")
                 }
             }
+        }
+    }
+
+    private func installScreenArchivePreviewHandler() {
+        let generation = screenPreviewGeneration
+        screenArchiveRecorder.onPreviewImage = { image in
+            guard generation == screenPreviewGeneration else { return }
+            latestScreenPreviewImage = image
         }
     }
 

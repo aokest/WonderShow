@@ -3,23 +3,32 @@
 ## 服务端口
 
 - 默认地址：`http://127.0.0.1:18777`
+- 默认只绑定本机 loopback。
+- App 自动启动 sidecar 时会注入一次性本地 token：`WONDERSHOW_LOCAL_TOKEN`。
+- Swift 请求会携带 `X-WonderShow-Local-Token`，`/health` 和 `/infer` 都必须通过该 token 校验。
+- sidecar 默认拒绝无 token 启动；临时本地开发必须显式传 `--allow-unauthenticated-local-dev`。
+- 不再向响应添加 `Access-Control-Allow-Origin: *`；Swift 原生客户端不需要 CORS。
 
 ## 接口
 
 ### `GET /health`
 
 - 用途：检查 sidecar 是否已启动
+- 鉴权：需要 `X-WonderShow-Local-Token`
 - 返回：
   - `ok`
   - `engine`
   - `model_path`
   - `hand_model_path`
+  - `auth_required`
 
 ### `POST /infer`
 
+- 鉴权：需要 `X-WonderShow-Local-Token`
 - 输入：
   - `timestamp_ms`
   - `image_base64`
+- 限制：请求体最大 6 MiB，避免本机恶意页面/进程用超大 body 压垮推理进程
 - 输出：
   - `ok`
   - `timestamp_ms`

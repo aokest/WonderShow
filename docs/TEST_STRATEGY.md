@@ -19,6 +19,8 @@
 - v0.7 连续缩放：快速动作识别、方向不反跳、grace/hysteresis 稳态
 - 录制工程模型：讲者摄像头原始轨、PPT/屏幕原始轨、program 输出轨
 - 时间轴视角模板：正式演讲的讲者全身/特写/画中画/PPT 全屏，以及培训录屏的特写画中画/纯 PPT
+- Program 渲染：导出编码、音轨时长、PiP keyframes、layout keyframes、屏幕/窗口 source 尺寸归一化
+- 安全边界：localhost token、Release 包去 DEBUG telemetry、项目导入 manifest 校验
 
 ### 2. App 手工回归
 
@@ -27,6 +29,9 @@
 - 演示目标切换
 - 彩排/录制状态切换
 - 预览界面状态展示
+- 录制中切换录制源、切换布局、暂停/继续、停止保存、预览合成、导出视频
+- 麦克风真实听测：开头无明显爆音，整段持续有声
+- 录制中画中画拖拽/缩放/形状、布局切换和导出视频一致
 
 ### 3. 未来补充
 
@@ -35,13 +40,15 @@
 - 端到端 UI 自动化
 - MediaPipe sidecar 健康检查与 `/infer` 接口回归
 - ScreenCaptureKit 真实屏幕采集、AVAssetWriter 写盘、program 渲染导出回归
+- `⌘1` 到 `⌘6` 快速切源 UI 自动化和手工回归
+- 自定义源位持久化、权限缺失、窗口关闭后的降级测试
 
 ## 本轮验收命令
 
 ```bash
-swift test --disable-sandbox
-swift run PresenterDirectorApp
-bash scripts/build-app.sh
+rtk swift test --disable-sandbox
+rtk swift run --disable-sandbox PresenterDirectorApp
+rtk bash scripts/build-app.sh
 ```
 
 ## 重点关注
@@ -54,3 +61,6 @@ bash scripts/build-app.sh
 - 上一页和下一页的识别难度应尽量对称
 - 正式演讲和培训录屏应共享同一套双源采集模型，只在默认镜头景别、PiP 位置和时间轴视角模板上分化
 - 纯 PPT 视图不应混入讲者图层，避免后续导出高清 PPT 全屏时被摄像头素材污染
+- 录制中切源/切布局不应只改变监视器，必须进入 manifest 并影响预览/导出
+- Program 导出必须包含有效音轨，不能只有开头瞬间或无声
+- 已稳定的 v0.7.20260619 主链路变更前先补回归测试，再做小步替换

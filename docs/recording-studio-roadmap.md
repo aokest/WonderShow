@@ -14,7 +14,10 @@ The current app can be tried as a recording studio baseline:
 - The current record button creates a `.wondershow` project folder under `~/Movies/灵演/` with `Raw/`, `Exports/`, and `project.json`.
 - Presenter camera, selected screen/window, and selected microphone tracks can be recorded to raw media.
 - Screen/window source picking supports list and thumbnail views and filters out background/no-window items.
+- Screen/window source switching during recording preserves a fixed raw track canvas and crops ScreenCaptureKit `contentRect` before normalization, so monitor preview and program preview/export stay closer in source size.
 - The monitor supports draggable/resizable shaped PiP, and the same PiP geometry/keyframes are used by preview and export.
+- Layout switching during recording is stored as `RecordingLayoutKeyframe`, so screen-main/speaker-main changes appear in preview and export.
+- Microphone recording uses sample-level `AVCaptureAudioDataOutput + AVAssetWriter`, skips startup transient audio, waits for writer completion on stop, and supports pause/resume retiming.
 - Preview composition and video export are connected to the real renderer.
 - Export settings are real: selected resolution, frame rate, quality, and codec are passed into the writer and covered by tests.
 - Export progress, generated file size, success dialog, and Finder reveal are present.
@@ -28,6 +31,7 @@ The following features are not implemented yet:
 - Multi-camera simultaneous recording UI.
 - Beauty, lighting, and mirror controls for presenter video.
 - Menu bar resident app mode and draggable desktop mini toolbar, including pause/resume/stop/time plus active-window/source switching.
+- `Command+1` through `Command+6` fast source switching during recording, with user-defined source slot assignments in the active-window/source picker.
 - Licensing, paid activation, App Store / direct-sale entitlement design.
 - Multi-endpoint support across macOS, iPad, iPhone, Android, Windows PC, and potentially HarmonyOS.
 - Multiple UI skins/themes beyond the current warm dark-gold console.
@@ -66,7 +70,6 @@ Composition modes:
 - Speaker only.
 - Screen with picture-in-picture camera.
 - Camera with picture-in-picture screen.
-- Side-by-side.
 - Keyed cutout speaker over screen.
 - Two-camera layout for stage plus close-up.
 
@@ -135,7 +138,7 @@ Users should be able to:
 - Add a speaker camera as picture-in-picture.
 - Pick corner, size, shape, shadow, and border.
 - Animate PiP layout changes over time.
-- Switch between speaker close-up, screen-first, side-by-side, and full-camera moments.
+- Switch between speaker close-up, screen-first, screen-only, and full-camera moments.
 - Save camera-only and screen-only raw files alongside the final program output.
 
 ### Export Settings
@@ -185,10 +188,11 @@ The current core model intentionally keeps capture/rendering concerns out of the
   - `Raw/microphone.m4a`
   - `Exports/program.mp4`
 - `RecordingSessionService` writes the project manifest from the record button and updates it as recording duration, PiP geometry, and keyframes change.
+- `RecordingLayoutKeyframe` records layout switches during recording and is converted into program timeline segments before preview/export.
 - `CameraArchiveRecorder` writes the presenter-camera raw track from the existing AVFoundation camera frame stream.
-- `ScreenArchiveRecorder` writes the selected PPT/screen/window raw track through ScreenCaptureKit when Screen Recording permission is available, and supports source updates during recording.
-- `MicrophoneArchiveRecorder` writes the selected microphone raw track and supports pause/resume.
-- `ProgramVideoRenderer` exports program video from raw tracks, applying full-screen slides, speaker full-body/close-up, custom PiP geometry/keyframes, audio merge, and selected export settings.
+- `ScreenArchiveRecorder` writes the selected PPT/screen/window raw track through ScreenCaptureKit when Screen Recording permission is available, supports source updates during recording, and uses ScreenCaptureKit frame `contentRect` / `scaleFactor` to avoid baking source-switch black borders into the raw screen track.
+- `MicrophoneArchiveRecorder` writes the selected microphone raw track with sample-level `AVCaptureAudioDataOutput + AVAssetWriter` and supports pause/resume.
+- `ProgramVideoRenderer` exports program video from raw tracks, applying full-screen slides, speaker full-body/close-up, custom PiP geometry/keyframes, layout timeline segments, audio merge, and selected export settings.
 - If screen permission or a raw track is missing, the app keeps the project and reports the missing export step through UI feedback instead of silently doing nothing.
 
 ## Implementation Order
@@ -198,12 +202,12 @@ The current core model intentionally keeps capture/rendering concerns out of the
 3. Screen recording with raw screen plus speaker camera files. Done for single selected screen/window plus one presenter camera.
 4. Basic program export with PiP layout. Done, including draggable/resizable/shaped PiP and keyframes.
 5. Project file serialization for raw media plus metadata. Done for current manifest.
-6. Stabilize active-window monitor preview jitter. Next P0.
-7. Add presenter video quality controls: mirror, brightness, light beauty. Next P1.
-8. Convert the bottom timeline from status display to real track display. Next P1.
-9. Add editable timeline operations: fold, delete, drag playhead, multi-select, selected-track export, and one-or-many selected time-range export. Next P1.
-10. Add menu bar resident mode and draggable desktop mini toolbar with pause/resume/stop/time plus active-window/source switching. Next P1.
-11. Add presenter video quality controls: mirror, brightness, light beauty. Next P1.
+6. Stabilize active-window monitor preview / program preview source size consistency. Done for the high-probability `contentRect` and source-update causes; keep real-window jitter as watch item.
+7. Add `Command+1` to `Command+6` fast source switching and user-defined source slots in the active-window/source picker. Next P1.
+8. Add presenter video quality controls: mirror, brightness, light beauty. Next P1.
+9. Convert the bottom timeline from status display to real track display. Next P1.
+10. Add editable timeline operations: fold, delete, drag playhead, multi-select, selected-track export, and one-or-many selected time-range export. Next P1.
+11. Add menu bar resident mode and draggable desktop mini toolbar with pause/resume/stop/time plus active-window/source switching. Next P1.
 12. Design licensing, paid activation, App Store distribution, direct-sale license keys, and entitlement recovery. Next P2.
 13. Design multi-endpoint support for macOS, iPad, iPhone, Android, Windows PC, and potentially HarmonyOS. Next P2.
 14. Add a theme system with warm dark-gold, minimalist light, business, geek, gold, black, and white skins. Next P2.

@@ -1,5 +1,19 @@
 # 文档变更记录
 
+## 2026-06-19
+
+- 根据安全审计更新本地安全边界：DemoControlServer 显式绑定 `127.0.0.1` 并引入本地一次性 token，MediaPipe sidecar `/health` 与 `/infer` 需要 `X-WonderShow-Local-Token`，去除通配 CORS 并限制请求体大小。
+- 更新打包语义：`scripts/build-app.sh` 默认 Release 构建，确保 `#if DEBUG` 调试遥测不进入可分发包。
+- 更新项目导入风险说明：`RecordingProjectStore` 增加 manifest 大小和 `schemaVersion` 校验。
+- 更新 `docs/HANDOFF-2026-06-18.md`、`docs/INDEX.md`、`docs/RISK_MODEL.md` 和 MediaPipe sidecar 模块文档，记录审计接受结论、落地修复和剩余发布安全事项。
+- 新增 `docs/NEXT_AGENT_PROMPT.md`，作为后续智能体接力提示词。
+- 修复既有 Swift 6 `CMSampleBuffer` 并发 warning：`CameraPreviewService` 不再跨 actor 传递 sample buffer，改为在 capture queue 上转 JPEG 或提取 `HandPoint` 后再回 MainActor；同步更新 handoff 和接力提示词。
+- 修复录制中切换屏幕/窗口源后监视器小画面或抖动的高概率根因：`ScreenArchiveRecorder.updateSource` 同步更新 `SCStreamConfiguration` 与 `SCContentFilter`，切源过渡期间不发布临时预览帧、写盘沿用上一帧直到新源稳定帧到来，写盘时将不同尺寸的新源按 aspect-fit 归一到固定 raw 轨尺寸；Dashboard 增加 preview generation，防止旧源迟到帧覆盖当前监视器。
+- 继续修复“监视器里录制源正常，但预览合成里屏幕源变小”：`ScreenArchiveRecorder` 读取 ScreenCaptureKit sampleBuffer 的 `contentRect` / `scaleFactor`，写入 raw 屏幕轨前先裁掉真实内容外黑边，再归一到固定录制画布；实时 recorder preview 同步使用该裁切路径。新增 contentRect/Retina/clamp 回归测试，全量 `rtk swift test --disable-sandbox` 118/118 通过，Release 构建版本 `0.7.20260619 (202606190229)`。
+- 修复麦克风开头爆音/随后断音的高风险链路：`MicrophoneArchiveRecorder` 从 `AVCaptureAudioFileOutput` 改为 `AVCaptureAudioDataOutput + AVAssetWriter` 样本级写入，跳过开录约 120ms 瞬态，停止时等待 writer 完成，暂停/继续时 retime 音频样本。导出测试新增音轨时长断言。
+- 修复录制中切换“布局”没有进入预览/导出：新增 `RecordingLayoutKeyframe`，Dashboard 在录制中切布局时记录 keyframe，停止保存时拆分 program timeline；新增 manifest 和真实渲染测试覆盖。全量 `rtk swift test --disable-sandbox` 120/120 通过，Release 构建版本 `0.7.20260619 (202606190305)`。
+- 用户复测确认 `v0.7.20260619 (202606190305)` 为真正稳定基线；同步更新 README、文档索引、PRD、架构、风险模型、测试策略、录制工作室路线图、Dashboard 模块文档、handoff 和接力提示词。新增未来规划：录制中通过 `Command+1` 到 `Command+6` 快速切换监控台录制源，并允许用户在活跃窗格选择器中自定义 1-6 源位。
+
 ## 2026-06-18
 
 - 新增 `docs/HANDOFF-2026-06-18.md`：固化当前阶段交接文档，包含项目立项背景、开发意图、版本迭代过程、当前已实现功能、技术预研结论、Debug 记录、已踩坑和后续计划。

@@ -32,15 +32,38 @@ struct AudioInputDeviceOption: Identifiable, Hashable, Sendable {
     )
 }
 
-final class MicrophoneArchiveRecorder: @unchecked Sendable {
+private final class MicrophoneSampleBuffer: @unchecked Sendable {
+    let value: CMSampleBuffer
+
+    init(_ value: CMSampleBuffer) {
+        self.value = value
+    }
+}
+
+final class MicrophoneArchiveRecorder: NSObject, @unchecked Sendable {
+    private struct ActiveRecording: @unchecked Sendable {
+        let writer: AVAssetWriter
+        let input: AVAssetWriterInput
+        let outputURL: URL
+        var sessionStarted = false
+        var firstSampleTime: CMTime?
+        var totalPausedDuration = CMTime.zero
+        var pauseStartedAt: CMTime?
+        var latestSampleTime: CMTime?
+        var samplesWritten = 0
+    }
+
     private let queue = DispatchQueue(label: "com.lingyan.microphone-archive-recorder")
     private let fileManager: FileManager
     private var session: AVCaptureSession?
-    private var audioOutput: AVCaptureAudioFileOutput?
-    private var recordingDelegate: MicrophoneArchiveRecordingDelegate?
+    private var audioOutput: AVCaptureAudioDataOutput?
+    private var activeRecording: ActiveRecording?
+    private var isFinishing = false
+    private var pendingStopCompletions: [@Sendable () -> Void] = []
 
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
+        super.init()
     }
 
     static func availableInputDevices() -> [AudioInputDeviceOption] {
@@ -102,87 +125,215 @@ final class MicrophoneArchiveRecorder: @unchecked Sendable {
 
     func pauseRecording() {
         queue.async { [weak self] in
-            guard self?.audioOutput?.isRecording == true,
-                  self?.audioOutput?.isRecordingPaused == false else {
+            guard var recording = self?.activeRecording,
+                  recording.pauseStartedAt == nil else {
                 return
             }
-            self?.audioOutput?.pauseRecording()
+            recording.pauseStartedAt = recording.latestSampleTime ?? recording.firstSampleTime
+            self?.activeRecording = recording
         }
     }
 
     func resumeRecording() {
         queue.async { [weak self] in
-            guard self?.audioOutput?.isRecording == true,
-                  self?.audioOutput?.isRecordingPaused == true else {
+            guard var recording = self?.activeRecording,
+                  let pauseStartedAt = recording.pauseStartedAt else {
                 return
             }
-            self?.audioOutput?.resumeRecording()
+            let latestSampleTime = recording.latestSampleTime ?? pauseStartedAt
+            if latestSampleTime > pauseStartedAt {
+                recording.totalPausedDuration = recording.totalPausedDuration + (latestSampleTime - pauseStartedAt)
+            }
+            recording.pauseStartedAt = nil
+            self?.activeRecording = recording
         }
     }
 
     private func startOnQueue(outputURL: URL, deviceID: String?) throws {
-        guard audioOutput?.isRecording != true else {
+        guard activeRecording == nil, !isFinishing else {
             throw MicrophoneArchiveRecorderError.cannotStart
         }
         stopOnQueue()
 
-        let session = AVCaptureSession()
-        session.beginConfiguration()
+        let captureSession = AVCaptureSession()
+        captureSession.beginConfiguration()
         let device = try audioDevice(for: deviceID)
         let input = try AVCaptureDeviceInput(device: device)
-        guard session.canAddInput(input) else {
-            session.commitConfiguration()
+        guard captureSession.canAddInput(input) else {
+            captureSession.commitConfiguration()
             throw MicrophoneArchiveRecorderError.cannotStart
         }
-        session.addInput(input)
+        captureSession.addInput(input)
 
-        let output = AVCaptureAudioFileOutput()
-        guard session.canAddOutput(output) else {
-            session.commitConfiguration()
+        let output = AVCaptureAudioDataOutput()
+        output.setSampleBufferDelegate(self, queue: queue)
+        guard captureSession.canAddOutput(output) else {
+            captureSession.commitConfiguration()
             throw MicrophoneArchiveRecorderError.cannotStart
         }
-        session.addOutput(output)
-        session.commitConfiguration()
+        captureSession.addOutput(output)
+        captureSession.commitConfiguration()
 
-        let delegate = MicrophoneArchiveRecordingDelegate()
-        self.session = session
-        self.audioOutput = output
-        self.recordingDelegate = delegate
-
-        session.startRunning()
-        output.startRecording(to: outputURL, outputFileType: .m4a, recordingDelegate: delegate)
-        guard output.isRecording else {
-            session.stopRunning()
-            self.session = nil
-            self.audioOutput = nil
-            self.recordingDelegate = nil
+        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .m4a)
+        let writerInput = AVAssetWriterInput(
+            mediaType: .audio,
+            outputSettings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVNumberOfChannelsKey: 1,
+                AVSampleRateKey: 48_000,
+                AVEncoderBitRateKey: 128_000
+            ]
+        )
+        writerInput.expectsMediaDataInRealTime = true
+        guard writer.canAdd(writerInput) else {
             throw MicrophoneArchiveRecorderError.cannotStart
         }
+        writer.add(writerInput)
+        guard writer.startWriting() else {
+            throw writer.error ?? MicrophoneArchiveRecorderError.cannotStart
+        }
+
+        session = captureSession
+        audioOutput = output
+        activeRecording = ActiveRecording(
+            writer: writer,
+            input: writerInput,
+            outputURL: outputURL
+        )
+        captureSession.startRunning()
     }
 
     private func stopOnQueue(completion: (@Sendable () -> Void)? = nil) {
-        if audioOutput?.isRecording == true, let delegate = recordingDelegate {
-            delegate.onFinish = { [weak self, completion] in
-                guard let recorder = self else {
-                    completion?()
-                    return
-                }
-                recorder.queue.async { [weak recorder, completion] in
-                    recorder?.session?.stopRunning()
-                    recorder?.audioOutput = nil
-                    recorder?.recordingDelegate = nil
-                    recorder?.session = nil
-                    completion?()
-                }
-            }
-            audioOutput?.stopRecording()
+        if let completion {
+            pendingStopCompletions.append(completion)
+        }
+
+        session?.stopRunning()
+        session = nil
+        audioOutput?.setSampleBufferDelegate(nil, queue: nil)
+        audioOutput = nil
+
+        guard let recording = activeRecording, !isFinishing else {
+            finishPendingStopCompletions()
             return
         }
-        session?.stopRunning()
-        audioOutput = nil
-        recordingDelegate = nil
-        session = nil
-        completion?()
+
+        isFinishing = true
+        activeRecording = nil
+        recording.input.markAsFinished()
+        recording.writer.finishWriting { [weak self] in
+            guard let recorder = self else {
+                return
+            }
+            recorder.queue.async { [weak recorder] in
+                recorder?.isFinishing = false
+                recorder?.finishPendingStopCompletions()
+            }
+        }
+    }
+
+    private func finishPendingStopCompletions() {
+        let completions = pendingStopCompletions
+        pendingStopCompletions = []
+        completions.forEach { $0() }
+    }
+
+    private func appendOnQueue(_ sampleBuffer: CMSampleBuffer) {
+        guard var recording = activeRecording,
+              recording.pauseStartedAt == nil,
+              recording.writer.status == .writing,
+              recording.input.isReadyForMoreMediaData else {
+            return
+        }
+
+        let sampleTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard sampleTime.isValid else {
+            return
+        }
+        recording.latestSampleTime = sampleTime
+
+        if recording.pauseStartedAt != nil {
+            activeRecording = recording
+            return
+        }
+
+        if recording.firstSampleTime == nil {
+            recording.firstSampleTime = sampleTime
+            recording.writer.startSession(atSourceTime: sampleTime + Self.startupTransientSkip)
+            recording.sessionStarted = true
+            activeRecording = recording
+            return
+        }
+
+        guard recording.sessionStarted,
+              let firstSampleTime = recording.firstSampleTime,
+              sampleTime - firstSampleTime >= Self.startupTransientSkip else {
+            activeRecording = recording
+            return
+        }
+
+        let sampleToAppend = retimed(sampleBuffer, subtracting: recording.totalPausedDuration) ?? sampleBuffer
+        if recording.input.append(sampleToAppend) {
+            recording.samplesWritten += 1
+        }
+        activeRecording = recording
+    }
+
+    private func retimed(_ sampleBuffer: CMSampleBuffer, subtracting offset: CMTime) -> CMSampleBuffer? {
+        guard offset.isValid, offset > .zero else {
+            return sampleBuffer
+        }
+
+        var timingCount: CMItemCount = 0
+        CMSampleBufferGetSampleTimingInfoArray(
+            sampleBuffer,
+            entryCount: 0,
+            arrayToFill: nil,
+            entriesNeededOut: &timingCount
+        )
+        guard timingCount > 0 else {
+            return nil
+        }
+
+        var timing = Array(
+            repeating: CMSampleTimingInfo(
+                duration: .invalid,
+                presentationTimeStamp: .invalid,
+                decodeTimeStamp: .invalid
+            ),
+            count: timingCount
+        )
+        let status = CMSampleBufferGetSampleTimingInfoArray(
+            sampleBuffer,
+            entryCount: timingCount,
+            arrayToFill: &timing,
+            entriesNeededOut: nil
+        )
+        guard status == noErr else {
+            return nil
+        }
+
+        for index in timing.indices {
+            if timing[index].presentationTimeStamp.isValid {
+                timing[index].presentationTimeStamp = timing[index].presentationTimeStamp - offset
+            }
+            if timing[index].decodeTimeStamp.isValid {
+                timing[index].decodeTimeStamp = timing[index].decodeTimeStamp - offset
+            }
+        }
+
+        var retimedBuffer: CMSampleBuffer?
+        let copyStatus = CMSampleBufferCreateCopyWithNewTiming(
+            allocator: kCFAllocatorDefault,
+            sampleBuffer: sampleBuffer,
+            sampleTimingEntryCount: timingCount,
+            sampleTimingArray: &timing,
+            sampleBufferOut: &retimedBuffer
+        )
+        guard copyStatus == noErr else {
+            return nil
+        }
+        return retimedBuffer
     }
 
     private func audioDevice(for deviceID: String?) throws -> AVCaptureDevice {
@@ -221,18 +372,19 @@ final class MicrophoneArchiveRecorder: @unchecked Sendable {
             return false
         }
     }
+
+    private static let startupTransientSkip = CMTime(seconds: 0.12, preferredTimescale: 48_000)
 }
 
-private final class MicrophoneArchiveRecordingDelegate: NSObject, AVCaptureFileOutputRecordingDelegate {
-    var onFinish: (@Sendable () -> Void)?
-
-    func fileOutput(
-        _ output: AVCaptureFileOutput,
-        didFinishRecordingTo outputFileURL: URL,
-        from connections: [AVCaptureConnection],
-        error: (any Error)?
+extension MicrophoneArchiveRecorder: AVCaptureAudioDataOutputSampleBufferDelegate {
+    nonisolated func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
     ) {
-        onFinish?()
-        onFinish = nil
+        let sampleBufferBox = MicrophoneSampleBuffer(sampleBuffer)
+        queue.async { [weak self, sampleBufferBox] in
+            self?.appendOnQueue(sampleBufferBox.value)
+        }
     }
 }

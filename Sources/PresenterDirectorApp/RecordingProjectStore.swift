@@ -3,6 +3,8 @@ import PresenterDirector
 
 enum RecordingProjectStoreError: Error, LocalizedError {
     case missingManifest(URL)
+    case manifestTooLarge(URL, Int64)
+    case unsupportedSchemaVersion(Int)
     case missingProgramExport(URL)
     case sameSourceAndDestination(URL)
 
@@ -10,6 +12,10 @@ enum RecordingProjectStoreError: Error, LocalizedError {
         switch self {
         case .missingManifest(let url):
             return "未找到项目文件：\(url.path)"
+        case .manifestTooLarge(let url, let size):
+            return "项目文件过大，已拒绝导入：\(url.path)（\(size) 字节）"
+        case .unsupportedSchemaVersion(let version):
+            return "不支持的项目 schemaVersion：\(version)"
         case .missingProgramExport(let url):
             return "合成视频尚未生成：\(url.path)"
         case .sameSourceAndDestination(let url):
@@ -19,6 +25,9 @@ enum RecordingProjectStoreError: Error, LocalizedError {
 }
 
 struct RecordingProjectStore {
+    private static let maximumManifestSizeBytes: Int64 = 2 * 1_024 * 1_024
+    private static let supportedSchemaVersions: Set<Int> = [1]
+
     private let fileManager: FileManager
 
     init(fileManager: FileManager = .default) {
@@ -38,8 +47,17 @@ struct RecordingProjectStore {
             throw RecordingProjectStoreError.missingManifest(manifestURL)
         }
 
+        let manifestSize = (try fileManager.attributesOfItem(atPath: manifestURL.path)[.size] as? NSNumber)?
+            .int64Value ?? 0
+        guard manifestSize <= Self.maximumManifestSizeBytes else {
+            throw RecordingProjectStoreError.manifestTooLarge(manifestURL, manifestSize)
+        }
+
         let data = try Data(contentsOf: manifestURL)
         let manifest = try JSONDecoder().decode(RecordingProjectManifest.self, from: data)
+        guard Self.supportedSchemaVersions.contains(manifest.schemaVersion) else {
+            throw RecordingProjectStoreError.unsupportedSchemaVersion(manifest.schemaVersion)
+        }
         return RecordingSessionRecord(
             url: projectURL,
             manifestURL: manifestURL,

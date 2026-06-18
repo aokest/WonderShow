@@ -23,7 +23,7 @@ See [docs/recording-studio-roadmap.md](docs/recording-studio-roadmap.md) for the
 
 ## Current Status
 
-This repository currently contains a tested macOS recording-studio baseline:
+This repository currently contains the tested `v0.7.20260619 (202606190305)` macOS recording-studio baseline:
 
 - gesture intent to presentation command mapping;
 - app compatibility strategy for Office, WPS, generic keyboard control, and HTML decks;
@@ -31,9 +31,14 @@ This repository currently contains a tested macOS recording-studio baseline:
 - recording project planning and `.wondershow` project persistence;
 - camera, selected screen/window, and selected microphone raw recording;
 - monitor picture-in-picture with draggable position, size, and shape;
+- source switching during recording with stable raw screen-track normalization;
+- layout switching during recording through manifest timeline keyframes;
+- sample-level microphone recording with continuous program audio export;
 - preview composition and video export through the real renderer;
 - export settings for resolution, frame rate, quality, and codec;
 - multi-camera capability modeling, with Pocket 3 as one verified UVC input.
+
+The current baseline has passed `rtk swift test --disable-sandbox` with 120 tests and `rtk bash scripts/build-app.sh` release packaging. Treat this version as the stable recording baseline before adding timeline editing, presenter video enhancement, menu-bar/mini-toolbar controls, licensing, multi-endpoint support, themes, and `Command+1` through `Command+6` fast source switching with user-defined source slots.
 
 ## Development
 

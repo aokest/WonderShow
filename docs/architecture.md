@@ -100,19 +100,21 @@ Inputs:
 
 - One or two camera streams.
 - Screen or window capture.
-- Optional microphone input in a later phase.
+- Selected microphone input.
 
 Outputs:
 
 - Camera archive.
 - Screen archive.
+- Microphone archive.
 - Composited program recording.
 
 Layouts:
 
 - Speaker close-up only.
 - Screen with camera picture-in-picture.
-- Side-by-side.
+- Camera with screen picture-in-picture.
+- Screen-only.
 
 ## Development Plan
 
@@ -135,8 +137,9 @@ Layouts:
 
 - Add ScreenCaptureKit source picker.
 - Capture selected camera input plus selected screen/window.
-- Write camera archive, screen archive, and composited recording.
-- Add layout selection.
+- Write camera archive, screen archive, microphone archive, and composited recording.
+- Add layout selection and layout keyframes.
+- Status: current `v0.7.20260619 (202606190305)` baseline has implemented this path and passed user testing.
 
 ### Phase 4: Annotation
 
@@ -153,14 +156,26 @@ Layouts:
 
 ## Current Implementation
 
-The repository currently contains a Swift package with the core decision layer and tests:
+The repository currently contains a Swift package plus a macOS SwiftUI app. The stable baseline is `v0.7.20260619 (202606190305)`.
 
 - `PresentationDirector`: gesture to command mapping, transport selection, cooldown.
 - `RecordingPipelineFactory`: recording mode to input/output/composition mapping.
 - `DeviceCapability.supportedExamples`: models built-in cameras, Pocket 3, Insta360/运动相机, UVC capture devices, and network cameras.
+- `RecordingProjectFactory` / `RecordingSessionService`: `.wondershow` project manifest, raw track layout, PiP geometry, layout keyframes, export paths.
+- `CameraArchiveRecorder`: presenter-camera raw track.
+- `ScreenArchiveRecorder`: selected screen/window raw track through ScreenCaptureKit, including recording-time source switching and `contentRect` / Retina-scale normalization.
+- `MicrophoneArchiveRecorder`: selected microphone raw track using sample-level `AVCaptureAudioDataOutput + AVAssetWriter`.
+- `ProgramVideoRenderer`: preview composition and final MP4 export with PiP, layout timeline, audio merge, export settings, progress, and output validation.
+
+Future recording work should not reintroduce the removed side-by-side layout as a default UI mode; the current product direction favors screen-only, speaker-only, and picture-in-picture compositions.
+
+Future planned source switching:
+
+- `Command+1` through `Command+6` should quickly switch the monitor to user-defined source slots during recording.
+- Source slots should be assigned in the active-window/source picker and should reuse the current ScreenCaptureKit selection/update pipeline.
 
 Run tests:
 
 ```bash
-swift test
+rtk swift test --disable-sandbox
 ```

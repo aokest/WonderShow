@@ -548,6 +548,7 @@ private func reportZoomRuntimeDebug(
     message: String,
     data: [String: Any]
 ) {
+    #if DEBUG
     guard let url = URL(string: "http://127.0.0.1:7777/event") else { return }
     guard JSONSerialization.isValidJSONObject(data) else { return }
     let payload: [String: Any] = [
@@ -565,6 +566,12 @@ private func reportZoomRuntimeDebug(
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = body
     URLSession.shared.dataTask(with: request).resume()
+    #else
+    _ = hypothesisId
+    _ = location
+    _ = message
+    _ = data
+    #endif
 }
 // #endregion
 

@@ -223,13 +223,17 @@ final class PresentationCommandController: ObservableObject {
 
     func finalizeLastRecordingTimeline(
         durationMilliseconds: Int,
-        pictureInPictureKeyframes keyframes: [RecordingPiPKeyframe]
+        pictureInPictureKeyframes keyframes: [RecordingPiPKeyframe],
+        layoutKeyframes: [RecordingLayoutKeyframe] = []
     ) {
         guard let session = lastRecordingSession else {
             return
         }
 
         var manifest = session.manifest.updatingTimelineDuration(milliseconds: durationMilliseconds)
+        if !layoutKeyframes.isEmpty {
+            manifest = manifest.updatingLayoutKeyframes(layoutKeyframes)
+        }
         if !keyframes.isEmpty {
             manifest = manifest.updatingPictureInPictureKeyframes(keyframes)
         }
@@ -712,7 +716,7 @@ final class PresentationCommandController: ObservableObject {
                 // #endregion
                 return .success(
                     backend: "本地测试页桥接",
-                    detail: "缩放到 \(Int((scale * 100).rounded()))% 已发送到 \(DemoControlServer.shared.demoURL.absoluteString)"
+                    detail: "缩放到 \(Int((scale * 100).rounded()))% 已发送到 \(DemoControlServer.shared.demoDisplayURL.absoluteString)"
                 )
             } catch {
                 return .failed(backend: "本地测试页桥接", detail: "无法启动本地测试页桥接：\(error.localizedDescription)")
@@ -724,7 +728,7 @@ final class PresentationCommandController: ObservableObject {
                 try DemoControlServer.shared.enqueuePan(x: x, y: y)
                 return .success(
                     backend: "本地测试页桥接",
-                    detail: "视图移动已发送到 \(DemoControlServer.shared.demoURL.absoluteString)"
+                    detail: "视图移动已发送到 \(DemoControlServer.shared.demoDisplayURL.absoluteString)"
                 )
             } catch {
                 return .failed(backend: "本地测试页桥接", detail: "无法启动本地测试页桥接：\(error.localizedDescription)")
@@ -740,7 +744,7 @@ final class PresentationCommandController: ObservableObject {
                 try DemoControlServer.shared.enqueue(command, swipeVelocity: swipeVelocity)
                 return .success(
                     backend: "本地测试页桥接",
-                    detail: "\(action.label) 已发送到 \(DemoControlServer.shared.demoURL.absoluteString)"
+                    detail: "\(action.label) 已发送到 \(DemoControlServer.shared.demoDisplayURL.absoluteString)"
                 )
             } catch {
                 return .failed(backend: "本地测试页桥接", detail: "无法启动本地测试页桥接：\(error.localizedDescription)")
@@ -762,7 +766,7 @@ final class PresentationCommandController: ObservableObject {
             // #endregion
             return .success(
                 backend: "本地测试页桥接",
-                detail: "\(action.label) 已发送到 \(DemoControlServer.shared.demoURL.absoluteString)"
+                detail: "\(action.label) 已发送到 \(DemoControlServer.shared.demoDisplayURL.absoluteString)"
             )
         } catch {
             return .failed(backend: "本地测试页桥接", detail: "无法启动本地测试页桥接：\(error.localizedDescription)")
@@ -806,6 +810,7 @@ final class PresentationCommandController: ObservableObject {
         message: String,
         data: [String: Any]
     ) {
+        #if DEBUG
         guard let url = URL(string: "http://127.0.0.1:7777/event") else { return }
         guard JSONSerialization.isValidJSONObject(data) else { return }
         let payload: [String: Any] = [
@@ -823,6 +828,12 @@ final class PresentationCommandController: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         URLSession.shared.dataTask(with: request).resume()
+        #else
+        _ = hypothesisId
+        _ = location
+        _ = message
+        _ = data
+        #endif
     }
     // #endregion
 

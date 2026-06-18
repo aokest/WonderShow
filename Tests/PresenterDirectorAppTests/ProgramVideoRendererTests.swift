@@ -55,6 +55,7 @@ import Testing
     #expect(h264Probe.height == 1080)
     #expect(abs(h264Probe.frameRate - 30) < 0.5)
     #expect(h264Probe.hasAudio)
+    #expect(h264Probe.audioDurationSeconds > 0.9)
 
     let hevcURL = rootURL.appendingPathComponent("Exports/hevc-1440p.mp4")
     let hevcSettings = RecordingExportSettings(
@@ -70,6 +71,7 @@ import Testing
     #expect(hevcProbe.height == 1440)
     #expect(abs(hevcProbe.frameRate - 60) < 0.5)
     #expect(hevcProbe.hasAudio)
+    #expect(hevcProbe.audioDurationSeconds > 0.9)
 }
 
 @Test func programVideoRendererUsesManifestPictureInPictureGeometry() async throws {
@@ -264,6 +266,87 @@ import Testing
     #expect(rightSecondPixel.red > 170)
 }
 
+@Test func programVideoRendererUsesLayoutKeyframeTimeline() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("lingyan-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .camera)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen)
+
+    let screenMainGeometry = ProgramPictureInPictureGeometry(
+        centerX: 0.78,
+        centerY: 0.72,
+        width: 0.18,
+        height: 0.18,
+        shape: .square
+    )
+    let speakerMainGeometry = ProgramPictureInPictureGeometry(
+        centerX: 0.78,
+        centerY: 0.72,
+        width: 0.18,
+        height: 0.18,
+        shape: .square
+    )
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .screenWithCameraPictureInPicture(corner: .bottomRight),
+        durationMilliseconds: 1_000,
+        pictureInPictureGeometry: screenMainGeometry
+    )
+    let manifest = RecordingProjectManifestFactory()
+        .makeManifest(project: project)
+        .updatingLayoutKeyframes([
+            RecordingLayoutKeyframe(
+                milliseconds: 0,
+                mode: .cameraAndScreen,
+                layout: .screenWithCameraPictureInPicture(corner: .bottomRight),
+                pictureInPictureGeometry: screenMainGeometry
+            ),
+            RecordingLayoutKeyframe(
+                milliseconds: 500,
+                mode: .cameraAndScreen,
+                layout: .cameraWithScreenPictureInPicture(corner: .topRight),
+                pictureInPictureGeometry: speakerMainGeometry
+            )
+        ])
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: manifest
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/layout-keyframed.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264),
+        outputURL: outputURL
+    )
+
+    let firstHalfImage = try frameImage(from: outputURL, seconds: 0.2)
+    let secondHalfImage = try frameImage(from: outputURL, seconds: 0.8)
+    let firstMainPixel = try #require(pixel(in: firstHalfImage, x: 120, y: 120))
+    let secondMainPixel = try #require(pixel(in: secondHalfImage, x: 120, y: 120))
+
+    #expect(firstMainPixel.blue > 160)
+    #expect(secondMainPixel.red > 170)
+}
+
 @Test func manifestPictureInPictureKeyframesSplitTimelineSegments() {
     let initial = ProgramPictureInPictureGeometry(
         centerX: 0.72,
@@ -312,6 +395,57 @@ import Testing
     #expect(customPiPGeometry(in: segments[2].scene) == resized)
 }
 
+@Test func manifestLayoutKeyframesSplitTimelineSegments() {
+    let firstGeometry = ProgramPictureInPictureGeometry(
+        centerX: 0.78,
+        centerY: 0.76,
+        width: 0.22,
+        height: 0.18,
+        shape: .roundedRectangle
+    )
+    let secondGeometry = ProgramPictureInPictureGeometry(
+        centerX: 0.24,
+        centerY: 0.26,
+        width: 0.18,
+        height: 0.18,
+        shape: .circle
+    )
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .screenWithCameraPictureInPicture(corner: .bottomRight),
+        durationMilliseconds: 10_000,
+        pictureInPictureGeometry: firstGeometry
+    )
+    let manifest = RecordingProjectManifestFactory().makeManifest(project: project)
+
+    let updated = manifest.updatingLayoutKeyframes([
+        RecordingLayoutKeyframe(
+            milliseconds: 0,
+            mode: .cameraAndScreen,
+            layout: .screenWithCameraPictureInPicture(corner: .bottomRight),
+            pictureInPictureGeometry: firstGeometry
+        ),
+        RecordingLayoutKeyframe(
+            milliseconds: 4_000,
+            mode: .cameraAndScreen,
+            layout: .cameraWithScreenPictureInPicture(corner: .topRight),
+            pictureInPictureGeometry: secondGeometry
+        )
+    ])
+    let segments = updated.project.timeline.segments
+
+    #expect(updated.project.timeline.isContiguous)
+    #expect(segments.map(\.startMilliseconds) == [0, 4_000])
+    #expect(segments.map(\.endMilliseconds) == [4_000, 10_000])
+    #expect(segments[0].scene.view == .slidesWithSpeakerPictureInPicture)
+    #expect(segments[1].scene.view == .speakerWithSlidesPictureInPicture)
+    #expect(customPiPGeometry(in: segments[0].scene) == firstGeometry)
+    #expect(customPiPGeometry(in: segments[1].scene) == secondGeometry)
+}
+
 @Test func manifestTimelineDurationCanBeFinalizedToActualRecordingLength() {
     let project = RecordingProjectFactory().makeProject(
         scenario: .trainingCourse,
@@ -342,6 +476,57 @@ import Testing
 
     #expect(size.width == 2940)
     #expect(size.height == 1912)
+}
+
+@Test func screenCaptureStreamOutputSizeUsesNewSourceSizeDuringRecordingSourceSwitch() {
+    let switchedWindowSize = ScreenArchiveRecorder.streamOutputSize(
+        selectionWidth: 1080,
+        selectionHeight: 720
+    )
+
+    #expect(switchedWindowSize == ScreenArchiveRecorder.CapturePixelSize(width: 1080, height: 720))
+}
+
+@Test func screenCaptureAspectFitRectFillsRecordingCanvasWithoutShifting() {
+    let rect = ScreenArchiveRecorder.aspectFitRect(
+        sourceSize: CGSize(width: 1080, height: 720),
+        targetSize: CGSize(width: 2940, height: 1912)
+    )
+
+    #expect(abs(rect.width - 2868) < 0.5)
+    #expect(abs(rect.height - 1912) < 0.5)
+    #expect(abs(rect.minX - 36) < 0.5)
+    #expect(abs(rect.minY) < 0.5)
+}
+
+@Test func screenCaptureContentRectUsesRetinaScaleFactorBeforeRecordingNormalization() {
+    let rect = ScreenArchiveRecorder.normalizedContentRect(
+        CGRect(x: 18, y: 24, width: 540, height: 360),
+        pixelSize: CGSize(width: 2940, height: 1912),
+        scaleFactor: 2
+    )
+
+    #expect(rect == CGRect(x: 36, y: 48, width: 1080, height: 720))
+}
+
+@Test func screenCaptureContentRectIgnoresFullFrameAttachment() {
+    let rect = ScreenArchiveRecorder.normalizedContentRect(
+        CGRect(x: 0, y: 0, width: 1920, height: 1080),
+        pixelSize: CGSize(width: 1920, height: 1080),
+        scaleFactor: 1
+    )
+
+    #expect(rect == nil)
+}
+
+@Test func screenCaptureContentRectClampsToPixelBufferBounds() {
+    let rect = ScreenArchiveRecorder.normalizedContentRect(
+        CGRect(x: 100, y: 50, width: 2000, height: 1200),
+        pixelSize: CGSize(width: 1280, height: 720),
+        scaleFactor: nil
+    )
+
+    #expect(rect == CGRect(x: 100, y: 50, width: 1180, height: 670))
 }
 
 @MainActor
@@ -514,6 +699,7 @@ private struct VideoProbe {
     let height: Int
     let frameRate: Double
     let hasAudio: Bool
+    let audioDurationSeconds: Double
 }
 
 private func probe(url: URL) async throws -> VideoProbe {
@@ -523,13 +709,15 @@ private func probe(url: URL) async throws -> VideoProbe {
     let dimensions = CMVideoFormatDescriptionGetDimensions(formatDescription)
     let codec = fourCharacterCodeString(CMFormatDescriptionGetMediaSubType(formatDescription))
     let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
-    let hasAudio = !(try await asset.loadTracks(withMediaType: .audio)).isEmpty
+    let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+    let audioDurationSeconds = try await audioTracks.first?.load(.timeRange).duration.seconds ?? 0
     return VideoProbe(
         codec: codec,
         width: Int(dimensions.width),
         height: Int(dimensions.height),
         frameRate: Double(nominalFrameRate),
-        hasAudio: hasAudio
+        hasAudio: !audioTracks.isEmpty,
+        audioDurationSeconds: audioDurationSeconds
     )
 }
 

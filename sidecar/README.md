@@ -48,7 +48,7 @@ sidecar/models/hand_landmarker.task
 然后运行：
 
 ```bash
-cd "/Users/aoke/code test/视频直播设备"
+cd "<repo-root>"
 source .venv-mediapipe/bin/activate
 python scripts/train_wondershow_gesture_model.py 手势图片示意
 ```
@@ -64,7 +64,7 @@ sidecar 启动时会自动加载它，并在 `/infer` 的每只手上返回 `cus
 ## 本地安装
 
 ```bash
-cd "/Users/aoke/code test/视频直播设备"
+cd "<repo-root>"
 python3 -m venv .venv-mediapipe
 source .venv-mediapipe/bin/activate
 python -m pip install --upgrade pip
@@ -74,23 +74,28 @@ python -m pip install -r sidecar/requirements.txt
 更简单的方式：
 
 ```bash
-cd "/Users/aoke/code test/视频直播设备"
+cd "<repo-root>"
 ./scripts/setup-mediapipe-sidecar.sh
 ```
 
 ## 启动
 
 ```bash
-cd "/Users/aoke/code test/视频直播设备"
+cd "<repo-root>"
 source .venv-mediapipe/bin/activate
-python sidecar/server.py
+WONDERSHOW_LOCAL_TOKEN=dev-local-token-please-change python sidecar/server.py
 ```
 
 ## 健康检查
 
 ```bash
-curl http://127.0.0.1:18777/health
+curl -H "X-WonderShow-Local-Token: dev-local-token-please-change" \
+  http://127.0.0.1:18777/health
 ```
+
+App 自动启动 sidecar 时会生成一次性本地 token 并通过环境变量传入；不要把真实 token 写进仓库、文档或日志。
+如果要手动启动 sidecar 并让 App 复用它，需要用同一个 `WONDERSHOW_LOCAL_TOKEN` 启动 App 和 sidecar；否则 App 会把该 sidecar 视为不可信并回退到 Vision 或尝试启动自己的 sidecar。
+如果只是短时本地调试，也可以显式传 `--allow-unauthenticated-local-dev`，但不要把这种模式用于分发或长期运行。
 
 ## 推理接口
 

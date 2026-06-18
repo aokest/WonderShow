@@ -9,6 +9,54 @@ final class CaptureSessionBox: @unchecked Sendable {
     let videoQueue = DispatchQueue(label: "com.lingyan.camera-frames")
 }
 
+private struct CameraGestureRuntimeSnapshot: Sendable {
+    let gestureControlEnabled: Bool
+    let isMediaPipeAvailable: Bool
+    let mediaPipeInferenceInFlight: Bool
+    let lastMediaPipeFrameTimestampMilliseconds: Int
+}
+
+private final class CameraGestureRuntimeState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var gestureControlEnabled = false
+    private var isMediaPipeAvailable = false
+    private var mediaPipeInferenceInFlight = false
+    private var lastMediaPipeFrameTimestampMilliseconds = 0
+
+    func update(
+        gestureControlEnabled: Bool? = nil,
+        isMediaPipeAvailable: Bool? = nil,
+        mediaPipeInferenceInFlight: Bool? = nil,
+        lastMediaPipeFrameTimestampMilliseconds: Int? = nil
+    ) {
+        lock.withLock {
+            if let gestureControlEnabled {
+                self.gestureControlEnabled = gestureControlEnabled
+            }
+            if let isMediaPipeAvailable {
+                self.isMediaPipeAvailable = isMediaPipeAvailable
+            }
+            if let mediaPipeInferenceInFlight {
+                self.mediaPipeInferenceInFlight = mediaPipeInferenceInFlight
+            }
+            if let lastMediaPipeFrameTimestampMilliseconds {
+                self.lastMediaPipeFrameTimestampMilliseconds = lastMediaPipeFrameTimestampMilliseconds
+            }
+        }
+    }
+
+    func snapshot() -> CameraGestureRuntimeSnapshot {
+        lock.withLock {
+            CameraGestureRuntimeSnapshot(
+                gestureControlEnabled: gestureControlEnabled,
+                isMediaPipeAvailable: isMediaPipeAvailable,
+                mediaPipeInferenceInFlight: mediaPipeInferenceInFlight,
+                lastMediaPipeFrameTimestampMilliseconds: lastMediaPipeFrameTimestampMilliseconds
+            )
+        }
+    }
+}
+
 struct CameraInputDevice: Identifiable, Hashable {
     let id: String
     let name: String
@@ -70,7 +118,11 @@ final class CameraPreviewService: NSObject, ObservableObject {
     @Published private(set) var gestureEngineLabel = "Vision 增强版"
     @Published private(set) var gestureZoneLabel = "热区待进入"
     @Published private(set) var gestureModeLabel = "空闲"
-    @Published var gestureControlEnabled = false
+    @Published var gestureControlEnabled = false {
+        didSet {
+            gestureRuntimeState.update(gestureControlEnabled: gestureControlEnabled)
+        }
+    }
     @Published var gestureCalibrationProfile = GestureProfile.default
 
     var onGestureRecognized: ((GestureIntent) -> Void)?
@@ -81,10 +133,10 @@ final class CameraPreviewService: NSObject, ObservableObject {
     private let cameraArchiveRecorder = CameraArchiveRecorder()
     private let sessionBox = CaptureSessionBox()
     private let sessionQueue = DispatchQueue(label: "com.lingyan.camera-session")
-    private let handPoseRequest = VNDetectHumanHandPoseRequest()
     private let activationZone = GestureActivationZone.presentationDefault
     private let unlockRecognizer = GestureHoldRecognizer(requiredShape: .openPalm)
     private let mediaPipeSidecar = MediaPipeSidecarClient()
+    private let gestureRuntimeState = CameraGestureRuntimeState()
     private var gestureSamples: [GestureFrameSnapshot] = []
     private var connectionAttemptID = UUID()
     private var personalizedLibrary = PersonalizedGestureLibrary()
@@ -121,11 +173,25 @@ final class CameraPreviewService: NSObject, ObservableObject {
     }
 
     override init() {
-        handPoseRequest.maximumHandCount = 2
         super.init()
         loadPersonalizedLibrary()
         refreshAvailableDevices()
         refreshGestureEngineAvailability()
+    }
+
+    private func setMediaPipeAvailable(_ isAvailable: Bool) {
+        isMediaPipeAvailable = isAvailable
+        gestureRuntimeState.update(isMediaPipeAvailable: isAvailable)
+    }
+
+    private func setMediaPipeInferenceInFlight(_ isInFlight: Bool) {
+        mediaPipeInferenceInFlight = isInFlight
+        gestureRuntimeState.update(mediaPipeInferenceInFlight: isInFlight)
+    }
+
+    private func setLastMediaPipeFrameTimestampMilliseconds(_ timestampMilliseconds: Int) {
+        lastMediaPipeFrameTimestampMilliseconds = timestampMilliseconds
+        gestureRuntimeState.update(lastMediaPipeFrameTimestampMilliseconds: timestampMilliseconds)
     }
 
     func start() {
@@ -319,16 +385,20 @@ final class CameraPreviewService: NSObject, ObservableObject {
     private func refreshGestureEngineAvailability() {
         Task { @MainActor in
             var health = await mediaPipeSidecar.health()
-            if health?.ok != true {
+            if !isTrustedMediaPipeHealth(health) {
                 launchMediaPipeSidecarIfPossible()
                 try? await Task.sleep(for: .milliseconds(450))
                 health = await mediaPipeSidecar.health()
             }
-            isMediaPipeAvailable = health?.ok == true
+            setMediaPipeAvailable(isTrustedMediaPipeHealth(health))
             gestureEngineLabel = isMediaPipeAvailable
                 ? GestureEngineBackend.mediaPipeSidecar.rawValue
                 : GestureEngineBackend.visionLegacy.rawValue
         }
+    }
+
+    private func isTrustedMediaPipeHealth(_ health: MediaPipeSidecarHealth?) -> Bool {
+        health?.ok == true && health?.authRequired == true
     }
 
     /// Attempts to launch the local MediaPipe sidecar from the project scripts when it is not already running.
@@ -349,6 +419,7 @@ final class CameraPreviewService: NSObject, ObservableObject {
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = [scriptURL.path]
         process.currentDirectoryURL = projectRootURL
+        WonderShowLocalSecurity.applyTokenEnvironment(to: process)
         process.standardOutput = Pipe()
         process.standardError = Pipe()
 
@@ -422,6 +493,46 @@ final class CameraPreviewService: NSObject, ObservableObject {
         return 3
     }
 
+    private nonisolated func processGestureFrameFromCaptureQueue(
+        _ sampleBuffer: CMSampleBuffer,
+        timestampMilliseconds: Int
+    ) {
+        let snapshot = gestureRuntimeState.snapshot()
+        guard snapshot.gestureControlEnabled else { return }
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+        if snapshot.isMediaPipeAvailable {
+            guard !snapshot.mediaPipeInferenceInFlight else { return }
+            guard timestampMilliseconds - snapshot.lastMediaPipeFrameTimestampMilliseconds >= mediaPipeMinimumFrameIntervalMilliseconds else {
+                return
+            }
+
+            if let jpegData = MediaPipeSidecarClient.jpegData(from: pixelBuffer) {
+                Task { @MainActor [weak self, jpegData, timestampMilliseconds] in
+                    self?.processGestureFrameWithMediaPipe(
+                        jpegData: jpegData,
+                        timestampMilliseconds: timestampMilliseconds
+                    )
+                }
+                return
+            }
+        }
+
+        do {
+            let rawPoints = try Self.visionHandPoints(from: pixelBuffer)
+            Task { @MainActor [weak self, rawPoints, timestampMilliseconds] in
+                self?.processVisionHandPoints(
+                    rawPoints,
+                    timestampMilliseconds: timestampMilliseconds
+                )
+            }
+        } catch {
+            Task { @MainActor [weak self] in
+                self?.processVisionFailure()
+            }
+        }
+    }
+
     private nonisolated func configureVideoOutput(on session: AVCaptureSession, sessionBox: CaptureSessionBox) {
         sessionBox.videoOutput.alwaysDiscardsLateVideoFrames = true
         sessionBox.videoOutput.setSampleBufferDelegate(self, queue: sessionBox.videoQueue)
@@ -440,36 +551,25 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         cameraArchiveRecorder.append(sampleBuffer)
 
         let timestampMilliseconds = Int(Date().timeIntervalSince1970 * 1_000)
-        Task { @MainActor in
-            guard gestureControlEnabled else { return }
-            if isMediaPipeAvailable {
-                processGestureFrameWithMediaPipe(sampleBuffer, timestampMilliseconds: timestampMilliseconds)
-            } else {
-                processGestureFrameWithVision(sampleBuffer, timestampMilliseconds: timestampMilliseconds)
-            }
-        }
+        processGestureFrameFromCaptureQueue(sampleBuffer, timestampMilliseconds: timestampMilliseconds)
     }
 
-    /// Sends the current frame to the local MediaPipe sidecar and applies the returned landmarks.
+    /// Sends an encoded frame to the local MediaPipe sidecar and applies the returned landmarks.
     /// - Parameters:
-    ///   - sampleBuffer: Captured camera frame.
+    ///   - jpegData: Captured camera frame encoded on the capture queue.
     ///   - timestampMilliseconds: Frame timestamp used for ordering and recognition windows.
     private func processGestureFrameWithMediaPipe(
-        _ sampleBuffer: CMSampleBuffer,
+        jpegData: Data,
         timestampMilliseconds: Int
     ) {
+        guard gestureControlEnabled else { return }
         guard !mediaPipeInferenceInFlight else { return }
         guard timestampMilliseconds - lastMediaPipeFrameTimestampMilliseconds >= mediaPipeMinimumFrameIntervalMilliseconds else {
             return
         }
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        guard let jpegData = MediaPipeSidecarClient.jpegData(from: pixelBuffer) else {
-            processGestureFrameWithVision(sampleBuffer, timestampMilliseconds: timestampMilliseconds)
-            return
-        }
 
-        mediaPipeInferenceInFlight = true
-        lastMediaPipeFrameTimestampMilliseconds = timestampMilliseconds
+        setMediaPipeInferenceInFlight(true)
+        setLastMediaPipeFrameTimestampMilliseconds(timestampMilliseconds)
 
         Task { [weak self, jpegData, timestampMilliseconds] in
             guard let self else { return }
@@ -478,16 +578,16 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
                 timestampMilliseconds: timestampMilliseconds
             )
             await MainActor.run {
-                self.mediaPipeInferenceInFlight = false
+                self.setMediaPipeInferenceInFlight(false)
                 guard self.gestureControlEnabled else { return }
                 guard let frame else {
-                    self.isMediaPipeAvailable = false
+                    self.setMediaPipeAvailable(false)
                     self.gestureEngineLabel = GestureEngineBackend.visionLegacy.rawValue
                     self.refreshGestureEngineAvailability()
                     return
                 }
 
-                self.isMediaPipeAvailable = true
+                self.setMediaPipeAvailable(true)
                 let gestureFrame = MediaPipeGestureAdapter.gestureCoordinateFrame(from: frame)
                 if gestureFrame.hands.isEmpty {
                     self.mediaPipeEmptyFrameStreak += 1
@@ -511,49 +611,42 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
     }
 
-    /// Processes the current frame with the legacy Vision recognizer as a fallback path.
+    /// Applies Vision fallback hand points already extracted on the capture queue.
     /// - Parameters:
-    ///   - sampleBuffer: Captured camera frame.
+    ///   - rawPoints: Vision-derived hand anchor points.
     ///   - timestampMilliseconds: Frame timestamp used for downstream recognition windows.
-    private func processGestureFrameWithVision(
-        _ sampleBuffer: CMSampleBuffer,
+    private func processVisionHandPoints(
+        _ rawPoints: [HandPoint],
         timestampMilliseconds: Int
     ) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-
-        do {
-            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
-            try handler.perform([handPoseRequest])
-            let observations = Array((handPoseRequest.results ?? []).prefix(2))
-            guard !observations.isEmpty else {
-                handleNoHandsDetected(
-                    timestampMilliseconds: timestampMilliseconds,
-                    engine: .visionLegacy
-                )
-                return
-            }
-
-            let rawPoints = try observations
-                .map { try handAnchorPoint(from: $0) }
-                .sorted { $0.x < $1.x }
-            latestHandGeometries = []
-            latestHandLandmarkPoints = []
-            processDetectedPoints(
-                rawPoints,
+        guard gestureControlEnabled else { return }
+        guard !rawPoints.isEmpty else {
+            handleNoHandsDetected(
                 timestampMilliseconds: timestampMilliseconds,
                 engine: .visionLegacy
             )
-        } catch {
-            latestHandPoints = []
-            detectedHandShapes = "未检测"
-            latestHandLandmarkPoints = []
-            gestureEngineLabel = GestureEngineBackend.visionLegacy.rawValue
-            gestureZoneLabel = "识别异常"
-            gestureGuidance = "识别失败，请检查光线和手部是否完整入镜"
-            continuousZoomTracker.reset(currentScale: zoomScale)
-            gestureSessionCoordinator.reset()
-            gestureStatus = .failed
+            return
         }
+
+        latestHandGeometries = []
+        latestHandLandmarkPoints = []
+        processDetectedPoints(
+            rawPoints,
+            timestampMilliseconds: timestampMilliseconds,
+            engine: .visionLegacy
+        )
+    }
+
+    private func processVisionFailure() {
+        latestHandPoints = []
+        detectedHandShapes = "未检测"
+        latestHandLandmarkPoints = []
+        gestureEngineLabel = GestureEngineBackend.visionLegacy.rawValue
+        gestureZoneLabel = "识别异常"
+        gestureGuidance = "识别失败，请检查光线和手部是否完整入镜"
+        continuousZoomTracker.reset(currentScale: zoomScale)
+        gestureSessionCoordinator.reset()
+        gestureStatus = .failed
     }
 
     /// Applies recognized hand points to the existing gesture pipeline regardless of the detection backend.
@@ -853,7 +946,18 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         return swipeReadyDetector.isSwipeReady(geometries: activeGeometries)
     }
 
-    private func handAnchorPoint(from observation: VNHumanHandPoseObservation) throws -> HandPoint {
+    private nonisolated static func visionHandPoints(from pixelBuffer: CVPixelBuffer) throws -> [HandPoint] {
+        let request = VNDetectHumanHandPoseRequest()
+        request.maximumHandCount = 2
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
+        try handler.perform([request])
+        let observations = Array((request.results ?? []).prefix(2))
+        return try observations
+            .map { try handAnchorPoint(from: $0) }
+            .sorted { $0.x < $1.x }
+    }
+
+    private nonisolated static func handAnchorPoint(from observation: VNHumanHandPoseObservation) throws -> HandPoint {
         let points = try observation.recognizedPoints(.all)
         let candidates = [
             points[.wrist],
@@ -871,7 +975,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         return HandPoint(x: Double(x), y: Double(y), shape: classifyHandShape(points))
     }
 
-    private func classifyHandShape(_ points: [VNHumanHandPoseObservation.JointName: VNRecognizedPoint]) -> HandShape {
+    private nonisolated static func classifyHandShape(_ points: [VNHumanHandPoseObservation.JointName: VNRecognizedPoint]) -> HandShape {
         let thumb = isExtended(.thumbTip, base: .thumbCMC, points: points, ratio: 1.15)
         let index = isExtended(.indexTip, base: .indexMCP, points: points)
         let middle = isExtended(.middleTip, base: .middleMCP, points: points)
@@ -902,7 +1006,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         return .natural
     }
 
-    private func isExtended(
+    private nonisolated static func isExtended(
         _ tip: VNHumanHandPoseObservation.JointName,
         base: VNHumanHandPoseObservation.JointName,
         points: [VNHumanHandPoseObservation.JointName: VNRecognizedPoint],
@@ -924,7 +1028,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         return tipDistance > baseDistance * ratio
     }
 
-    private func distance(_ a: CGPoint, _ b: CGPoint) -> Double {
+    private nonisolated static func distance(_ a: CGPoint, _ b: CGPoint) -> Double {
         let dx = Double(a.x - b.x)
         let dy = Double(a.y - b.y)
         return (dx * dx + dy * dy).squareRoot()
@@ -1543,9 +1647,9 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         smoothedPoints.removeAll()
         latestHandGeometries.removeAll()
         latestHandLandmarkPoints.removeAll()
-        mediaPipeInferenceInFlight = false
+        setMediaPipeInferenceInFlight(false)
         mediaPipeEmptyFrameStreak = 0
-        lastMediaPipeFrameTimestampMilliseconds = 0
+        setLastMediaPipeFrameTimestampMilliseconds(0)
         continuousZoomTracker.reset(currentScale: 1)
         gestureModeCoordinator.reset()
         gestureSessionCoordinator.reset()
@@ -1566,7 +1670,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
 
     /// Switches to Vision temporarily after repeated empty MediaPipe frames and retries the sidecar later.
     private func activateVisionFallbackAfterMediaPipeMisses() {
-        isMediaPipeAvailable = false
+        setMediaPipeAvailable(false)
         mediaPipeEmptyFrameStreak = 0
         gestureEngineLabel = GestureEngineBackend.visionLegacy.rawValue
         gestureGuidance = "MediaPipe 当前未稳定检出手，已临时切换到 Vision 兜底"
@@ -1589,6 +1693,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         message: String,
         data: [String: Any]
     ) {
+        #if DEBUG
         guard let url = URL(string: "http://127.0.0.1:7777/event") else { return }
         guard JSONSerialization.isValidJSONObject(data) else { return }
         let payload: [String: Any] = [
@@ -1606,6 +1711,12 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         URLSession.shared.dataTask(with: request).resume()
+        #else
+        _ = hypothesisId
+        _ = location
+        _ = message
+        _ = data
+        #endif
     }
     // #endregion
 

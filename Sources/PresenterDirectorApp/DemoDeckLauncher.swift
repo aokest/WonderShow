@@ -30,7 +30,6 @@ enum DemoDeckLauncher {
         let bundleURL = Bundle.main.bundleURL
         return [
             Bundle.main.url(forResource: "wondershow-demo", withExtension: "html"),
-            URL(fileURLWithPath: "/Users/aoke/code test/视频直播设备/examples/wondershow-demo.html"),
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
                 .appendingPathComponent("examples/wondershow-demo.html"),
             bundleURL

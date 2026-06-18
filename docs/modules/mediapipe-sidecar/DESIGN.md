@@ -11,6 +11,7 @@
 - Swift 负责采集、UI、命令路由
 - Python sidecar 负责手部检测、21 点 landmarks、手势分类、后续时序模型
 - 双方通过本机 HTTP/JSON 通信
+- 本机 HTTP 仍然属于攻击面：自动启动时使用一次性 token，Swift 请求通过 `X-WonderShow-Local-Token` 校验；响应不开放通配 CORS
 - 旧 Vision 路径暂时保留为回退方案
 
 ## 当前阶段
@@ -21,6 +22,7 @@
 - 已把 `CameraPreviewService` 接到 sidecar 实时推理链路
 - sidecar 在线时优先走 MediaPipe，离线时回退到 Vision
 - sidecar 现在以 `HandLandmarker` 作为双手与 21 点的权威来源，以 `GestureRecognizer` 作为分类标签来源
+- sidecar 的 `/health` 与 `/infer` 均支持本地 token 鉴权；Swift 只信任 `auth_required == true` 的 sidecar，避免误连旧版无鉴权进程
 
 ## 下一步
 

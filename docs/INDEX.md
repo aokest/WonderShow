@@ -5,11 +5,12 @@
 ## 必读顺序
 
 1. `docs/HANDOFF-2026-06-18.md`
-2. `docs/PRD.md`
-3. `docs/ARCH.md`
-4. `docs/RISK_MODEL.md`
-5. `docs/TEST_STRATEGY.md`
-6. 本次改动关联模块文档
+2. `docs/NEXT_AGENT_PROMPT.md`
+3. `docs/PRD.md`
+4. `docs/ARCH.md`
+5. `docs/RISK_MODEL.md`
+6. `docs/TEST_STRATEGY.md`
+7. 本次改动关联模块文档
    - `docs/modules/dashboard/DESIGN.md`
    - `docs/modules/dashboard/SPEC.md`
    - `docs/modules/dashboard/TEST.md`
@@ -19,15 +20,15 @@
    - `docs/modules/mediapipe-sidecar/DESIGN.md`
    - `docs/modules/mediapipe-sidecar/SPEC.md`
    - `docs/modules/mediapipe-sidecar/TEST.md`
-7. 历史补充资料
+8. 历史补充资料
    - `docs/architecture.md`
    - `docs/recording-studio-roadmap.md`
 
 ## 当前阶段
 
-- 阶段：`v0.7.20260618 录制工作室阶段基线`
-- 当前包：`dist/灵演.app`，版本 `0.7.20260618 (202606181959)`。
-- 目标：冻结当前已通过用户复测的录制源选择、讲者/屏幕/麦克风录制、画中画监视器、预览合成、视频导出、项目管理和录制状态控制能力，作为下一轮时间轴、画质增强、菜单栏常驻/桌面 mini toolbar、授权商业化、多端点、多主题和手势准确度提升的起点。
+- 阶段：`v0.7.20260619 录制工作室阶段基线`
+- 当前包：`dist/灵演.app`，版本 `0.7.20260619 (202606190305)`。
+- 目标：冻结当前已通过用户复测并确认稳定的录制源选择、讲者/屏幕/麦克风录制、画中画监视器、预览合成、视频导出、项目管理和录制状态控制能力，作为下一轮快捷切源、时间轴、画质增强、菜单栏常驻/桌面 mini toolbar、授权商业化、多端点、多主题和手势准确度提升的起点。
 - 原则：已测试通过的录制主链路不要随意重构；后续改动先补回归测试，再小步替换。
 
 ## 仓库约定
@@ -44,10 +45,15 @@
 - 录制状态控制：开始、暂停、继续、终止保存/放弃、倒计时与时间清零。
 - 导出体验：真实进度、文件大小、成功弹窗、Finder 入口。
 - 手势主链路继续保留 MediaPipe/Vision 视觉识别方向，后续重点转向动态手势准确度和远距离鲁棒性。
-- 未来产品计划：桌面可拖拽 mini toolbar、可选时间片段/多段时间轴导出、授权验证与付费激活、多端点支持、多主题皮肤。
+- 安全修复：本地 HTTP 服务 token 鉴权、sidecar 去通配 CORS、Release 包移除 DEBUG-only telemetry、项目导入校验。
+- 并发修复：摄像头回调不再跨 actor 传递 `CMSampleBuffer`，Swift 6 sampleBuffer warning 已清理。
+- 切源尺寸修复：录制中切换屏幕/窗口源时，写入 raw 屏幕轨前会读取 ScreenCaptureKit `contentRect` / `scaleFactor` 裁掉实际内容外黑边，减少“监视器正常但预览合成小画面”的不一致。
+- 音频与布局修复：麦克风 raw 轨改为样本级 writer，降低开头爆音和短音轨风险；录制中布局切换写入 `RecordingLayoutKeyframe`，预览/导出可复现监视器布局变化。
+- 未来产品计划：`Command+1` 到 `Command+6` 录制中快捷切源和用户自定义源位、桌面可拖拽 mini toolbar、可选时间片段/多段时间轴导出、授权验证与付费激活、多端点支持、多主题皮肤。
 
 ## 约束
 
 - 不引入密钥到仓库
+- 不把本地 token、授权凭证或支付凭证写进项目文件、日志或文档
 - 首版继续使用本地推理/本地识别链路
 - 保持现有 Swift Package 结构，避免破坏后续 MediaPipe sidecar 接入

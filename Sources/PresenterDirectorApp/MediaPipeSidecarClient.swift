@@ -13,11 +13,13 @@ struct MediaPipeSidecarHealth: Codable, Sendable {
     let ok: Bool
     let engine: String?
     let modelPath: String?
+    let authRequired: Bool?
 
     enum CodingKeys: String, CodingKey {
         case ok
         case engine
         case modelPath = "model_path"
+        case authRequired = "auth_required"
     }
 }
 
@@ -63,7 +65,9 @@ actor MediaPipeSidecarClient {
     /// - Returns: Decoded health response or `nil` if the sidecar cannot be reached.
     func health() async -> MediaPipeSidecarHealth? {
         do {
-            let (data, _) = try await session.data(from: healthURL)
+            var request = URLRequest(url: healthURL)
+            request.setValue(WonderShowLocalSecurity.sharedToken, forHTTPHeaderField: WonderShowLocalSecurity.headerName)
+            let (data, _) = try await session.data(for: request)
             return try JSONDecoder().decode(MediaPipeSidecarHealth.self, from: data)
         } catch {
             return nil
@@ -87,6 +91,7 @@ actor MediaPipeSidecarClient {
         var request = URLRequest(url: inferURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(WonderShowLocalSecurity.sharedToken, forHTTPHeaderField: WonderShowLocalSecurity.headerName)
         request.httpBody = body
 
         do {

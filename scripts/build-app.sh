@@ -5,14 +5,15 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="灵演"
 APP_MARKETING_VERSION="${APP_MARKETING_VERSION:-0.7.$(date +%Y%m%d)}"
 APP_BUILD_VERSION="${APP_BUILD_VERSION:-$(date +%Y%m%d%H%M)}"
+BUILD_CONFIGURATION="${BUILD_CONFIGURATION:-release}"
 BUNDLE_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 EXECUTABLE="PresenterDirectorApp"
-BUILD_EXECUTABLE="$ROOT_DIR/.build/arm64-apple-macosx/debug/$EXECUTABLE"
+BUILD_EXECUTABLE="$ROOT_DIR/.build/arm64-apple-macosx/$BUILD_CONFIGURATION/$EXECUTABLE"
 
 cd "$ROOT_DIR"
 # SwiftPM manifest evaluation is sandboxed by default on macOS and fails in this repo path.
-# Keep the bundle build path aligned with the verified local run command.
-swift build --disable-sandbox
+# Release builds keep DEBUG-only local telemetry out of the app bundle.
+swift build -c "$BUILD_CONFIGURATION" --disable-sandbox
 
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/Contents/MacOS" "$BUNDLE_DIR/Contents/Resources"
@@ -43,4 +44,4 @@ codesign --force --deep --sign - \
   "$BUNDLE_DIR"
 
 echo "$BUNDLE_DIR"
-echo "version $APP_MARKETING_VERSION ($APP_BUILD_VERSION)"
+echo "version $APP_MARKETING_VERSION ($APP_BUILD_VERSION), configuration $BUILD_CONFIGURATION"

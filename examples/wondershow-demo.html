@@ -179,6 +179,7 @@
     const slides = [...document.querySelectorAll('.slide')];
     const stage = document.getElementById('stage');
     const bridgeStatus = document.getElementById('bridgeStatus');
+    const bridgeToken = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('token') || '';
     let index = 0;
     let zoom = 1;
     let panX = 0;
@@ -215,9 +216,6 @@
      */
     function setZoom(nextZoom) {
       targetZoom = Math.max(0.30, Math.min(3.0, Number(nextZoom || zoom)));
-      // #region debug-point D:set-zoom-command
-      fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"zoom-instability-v07",runId:"pre-fix",hypothesisId:"D",location:"examples/wondershow-demo.html:setZoom",msg:"[DEBUG] demo received zoom target",data:{targetZoom,currentZoom:zoom,input:Number(nextZoom || zoom)},ts:Date.now()})}).catch(()=>{});
-      // #endregion
       if (targetZoom <= 1.01) {
         targetPanX = 0;
         targetPanY = 0;
@@ -286,9 +284,6 @@
         panY = targetPanY;
         animating = false;
         stage.style.transform = `translate(${(panX * Math.max(0, (zoom - 1) * 520)).toFixed(1)}px, ${(panY * Math.max(0, (zoom - 1) * 340)).toFixed(1)}px) scale(${zoom.toFixed(4)})`;
-        // #region debug-point D:settled-zoom-frame
-        fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"zoom-instability-v07",runId:"pre-fix",hypothesisId:"D",location:"examples/wondershow-demo.html:tick",msg:"[DEBUG] demo zoom animation settled",data:{zoom,targetZoom,panX,panY},ts:Date.now()})}).catch(()=>{});
-        // #endregion
         return;
       }
 
@@ -329,9 +324,6 @@
           node.remove();
         });
       }
-      // #region debug-point D:html-command
-      fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"gesture-regression-loop",runId:"post-fix",hypothesisId:"D",location:"wondershow-demo.html:wonderShowCommand",msg:"[DEBUG] html page applied command",data:{command,value:value ?? null,index:index + 1,zoom},ts:Date.now()})}).catch(()=>{});
-      // #endregion
       const zoomLabel = `${Math.round(targetZoom * 100)}%`;
       const panLabel = (Math.abs(targetPanX) > 0.01 || Math.abs(targetPanY) > 0.01)
         ? `，平移 ${targetPanX.toFixed(2)},${targetPanY.toFixed(2)}`
@@ -342,19 +334,17 @@
 
     async function pollLingYanCommand() {
       try {
-        const response = await fetch('/api/command', { cache: 'no-store' });
+        const response = await fetch('/api/command', {
+          cache: 'no-store',
+          headers: bridgeToken ? { 'X-WonderShow-Local-Token': bridgeToken } : {}
+        });
+        if (!response.ok) throw new Error(`bridge rejected request: ${response.status}`);
         const payload = await response.json();
-        // #region debug-point D:html-poll
-        fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"gesture-regression-loop",runId:"post-fix",hypothesisId:"D",location:"wondershow-demo.html:pollLingYanCommand",msg:"[DEBUG] html page polled bridge",data:{command:payload.command ?? null,value:payload.value ?? null},ts:Date.now()})}).catch(()=>{});
-        // #endregion
         if (payload.command) window.wonderShowCommand(payload.command, payload.value);
         if (!payload.command && bridgeStatus.textContent === '灵演桥接：等待命令') {
           bridgeStatus.textContent = '灵演桥接：已连接，等待命令';
         }
       } catch (error) {
-        // #region debug-point D:html-poll-error
-        fetch("http://127.0.0.1:7777/event",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionId:"gesture-regression-loop",runId:"post-fix",hypothesisId:"D",location:"wondershow-demo.html:pollLingYanCommand",msg:"[DEBUG] html page failed to poll bridge",data:{error:String(error)},ts:Date.now()})}).catch(()=>{});
-        // #endregion
         bridgeStatus.textContent = '灵演桥接：未连接';
       } finally {
         window.setTimeout(pollLingYanCommand, 220);

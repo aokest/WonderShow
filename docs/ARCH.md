@@ -16,6 +16,8 @@ SwiftUI Dashboard
      -> AVAssetWriter 屏幕原始轨
   -> MicrophoneArchiveRecorder
      -> AVFoundation 麦克风采集
+     -> AVCaptureAudioDataOutput
+     -> AVAssetWriter 麦克风原始轨
   -> PresentationCommandController
      -> 键盘事件 / HTML Bridge / 内部状态
      -> 预览合成 / 导出调度
@@ -75,8 +77,10 @@ Swift Adapter
   - `RecordingProjectFactory` 将正式演讲和培训录屏对齐为同一个双源录制能力
   - 原始素材轨固定表达讲者摄像头与 PPT/屏幕采集，program timeline 再表达讲者全身、讲者特写、讲者画中画、PPT 全屏等视角
   - `CameraArchiveRecorder`、`ScreenArchiveRecorder`、`MicrophoneArchiveRecorder` 已接入真实摄像头、屏幕/窗口和麦克风写盘
-  - `ProgramVideoRenderer` 已接入真实预览合成和导出，支持画中画 geometry/keyframes、音频合并、导出进度和输出校验
+  - `MicrophoneArchiveRecorder` 使用 `AVCaptureAudioDataOutput + AVAssetWriter` 样本级写入，开录跳过启动瞬态，停止时等待 writer 完成，暂停/继续时 retime 音频样本
+  - `ProgramVideoRenderer` 已接入真实预览合成和导出，支持画中画 geometry/keyframes、布局 keyframes、音频合并、导出进度和输出校验
   - `ScreenPreviewService` 与 `ScreenArchiveRecorder` 使用同一组选源语义，支持录制中切换屏幕/窗口源
+  - `ScreenArchiveRecorder` 写入 raw 屏幕轨前会读取 ScreenCaptureKit `contentRect` / `scaleFactor`，减少“监视器正常但合成里小画面”的不一致
 
 ## 录制与合成链路
 
@@ -93,6 +97,7 @@ User selects sources
        duration
        layout
        PiP geometry and keyframes
+       layout keyframes
   -> ProgramVideoRenderer
        preview composition
        Exports/program.mp4
@@ -106,10 +111,10 @@ User selects sources
 - 保持 `PresenterDirector` 作为纯策略层
 - 把 MediaPipe sidecar 作为下一阶段的可插拔输入源
 - 建立真实录像回放测试集，作为识别回归基线
-- 修复监视器活动窗口抖动
 - 增加讲者画面美颜、调亮和镜像翻转
 - 把底部录制时间轴升级为真实轨道展示和编辑器
 - 增加 macOS 菜单栏常驻入口和录制迷你工具条
+- 增加 `⌘1` 到 `⌘6` 快速切换录制源，并在录制源选择器里支持用户自定义源位编号
 - 将手势识别从静态手型升级为远距离动态动作识别
 
 ## 参考

@@ -43,6 +43,25 @@ struct RecordingPiPKeyframe: Equatable, Hashable, Sendable {
     }
 }
 
+struct RecordingLayoutKeyframe: Equatable, Hashable, Sendable {
+    let milliseconds: Int
+    let mode: RecordingMode
+    let layout: RecordingLayout
+    let pictureInPictureGeometry: ProgramPictureInPictureGeometry?
+
+    init(
+        milliseconds: Int,
+        mode: RecordingMode,
+        layout: RecordingLayout,
+        pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil
+    ) {
+        self.milliseconds = max(0, milliseconds)
+        self.mode = mode
+        self.layout = layout
+        self.pictureInPictureGeometry = pictureInPictureGeometry
+    }
+}
+
 extension RecordingProjectManifest {
     func updatingTimelineDuration(milliseconds durationMilliseconds: Int) -> RecordingProjectManifest {
         let duration = max(1, durationMilliseconds)
@@ -69,6 +88,53 @@ extension RecordingProjectManifest {
                     startMilliseconds: start,
                     endMilliseconds: end,
                     scene: segment.scene
+                )
+            )
+        }
+
+        guard !updatedSegments.isEmpty else {
+            return self
+        }
+
+        let updatedProject = RecordingProject(
+            scenario: project.scenario,
+            pipeline: project.pipeline,
+            rawTracks: project.rawTracks,
+            programOutput: project.programOutput,
+            timeline: RecordingTimeline(segments: updatedSegments)
+        )
+        return RecordingProjectManifest(
+            schemaVersion: schemaVersion,
+            project: updatedProject,
+            mediaAssets: mediaAssets
+        )
+    }
+
+    func updatingLayoutKeyframes(_ keyframes: [RecordingLayoutKeyframe]) -> RecordingProjectManifest {
+        let duration = max(1, project.timeline.durationMilliseconds)
+        let normalizedKeyframes = normalizedLayoutKeyframes(keyframes, durationMilliseconds: duration)
+        guard !normalizedKeyframes.isEmpty else {
+            return self
+        }
+
+        var updatedSegments: [TimelineSegment] = []
+        for (index, keyframe) in normalizedKeyframes.enumerated() {
+            let start = keyframe.milliseconds
+            let end = index == normalizedKeyframes.count - 1
+                ? duration
+                : min(duration, max(start + 1, normalizedKeyframes[index + 1].milliseconds))
+            guard start < end else {
+                continue
+            }
+            updatedSegments.append(
+                TimelineSegment(
+                    startMilliseconds: start,
+                    endMilliseconds: end,
+                    scene: Self.programScene(
+                        mode: keyframe.mode,
+                        layout: keyframe.layout,
+                        geometry: keyframe.pictureInPictureGeometry
+                    )
                 )
             )
         }
@@ -169,6 +235,111 @@ extension RecordingProjectManifest {
             normalized.append(keyframe)
         }
         return normalized
+    }
+
+    private func normalizedLayoutKeyframes(
+        _ keyframes: [RecordingLayoutKeyframe],
+        durationMilliseconds: Int
+    ) -> [RecordingLayoutKeyframe] {
+        var normalized: [RecordingLayoutKeyframe] = []
+        for keyframe in keyframes.sorted(by: { $0.milliseconds < $1.milliseconds }) {
+            guard keyframe.milliseconds < durationMilliseconds else {
+                continue
+            }
+            if let last = normalized.last, last.milliseconds == keyframe.milliseconds {
+                normalized[normalized.count - 1] = keyframe
+                continue
+            }
+            if let last = normalized.last,
+               last.mode == keyframe.mode,
+               last.layout == keyframe.layout,
+               last.pictureInPictureGeometry == keyframe.pictureInPictureGeometry {
+                continue
+            }
+            normalized.append(keyframe)
+        }
+
+        guard let first = normalized.first else {
+            return []
+        }
+        if first.milliseconds > 0 {
+            normalized.insert(
+                RecordingLayoutKeyframe(
+                    milliseconds: 0,
+                    mode: first.mode,
+                    layout: first.layout,
+                    pictureInPictureGeometry: first.pictureInPictureGeometry
+                ),
+                at: 0
+            )
+        }
+        return normalized
+    }
+
+    private static func programScene(
+        mode: RecordingMode,
+        layout: RecordingLayout,
+        geometry: ProgramPictureInPictureGeometry?
+    ) -> ProgramScene {
+        switch mode {
+        case .screenOnly:
+            return ProgramScene(view: .slidesFullScreen, layers: [.slidesFullCanvas])
+        case .cameraOnly:
+            if layout == .speakerFullBody {
+                return ProgramScene(view: .speakerFullBody, layers: [.speakerFullBodyCanvas])
+            }
+            return ProgramScene(view: .speakerCloseUp, layers: [.speakerCloseUpCanvas])
+        case .cameraAndScreen:
+            switch layout {
+            case .screenOnly:
+                return ProgramScene(view: .slidesFullScreen, layers: [.slidesFullCanvas])
+            case .speakerFullBody:
+                return ProgramScene(view: .speakerFullBody, layers: [.speakerFullBodyCanvas])
+            case .speakerCloseUp:
+                return ProgramScene(view: .speakerCloseUp, layers: [.speakerCloseUpCanvas])
+            case .screenWithCameraPictureInPicture(let corner):
+                return ProgramScene(
+                    view: .slidesWithSpeakerPictureInPicture,
+                    layers: [
+                        .slidesFullCanvas,
+                        ProgramLayer(
+                            source: .presenterCamera,
+                            placement: geometry.map(ProgramLayerPlacement.customPictureInPicture)
+                                ?? .pictureInPicture(corner: corner, size: .medium),
+                            speakerShot: .closeUp
+                        )
+                    ]
+                )
+            case .cameraWithScreenPictureInPicture(let corner):
+                return ProgramScene(
+                    view: .speakerWithSlidesPictureInPicture,
+                    layers: [
+                        ProgramLayer(
+                            source: .presenterCamera,
+                            placement: .fullCanvas,
+                            speakerShot: .fullBody
+                        ),
+                        ProgramLayer(
+                            source: .slidesScreen,
+                            placement: geometry.map(ProgramLayerPlacement.customPictureInPicture)
+                                ?? .pictureInPicture(corner: corner, size: .medium)
+                        )
+                    ]
+                )
+            case .sideBySide:
+                return ProgramScene(
+                    view: .sideBySide,
+                    layers: [
+                        ProgramLayer(source: .slidesScreen, placement: .leftHalf),
+                        ProgramLayer(
+                            source: .presenterCamera,
+                            placement: .rightHalf,
+                            speakerShot: .closeUp
+                        )
+                    ]
+                )
+            }
+        }
     }
 }
 

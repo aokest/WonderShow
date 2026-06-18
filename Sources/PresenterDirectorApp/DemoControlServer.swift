@@ -7,10 +7,15 @@ final class DemoControlServer: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "com.lingyan.demo-control-server")
     private let port: NWEndpoint.Port = 17635
+    private let host: NWEndpoint.Host = "127.0.0.1"
     private var listener: NWListener?
     private var pendingCommands: [DemoBridgeCommand] = []
 
     var demoURL: URL {
+        URL(string: "http://127.0.0.1:\(port.rawValue)/wondershow-demo.html#token=\(WonderShowLocalSecurity.tokenQueryValue())")!
+    }
+
+    var demoDisplayURL: URL {
         URL(string: "http://127.0.0.1:\(port.rawValue)/wondershow-demo.html")!
     }
 
@@ -23,7 +28,9 @@ final class DemoControlServer: @unchecked Sendable {
     func start() throws {
         guard queue.sync(execute: { self.listener == nil }) else { return }
 
-        let newListener = try NWListener(using: .tcp, on: port)
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: host, port: port)
+        let newListener = try NWListener(using: parameters)
         newListener.newConnectionHandler = { [weak self] connection in
             self?.handle(connection)
         }
@@ -92,19 +99,29 @@ final class DemoControlServer: @unchecked Sendable {
         }
     }
 
+    #if DEBUG
+    func responseForTesting(_ request: String) -> Data {
+        response(for: request)
+    }
+    #endif
+
     private func response(for request: String) -> Data {
-        let path = request
+        let requestTarget = request
             .components(separatedBy: "\r\n")
             .first?
             .split(separator: " ")
             .dropFirst()
             .first
             .map(String.init) ?? "/"
+        let path = URLComponents(string: "http://127.0.0.1\(requestTarget)")?.path ?? requestTarget
 
         switch path {
         case "/", "/wondershow-demo.html":
             return httpResponse(body: demoHTML(), contentType: "text/html; charset=utf-8")
         case "/api/command":
+            guard isAuthorized(request) else {
+                return unauthorizedResponse()
+            }
             let command = pendingCommands.isEmpty ? nil : pendingCommands.removeFirst()
             // #region debug-point D:dequeue-command
             debugReport(
@@ -121,6 +138,9 @@ final class DemoControlServer: @unchecked Sendable {
             let body = command?.json ?? #"{"command":null}"#
             return httpResponse(body: body, contentType: "application/json; charset=utf-8")
         case "/api/status":
+            guard isAuthorized(request) else {
+                return unauthorizedResponse()
+            }
             return httpResponse(body: #"{"ok":true}"#, contentType: "application/json; charset=utf-8")
         default:
             return httpResponse(status: "404 Not Found", body: "Not found", contentType: "text/plain; charset=utf-8")
@@ -152,11 +172,33 @@ final class DemoControlServer: @unchecked Sendable {
         return data
     }
 
+    private func unauthorizedResponse() -> Data {
+        httpResponse(
+            status: "401 Unauthorized",
+            body: #"{"ok":false,"error":"Unauthorized"}"#,
+            contentType: "application/json; charset=utf-8"
+        )
+    }
+
+    private func isAuthorized(_ request: String) -> Bool {
+        WonderShowLocalSecurity.isAuthorized(header(named: WonderShowLocalSecurity.headerName, in: request))
+    }
+
+    private func header(named name: String, in request: String) -> String? {
+        let prefix = "\(name.lowercased()):"
+        return request
+            .components(separatedBy: "\r\n")
+            .dropFirst()
+            .first { $0.lowercased().hasPrefix(prefix) }
+            .map { line in
+                String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+    }
+
     private static func demoHTMLCandidates() -> [URL] {
         let bundleURL = Bundle.main.bundleURL
         return [
             Bundle.main.url(forResource: "wondershow-demo", withExtension: "html"),
-            URL(fileURLWithPath: "/Users/aoke/code test/视频直播设备/examples/wondershow-demo.html"),
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
                 .appendingPathComponent("examples/wondershow-demo.html"),
             bundleURL
@@ -174,6 +216,7 @@ final class DemoControlServer: @unchecked Sendable {
         message: String,
         data: [String: Any]
     ) {
+        #if DEBUG
         guard let url = URL(string: "http://127.0.0.1:7777/event") else { return }
         guard JSONSerialization.isValidJSONObject(data) else { return }
         let payload: [String: Any] = [
@@ -191,6 +234,12 @@ final class DemoControlServer: @unchecked Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         URLSession.shared.dataTask(with: request).resume()
+        #else
+        _ = hypothesisId
+        _ = location
+        _ = message
+        _ = data
+        #endif
     }
     // #endregion
 }
