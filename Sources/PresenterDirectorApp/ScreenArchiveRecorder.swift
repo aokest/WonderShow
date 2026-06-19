@@ -54,6 +54,14 @@ enum ScreenCaptureSourceID: Codable, Hashable, Sendable {
         }
         return nil
     }
+
+    var isDisplay: Bool {
+        displayID != nil
+    }
+
+    var isWindow: Bool {
+        windowID != nil
+    }
 }
 
 struct ScreenCaptureWindowOption: Identifiable, Hashable, Sendable {

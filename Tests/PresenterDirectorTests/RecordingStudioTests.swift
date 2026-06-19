@@ -277,8 +277,8 @@ import Testing
         codec: .hevc
     )
 
-    #expect(defaultSettings.resolution.pixelSize?.width == 1920)
-    #expect(defaultSettings.resolution.pixelSize?.height == 1080)
+    #expect(defaultSettings.resolution == .source)
+    #expect(defaultSettings.resolution.pixelSize == nil)
     #expect(defaultSettings.frameRate.rawValue == 30)
     #expect(defaultSettings.bitrateBitsPerSecond == 12_000_000)
     #expect(defaultSettings.audioBitrateBitsPerSecond == 192_000)

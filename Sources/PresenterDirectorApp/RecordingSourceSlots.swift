@@ -149,7 +149,7 @@ struct RecordingSourceSlots: Codable, Hashable, Sendable {
 
         var occupiedSlots = Set(assignments.map(\.slot))
         var assignedSources = Set(assignments.map(\.sourceID))
-        for option in options where !assignedSources.contains(option.id) {
+        for option in Self.defaultAssignmentOrder(options) where !assignedSources.contains(option.id) {
             guard let slot = Self.validSlots.first(where: { slot in
                 featureTier.permitsSourceSlot(slot) && !occupiedSlots.contains(slot)
             }) else {
@@ -161,6 +161,12 @@ struct RecordingSourceSlots: Codable, Hashable, Sendable {
         }
         assignments = Self.normalized(assignments)
         return assignments != originalAssignments
+    }
+
+    private static func defaultAssignmentOrder(
+        _ options: [ScreenCaptureWindowOption]
+    ) -> [ScreenCaptureWindowOption] {
+        options.filter(\.id.isWindow) + options.filter(\.id.isDisplay)
     }
 
     mutating func clear(slot: Int) {

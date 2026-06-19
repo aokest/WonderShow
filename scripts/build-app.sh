@@ -31,6 +31,7 @@ plutil -insert CFBundleIdentifier -string "com.local.LingYan" "$BUNDLE_DIR/Conte
 plutil -insert CFBundleName -string "$APP_NAME" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleDisplayName -string "$APP_NAME" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleIconFile -string "AppIcon" "$BUNDLE_DIR/Contents/Info.plist"
+plutil -insert CFBundleIconName -string "AppIcon" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundlePackageType -string APPL "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleVersion -string "$APP_BUILD_VERSION" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleShortVersionString -string "$APP_MARKETING_VERSION" "$BUNDLE_DIR/Contents/Info.plist"
@@ -42,6 +43,8 @@ plutil -insert NSAppleEventsUsageDescription -string "灵演需要控制 Google 
 codesign --force --deep --sign - \
   --requirements '=designated => identifier "com.local.LingYan"' \
   "$BUNDLE_DIR"
+
+touch "$BUNDLE_DIR"
 
 echo "$BUNDLE_DIR"
 echo "version $APP_MARKETING_VERSION ($APP_BUILD_VERSION), configuration $BUILD_CONFIGURATION"

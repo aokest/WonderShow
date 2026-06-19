@@ -100,7 +100,7 @@ public struct RecordingExportSettings: Codable, Hashable, Sendable {
     }
 
     public static let presentationDefault = RecordingExportSettings(
-        resolution: .hd1080,
+        resolution: .source,
         frameRate: .fps30,
         quality: .high,
         codec: .h264
