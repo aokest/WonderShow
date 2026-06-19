@@ -130,12 +130,11 @@ final class WonderShowAppCoordinator: NSObject, NSApplicationDelegate {
     private func showMiniToolbar() {
         if miniToolbarPanel == nil {
             let panel = NSPanel(
-                contentRect: NSRect(x: 120, y: 120, width: 650, height: 78),
-                styleMask: [.titled, .closable, .utilityWindow],
+                contentRect: NSRect(x: 120, y: 120, width: 350, height: 54),
+                styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false
             )
-            panel.title = "WonderShow Mini"
             panel.isFloatingPanel = true
             panel.level = .floating
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -145,8 +144,6 @@ final class WonderShowAppCoordinator: NSObject, NSApplicationDelegate {
             panel.isMovableByWindowBackground = true
             panel.hidesOnDeactivate = false
             panel.isReleasedWhenClosed = false
-            panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-            panel.standardWindowButton(.zoomButton)?.isHidden = true
             panel.contentView = NSHostingView(
                 rootView: MiniRecordingToolbar(controlCenter: controlCenter)
             )
@@ -161,13 +158,16 @@ private struct MiniRecordingToolbar: View {
     private var activeFeatureTier: RecordingFeatureTier {
         controlCenter.featureTier
     }
+    private var permittedSlots: [Int] {
+        RecordingSourceSlots.validSlots.filter(activeFeatureTier.permitsSourceSlot)
+    }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Text(controlCenter.state.elapsedTimecode)
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 .foregroundStyle(ConsolePalette.textPrimary)
-                .frame(width: 82, alignment: .leading)
+                .frame(width: 78, alignment: .leading)
 
             Button {
                 controlCenter.primaryAction?()
@@ -194,14 +194,24 @@ private struct MiniRecordingToolbar: View {
             .buttonStyle(MiniToolbarButtonStyle(isProminent: false))
             .help("选择录制源")
 
-            ForEach(Array(RecordingSourceSlots.validSlots), id: \.self) { slot in
-                Button("\(slot)") {
-                    controlCenter.switchSourceSlotAction?(slot)
+            Menu {
+                ForEach(permittedSlots, id: \.self) { slot in
+                    Button("源位 \(slot)    Command+\(slot)") {
+                        controlCenter.switchSourceSlotAction?(slot)
+                    }
                 }
-                .buttonStyle(MiniToolbarButtonStyle(isProminent: false))
-                .disabled(!controlCenter.state.stopEnabled || !activeFeatureTier.permitsSourceSlot(slot))
-                .help(activeFeatureTier.permitsSourceSlot(slot) ? "源位 \(slot)" : "当前权益不可用")
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "square.grid.3x3")
+                    Text("Slot")
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .heavy))
+                }
             }
+            .menuStyle(.borderlessButton)
+            .buttonStyle(MiniToolbarMenuButtonStyle())
+            .disabled(!controlCenter.state.stopEnabled || permittedSlots.isEmpty)
+            .help("切换源位")
 
             Divider()
                 .frame(height: 24)
@@ -216,7 +226,7 @@ private struct MiniRecordingToolbar: View {
             .help("关闭")
         }
         .padding(.horizontal, 10)
-        .frame(width: 630, height: 54)
+        .frame(width: 350, height: 54)
         .background(ConsolePalette.surface.opacity(0.96))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
@@ -249,6 +259,21 @@ private struct MiniRecordingToolbar: View {
         case .resume:
             return "继续录制"
         }
+    }
+}
+
+private struct MiniToolbarMenuButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(ConsolePalette.textPrimary)
+            .frame(width: 74, height: 30)
+            .background(ConsolePalette.overlay.opacity(configuration.isPressed ? 0.72 : 1))
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(ConsolePalette.innerBorder, lineWidth: 1)
+            )
     }
 }
 

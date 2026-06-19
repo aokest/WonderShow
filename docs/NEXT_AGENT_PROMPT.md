@@ -52,9 +52,9 @@
 
 1. P1 增加录制中快捷切源：已在 `codex/source-slots-hotkeys-v0.8` 开始落地。`Command+1` 到 `Command+6` 只在录制中且当前 program 使用屏幕源时生效；触发后重新扫描当前可用 ScreenCaptureKit 源，解析源位并复用现有 `screenSourcePreference -> handleScreenCaptureSourceChange() -> ScreenArchiveRecorder.updateSource` 链路。
 2. P1 在“录制源”弹窗中增加 1-6 源位绑定：已新增 `RecordingSourceSlots`，源选择器缩略图/列表项都显示 1-6 小按钮。源位状态持久化到 UserDefaults，只保存 slot、source id、显示名、类型、尺寸等元数据，不保存窗口截图或隐私内容。测试覆盖槽位边界、重复绑定替换、窗口关闭后不可切和快捷键解析。
-3. P1 增加讲者画面质量能力：已新增镜像、亮度、对比度和轻量柔化控制；预览层即时显示，manifest 记录 `PresenterVideoEffects`，program 导出按 manifest 应用同样效果，旧项目缺字段时默认无效果。
+3. P1 增加讲者画面质量能力：已新增镜像、亮度、对比度和轻量柔化控制；预览层即时显示，manifest 记录 `PresenterVideoEffects`，program 导出按 manifest 应用同样效果，旧项目缺字段时默认无效果。下一阶段把高级人像美化与 emoji 虚拟面孔放到同一条 portrait pipeline：先做人物/脸部区域识别，只美化脸、脖子等肤区；再做可选 emoji 面孔替换，并跟随讲者表情。
 4. P1 把底部时间轴从占位变成真实轨道编辑器基础：已按 manifest/raw 文件状态展示 PPT/屏幕、讲者、声音、合成轨道，支持轨道折叠、点击片段定位播放头、选择单段范围并导出选区。未做破坏性删除 raw、多段非连续拼接和完整波形/缩略图编辑器。
-5. P1 增加 macOS 菜单栏常驻和桌面可拖拽 mini toolbar：已新增状态栏菜单和浮动 mini toolbar，显示录制时间，复用现有 Dashboard 录制状态机执行开始/取消倒计时/暂停/继续/终止、打开录制源选择器和源位 1-6 切换。
+5. P1 增加 macOS 菜单栏常驻和桌面可拖拽 mini toolbar：已新增状态栏菜单和浮动 mini toolbar，显示录制时间，复用现有 Dashboard 录制状态机执行开始/取消倒计时/暂停/继续/终止、打开录制源选择器和源位切换；mini toolbar 源位切换用紧凑下拉菜单，不把 0-9 横向摊开。
 6. 待办后置：动态手势识别增强、授权验证/付费激活、正式签名公证、多端点支持和多主题皮肤先不进入当前开发分支，等用户重新确认优先级后再单独开分支或专项推进。
 7. 观察项：如果用户再次反馈监视器窗口抖动或尺寸变化，优先加真实窗口日志 source id、frame、contentRect、scaleFactor、pixelSize、preview image size、raw track natural size，再查 `ScreenPreviewService`、`ScreenArchiveRecorder`、窗口 source rect、Retina scale 和 aspect-fit 布局。
 
