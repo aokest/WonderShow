@@ -42,6 +42,8 @@
 - 重要边界：旧项目如果已经把小窗口和黑边写进 `Raw/slides-screen.mov`，新代码不能无损恢复；验证这项修复要用新构建重新录一段。
 - 2026-06-20 追加修复了用户新一轮 QA 反馈：状态栏/mini toolbar 的公共主按钮在录制中会真正暂停，不再误走终止录制；新增 `Command+Option+R` 开始/暂停/继续、`Command+Option+P` 暂停/继续、`Command+Option+.` 终止录制；`Command+0` 到 `Command+9` 源位切换不再要求正在录制，只要当前 program 使用屏幕源即可复用现有 ScreenCaptureKit 源选择和 `updateSource` 链路。
 - 同轮还修了 mini toolbar 源位下拉触发器对比度、录制中监视器混入截图 preview 导致的抖动高概率原因、主监视器屏幕层黑边过多的问题，并提高 program 导出和 raw 屏幕轨码率。若用户仍反馈窗口源“小/糊”，下一步优先采集真实 `contentRect`、`scaleFactor`、raw track natural size 和导出尺寸，不要先重写录制主链路。
+- 2026-06-20 再修导出清晰度：用户样例中最近项目的 `Raw/slides-screen.mov` 实际只有 `886x728`，`Exports/program.mp4` 实际是 `1920x1080`，4K 观感模糊的根因是窗口源 raw 轨在采集阶段已经低清。窗口源现在至少按 2x 建立 ScreenCaptureKit 流，显示器源不额外放大；监视器和录制源缩略图回到完整显示；“预览合成”会重新生成预览，避免继续打开旧的低清 program 文件。旧项目已写入的低清 raw 轨不能通过 4K 导出恢复，需要用新包重新录制验证。
+- 同轮源位分配改为扫描后自动默认编号，保留用户已有自定义；手动改到已占用源位时弹冲突提示并不覆盖原绑定。
 
 最近音频与布局时间轴修复也已经落地：
 
