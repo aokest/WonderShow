@@ -25,7 +25,7 @@ The current app can be tried as a recording studio baseline:
 - Export settings are real: selected resolution, frame rate, quality, and codec are passed into the writer and covered by tests.
 - Export progress, generated file size, success dialog, and Finder reveal are present.
 - Recording controls support start, pause, resume, terminate, save/discard, and timer reset.
-- The app has a macOS menu bar status item and draggable floating mini toolbar for recording controls, source picker access, and source slot switching.
+- The app has a macOS menu bar status item and draggable floating mini toolbar for recording controls, source picker access, and source slot switching through a compact slot menu.
 
 The following features are not implemented yet:
 
@@ -39,6 +39,7 @@ The following features are not implemented yet:
 - Multiple UI skins/themes beyond the current warm dark-gold console.
 - Advanced PiP transitions and manual timeline editing.
 - Annotation overlay.
+- Advanced presenter portrait pipeline: person/face-region-aware beautification, face/neck-only smoothing and complexion cleanup, plus optional emoji avatar face replacement with expression following.
 
 ## Product Scope Expansion
 
@@ -217,12 +218,13 @@ Deferred backlog for later branches: dynamic gesture recognition improvements, l
 6. Stabilize active-window monitor preview / program preview source size consistency. Done for the high-probability `contentRect` and source-update causes; keep real-window jitter as watch item.
 7. Add `Command+1` to `Command+6` fast source switching and user-defined source slots in the active-window/source picker. Done in v0.8 branch.
 8. Add presenter video quality controls: mirror, brightness, light beauty. Done in v0.8 branch.
-9. Convert the bottom timeline from status display to real track display. Done in v0.8 branch.
-10. Add editable timeline operations: fold, delete, drag playhead, multi-select, selected-track export, and one-or-many selected time-range export. Partially done in v0.8 branch: fold, segment select/playhead, and single selected-range export are done; destructive delete, selected-track-only export, and multi-range export remain.
-11. Add menu bar resident mode and draggable desktop mini toolbar with pause/resume/stop/time plus active-window/source switching. Done in v0.8 branch.
-12. Design licensing, paid activation, App Store distribution, direct-sale license keys, and entitlement recovery. Next P2.
-13. Design multi-endpoint support for macOS, iPad, iPhone, Android, Windows PC, and potentially HarmonyOS. Next P2.
-14. Add a theme system with warm dark-gold, minimalist light, business, geek, gold, black, and white skins. Next P2.
-15. Add multi-camera simultaneous recording UI and source switching events.
-16. Add audio source switching during recording with segmented audio tracks.
-17. Add cursor smoothing, click highlight, auto zoom, annotations, captions, callouts, and title cards.
+9. Next portrait pass: add person/face-region-aware beautification and an optional emoji avatar face mode that replaces the presenter's face while following facial expression.
+10. Convert the bottom timeline from status display to real track display. Done in v0.8 branch.
+11. Add editable timeline operations: fold, delete, drag playhead, multi-select, selected-track export, and one-or-many selected time-range export. Partially done in v0.8 branch: fold, segment select/playhead, and single selected-range export are done; destructive delete, selected-track-only export, and multi-range export remain.
+12. Add menu bar resident mode and draggable desktop mini toolbar with pause/resume/stop/time plus active-window/source switching. Done in v0.8 branch.
+13. Design licensing, paid activation, App Store distribution, direct-sale license keys, and entitlement recovery. Next P2.
+14. Design multi-endpoint support for macOS, iPad, iPhone, Android, Windows PC, and potentially HarmonyOS. Next P2.
+15. Add a theme system with warm dark-gold, minimalist light, business, geek, gold, black, and white skins. Next P2.
+16. Add multi-camera simultaneous recording UI and source switching events.
+17. Add audio source switching during recording with segmented audio tracks.
+18. Add cursor smoothing, click highlight, auto zoom, annotations, captions, callouts, and title cards.
