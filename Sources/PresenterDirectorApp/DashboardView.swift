@@ -16,13 +16,6 @@ private enum ScreenSourcePickerViewMode: String, CaseIterable, Hashable {
     case list
 }
 
-private enum RecordingControlState: Hashable {
-    case idle
-    case starting
-    case recording
-    case paused
-}
-
 private struct ExportProgressPresentation: Identifiable, Equatable {
     let id = "export-progress"
     var fraction: Double
@@ -51,6 +44,7 @@ struct DashboardView: View {
         return "v\(shortVersion) (\(buildVersion))"
     }
 
+    @ObservedObject private var recordingControlCenter: RecordingControlCenter
     @StateObject private var camera = CameraPreviewService()
     @StateObject private var commandController = PresentationCommandController()
     @StateObject private var screenPreview = ScreenPreviewService()
@@ -65,6 +59,8 @@ struct DashboardView: View {
     @State private var screenSourcePickerMode: ScreenSourcePickerViewMode = .thumbnails
     @State private var screenSourceThumbnailTask: Task<Void, Never>?
     @State private var showsScreenSourcePicker = false
+    @State private var recordingSourceSlots = RecordingSourceSlots.load()
+    @State private var recordingFeatureTier = RecordingFeatureTier.load()
     @State private var calibrationFlow: CalibrationFlow?
     @State private var showsDiagnostics = false
     @State private var showsAboutCard = false
@@ -96,10 +92,17 @@ struct DashboardView: View {
     @State private var pipOffset = CGSize(width: 18, height: -18)
     @State private var pipScale: CGFloat = 1
     @State private var pipShape: PiPShape = .roundedRectangle
+    @State private var presenterMirrorEnabled = false
+    @State private var presenterBrightness: CGFloat = 0
+    @State private var presenterContrast: CGFloat = 1
+    @State private var presenterBeauty: CGFloat = 0
     @State private var monitorCanvasSize = CGSize(width: 1280, height: 720)
     @State private var recordingStartedAt: Date?
     @State private var recordingPiPKeyframes: [RecordingPiPKeyframe] = []
     @State private var recordingLayoutKeyframes: [RecordingLayoutKeyframe] = []
+    @State private var collapsedTimelineTrackIDs: Set<String> = []
+    @State private var selectedTimelineRange: TimelineExportRange?
+    @State private var timelinePlayheadMilliseconds = 0
     @State private var lastPiPKeyframeDate: Date?
     @StateObject private var recordingCountdownPresenter = RecordingCountdownPresenter()
 
@@ -163,6 +166,10 @@ struct DashboardView: View {
     private let screenArchiveRecorder = ScreenArchiveRecorder()
     private let microphoneArchiveRecorder = MicrophoneArchiveRecorder()
     private let recordingClock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    init(controlCenter: RecordingControlCenter = RecordingControlCenter()) {
+        _recordingControlCenter = ObservedObject(wrappedValue: controlCenter)
+    }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -228,6 +235,14 @@ struct DashboardView: View {
                 thumbnails: screenSourceThumbnails,
                 viewMode: $screenSourcePickerMode,
                 selectedIDs: $selectedScreenSourceIDs,
+                sourceSlots: $recordingSourceSlots,
+                featureTier: $recordingFeatureTier,
+                persistSourceSlots: {
+                    persistRecordingSourceSlots()
+                },
+                persistFeatureTier: {
+                    persistRecordingFeatureTier()
+                },
                 apply: {
                     applySelectedScreenWindows()
                 },
@@ -254,6 +269,8 @@ struct DashboardView: View {
             Text(copy.runtimeText("保存后会生成原始轨并尝试合成视频；丢弃会删除本次录制项目。"))
         }
         .onAppear {
+            configureRecordingControlCenter()
+            syncRecordingControlCenter()
             commandController.refreshAccessibilityStatus()
             updateGestureHandler()
             installScreenArchivePreviewHandler()
@@ -268,6 +285,10 @@ struct DashboardView: View {
         }
         .onChange(of: screenSourcePreference) {
             handleScreenCaptureSourceChange()
+        }
+        .onChange(of: recordingFeatureTier) {
+            persistRecordingFeatureTier()
+            syncRecordingControlCenter()
         }
         .onChange(of: layout) {
             restartScreenPreviewIfNeeded()
@@ -303,6 +324,13 @@ struct DashboardView: View {
                 )
                 resetRecordingStateAfterStop()
             }
+            syncRecordingControlCenter()
+        }
+        .onChange(of: recordingControlState) {
+            syncRecordingControlCenter()
+        }
+        .onChange(of: elapsedSeconds) {
+            syncRecordingControlCenter()
         }
         .onChange(of: pipOffset) {
             recordCurrentPiPKeyframeIfNeeded()
@@ -312,6 +340,18 @@ struct DashboardView: View {
         }
         .onChange(of: pipShape) {
             recordCurrentPiPKeyframeIfNeeded(force: true)
+        }
+        .onChange(of: presenterMirrorEnabled) {
+            updatePresenterVideoEffectsForLastRecording()
+        }
+        .onChange(of: presenterBrightness) {
+            updatePresenterVideoEffectsForLastRecording()
+        }
+        .onChange(of: presenterContrast) {
+            updatePresenterVideoEffectsForLastRecording()
+        }
+        .onChange(of: presenterBeauty) {
+            updatePresenterVideoEffectsForLastRecording()
         }
         .onReceive(recordingClock) { _ in
             guard commandController.isRecording, recordingControlState == .recording else {
@@ -346,6 +386,44 @@ struct DashboardView: View {
         camera.onPanChanged = { x, y in
             commandController.setPan(x: x, y: y, target: currentTarget)
         }
+    }
+
+    private func configureRecordingControlCenter() {
+        recordingControlCenter.featureTier = recordingFeatureTier
+        recordingControlCenter.primaryAction = {
+            requestRecordingToggle()
+        }
+        recordingControlCenter.stopAction = {
+            requestFinishRecording()
+        }
+        recordingControlCenter.revealMainWindowAction = {
+            revealMainWindow()
+        }
+        recordingControlCenter.showSourcePickerAction = {
+            revealMainWindow()
+            refreshScreenWindowOptions()
+            showsScreenSourcePicker = true
+        }
+        recordingControlCenter.switchSourceSlotAction = { slot in
+            _ = requestRecordingSourceSlotSwitch(slot)
+        }
+    }
+
+    private func syncRecordingControlCenter() {
+        recordingControlCenter.featureTier = recordingFeatureTier
+        recordingControlCenter.state = RecordingControlSurfaceState(
+            controlState: recordingControlState,
+            elapsedSeconds: elapsedSeconds
+        )
+    }
+
+    private func revealMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows
+            .filter { $0.canBecomeMain || $0.canBecomeKey }
+            .forEach { window in
+                window.makeKeyAndOrderFront(nil)
+            }
     }
 
     private func requestRecordingToggle() {
@@ -385,7 +463,8 @@ struct DashboardView: View {
                 cameraName: camera.activeDeviceName,
                 mode: mode,
                 layout: layout,
-                pictureInPictureGeometry: currentPictureInPictureGeometry
+                pictureInPictureGeometry: currentPictureInPictureGeometry,
+                presenterVideoEffects: currentPresenterVideoEffects
             )
             if !commandController.isRecording {
                 recordingControlState = .idle
@@ -474,7 +553,8 @@ struct DashboardView: View {
             cameraName: camera.activeDeviceName,
             mode: mode,
             layout: layout,
-            pictureInPictureGeometry: currentPictureInPictureGeometry
+            pictureInPictureGeometry: currentPictureInPictureGeometry,
+            presenterVideoEffects: currentPresenterVideoEffects
         )
     }
 
@@ -513,6 +593,10 @@ struct DashboardView: View {
         }
 
         localRecordingHotKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if let slot = RecordingSourceSlotHotKey.slot(for: event),
+               requestRecordingSourceSlotSwitch(slot) {
+                return nil
+            }
             if isRecordingHotKey(event) {
                 requestRecordingToggle()
                 return nil
@@ -520,6 +604,9 @@ struct DashboardView: View {
             return event
         }
         globalRecordingHotKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+            if let slot = RecordingSourceSlotHotKey.slot(for: event) {
+                _ = requestRecordingSourceSlotSwitch(slot)
+            }
             if isRecordingHotKey(event) {
                 requestRecordingToggle()
             }
@@ -542,6 +629,21 @@ struct DashboardView: View {
         return event.charactersIgnoringModifiers?.lowercased() == "r"
             && flags.contains(.command)
             && flags.contains(.option)
+    }
+
+    @discardableResult
+    private func requestRecordingSourceSlotSwitch(_ slot: Int) -> Bool {
+        guard commandController.isRecording, currentProgramUsesScreen else {
+            return false
+        }
+        guard recordingFeatureTier.permitsSourceSlot(slot) else {
+            commandController.reportRecordingIssue(
+                "\(recordingFeatureTier.localizedLabel(copy)) \(copy.text("sourceSlotLocked")) \(slot)"
+            )
+            return true
+        }
+        switchToRecordingSourceSlot(slot)
+        return true
     }
 
     private func startScreenArchiveRecording(
@@ -830,6 +932,7 @@ struct DashboardView: View {
                     pipOffset: $pipOffset,
                     pipScale: $pipScale,
                     pipShape: pipShape,
+                    presenterVideoEffects: currentPresenterVideoEffects,
                     canvasSizeChanged: { size in
                         monitorCanvasSize = size
                     },
@@ -880,9 +983,21 @@ struct DashboardView: View {
 
             VStack(spacing: 5) {
                 ForEach(timelineRows) { row in
-                    TimelineTrackRow(row: row)
+                    TimelineTrackRow(
+                        row: row,
+                        selectedRange: selectedTimelineRange,
+                        playheadFraction: timelinePlayheadFraction,
+                        toggleCollapsed: {
+                            toggleTimelineTrack(row.id)
+                        },
+                        selectSegment: { segment in
+                            selectTimelineSegment(segment)
+                        }
+                    )
                 }
             }
+
+            timelineSelectionControls
         }
         .padding(12)
         .background(ConsolePalette.surface)
@@ -891,6 +1006,38 @@ struct DashboardView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(ConsolePalette.border, lineWidth: 1)
         )
+    }
+
+    private var timelineSelectionControls: some View {
+        HStack(spacing: 8) {
+            Text(timelineSelectionSummary)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(ConsolePalette.textTertiary)
+                .lineLimit(1)
+
+            Spacer()
+
+            Button(copy.text("timelineFullProgram")) {
+                selectedTimelineRange = nil
+                commandController.reportRecordingProgress(copy.text("timelineFullProgramSelected"))
+            }
+            .buttonStyle(TimelineMiniButtonStyle())
+            .disabled(selectedTimelineRange == nil)
+
+            Button(copy.text("timelineClearSelection")) {
+                selectedTimelineRange = nil
+            }
+            .buttonStyle(TimelineMiniButtonStyle())
+            .disabled(selectedTimelineRange == nil)
+
+            Button(copy.text("timelineExportRange")) {
+                saveCurrentPiPTimelineForLastRecording()
+                exportDraftSettings = .presentationDefault
+                showsExportSettings = true
+            }
+            .buttonStyle(TimelineMiniButtonStyle())
+            .disabled(commandController.lastRecordingSession == nil || selectedTimelineRange == nil)
+        }
     }
 
     private var quickStartPanel: some View {
@@ -1210,11 +1357,11 @@ struct DashboardView: View {
                         }
                     }
 
-                    MenuControlRow(label: copy.runtimeText("音频输入")) {
+                    MenuControlRow(label: copy.text("audioInput")) {
                         HStack(spacing: 7) {
                             Menu {
                                 ForEach(audioInputDevices) { device in
-                                    Button(device.name) {
+                                    Button(localizedAudioInputName(device)) {
                                         selectedAudioInputDeviceID = device.id
                                     }
                                 }
@@ -1232,11 +1379,13 @@ struct DashboardView: View {
                         }
                     }
 
+                    presenterVideoEffectsControls
+
                     ConsoleDivider()
 
                     ConsoleDetailLine(label: copy.statusLabel, value: cameraStatusValue)
                     ConsoleDetailLine(label: copy.deviceDetail, value: localizedSelectedDeviceDetail, monospaced: true)
-                    ConsoleDetailLine(label: copy.runtimeText("音频详情"), value: selectedAudioInputDeviceDetail, monospaced: true)
+                    ConsoleDetailLine(label: copy.text("audioDetails"), value: selectedAudioInputDeviceDetail, monospaced: true)
                     ConsoleDetailLine(label: copy.inputsFound, value: discoveredDeviceSummary)
                     ConsoleDetailLine(label: copy.transport, value: localizedCommandSummary, monospaced: true)
                 }
@@ -1244,6 +1393,76 @@ struct DashboardView: View {
             }
         }
         .consoleCardSurface()
+    }
+
+    private var presenterVideoEffectsControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ConsoleFieldLabel(copy.text("presenterVideoEffects"))
+                Spacer()
+                Toggle("", isOn: $presenterMirrorEnabled)
+                    .labelsHidden()
+                    .toggleStyle(ConsoleSwitchToggleStyle())
+                Text(copy.text("mirrorPresenter"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ConsolePalette.textSecondary)
+            }
+
+            presenterEffectSlider(
+                label: copy.text("presenterBrightness"),
+                value: $presenterBrightness,
+                range: -0.3...0.45,
+                format: { value in
+                    let percent = Int((value * 100).rounded())
+                    return percent > 0 ? "+\(percent)%" : "\(percent)%"
+                }
+            )
+            presenterEffectSlider(
+                label: copy.text("presenterContrast"),
+                value: $presenterContrast,
+                range: 0.75...1.35,
+                format: { value in "\(Int((value * 100).rounded()))%" }
+            )
+            presenterEffectSlider(
+                label: copy.text("presenterBeauty"),
+                value: $presenterBeauty,
+                range: 0...0.8,
+                format: { value in "\(Int((value * 100).rounded()))%" }
+            )
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(ConsolePalette.overlay.opacity(0.34))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(ConsolePalette.innerBorder, lineWidth: 1)
+        )
+    }
+
+    private func presenterEffectSlider(
+        label: String,
+        value: Binding<CGFloat>,
+        range: ClosedRange<CGFloat>,
+        format: @escaping (CGFloat) -> String
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ConsolePalette.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .frame(width: 62, alignment: .leading)
+            ConsoleValueSlider(value: value, range: range) {
+                updatePresenterVideoEffectsForLastRecording()
+            }
+            Text(format(value.wrappedValue))
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(ConsolePalette.textTertiary)
+                .frame(width: 42, alignment: .trailing)
+        }
     }
 
     private var footerArea: some View {
@@ -1321,6 +1540,10 @@ struct DashboardView: View {
             Text(copy.exportSettings)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(ConsolePalette.textPrimary)
+
+            Text(timelineSelectionSummary)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(ConsolePalette.textTertiary)
 
             ExportPickerRow(label: copy.resolution) {
                 ExportOptionGrid(
@@ -1539,6 +1762,14 @@ struct DashboardView: View {
         }
     }
 
+    private func persistRecordingSourceSlots() {
+        recordingSourceSlots.save()
+    }
+
+    private func persistRecordingFeatureTier() {
+        recordingFeatureTier.save()
+    }
+
     private func startScreenSourceThumbnailLoading(for options: [ScreenCaptureWindowOption]) {
         screenSourceThumbnailTask?.cancel()
         let sourceIDs = options.prefix(80).map(\.id)
@@ -1572,8 +1803,10 @@ struct DashboardView: View {
     }
 
     private func exportProgramVideo(settings: RecordingExportSettings) {
+        updatePresenterVideoEffectsForLastRecording()
         commandController.exportProgramVideo(
             settings: settings,
+            selectedRange: selectedTimelineRange,
             onProgress: { progress in
                 exportProgress = ExportProgressPresentation(
                     fraction: progress.fraction,
@@ -1630,6 +1863,43 @@ struct DashboardView: View {
         }
         showsScreenSourcePicker = false
         handleScreenCaptureSourceChange()
+    }
+
+    private func switchToRecordingSourceSlot(_ slot: Int) {
+        Task { @MainActor in
+            let snapshot = await ScreenArchiveRecorder.availableSourceSnapshot()
+            screenWindowOptions = snapshot.options
+            screenSourceDiagnostic = snapshot.summary
+            screenSourceThumbnails = [:]
+            startScreenSourceThumbnailLoading(for: snapshot.options)
+
+            guard let assignment = recordingSourceSlots.assignment(for: slot) else {
+                commandController.reportRecordingIssue("源位 \(slot) 尚未绑定录制源")
+                return
+            }
+            guard let preference = recordingSourceSlots.resolvedPreference(
+                for: slot,
+                availableOptions: snapshot.options
+            ) else {
+                commandController.reportRecordingIssue("源位 \(slot) 的录制源不可用：\(assignment.displayName)")
+                return
+            }
+
+            selectedScreenSourceIDs = [assignment.sourceID]
+            let previousPreference = screenSourcePreference
+            screenSourcePreference = preference
+            if previousPreference == preference {
+                handleScreenCaptureSourceChange()
+            }
+            commandController.reportRecordingProgress("源位 \(slot) 已切换：\(assignment.displayName)")
+        }
+    }
+
+    private func updatePresenterVideoEffectsForLastRecording() {
+        guard commandController.lastRecordingSession != nil else {
+            return
+        }
+        commandController.updateLastRecordingPresenterVideoEffects(currentPresenterVideoEffects)
     }
 
     private func saveCurrentPiPTimelineForLastRecording() {
@@ -1930,6 +2200,15 @@ struct DashboardView: View {
         }
     }
 
+    private var currentPresenterVideoEffects: PresenterVideoEffects {
+        PresenterVideoEffects(
+            isMirrored: presenterMirrorEnabled,
+            brightness: Double(presenterBrightness),
+            contrast: Double(presenterContrast),
+            beauty: Double(presenterBeauty)
+        )
+    }
+
     private var currentProgramShowsCameraOverlay: Bool {
         if case .screenWithCameraPictureInPicture = layout {
             return currentProgramUsesCamera
@@ -2023,50 +2302,60 @@ struct DashboardView: View {
             : compactPath(session.url)
     }
 
+    private var timelineDurationMilliseconds: Int {
+        if let session = commandController.lastRecordingSession {
+            return max(
+                1,
+                session.manifest.project.timeline.durationMilliseconds,
+                Int(currentActiveRecordingDuration() * 1000)
+            )
+        }
+        return max(1, Int(currentActiveRecordingDuration() * 1000))
+    }
+
+    private var timelinePlayheadFraction: Double {
+        min(1, max(0, Double(timelinePlayheadMilliseconds) / Double(timelineDurationMilliseconds)))
+    }
+
+    private var timelineSelectionSummary: String {
+        guard let selectedTimelineRange else {
+            return "\(copy.text("timelineRange")): \(copy.text("timelineFullProgram"))"
+        }
+        return "\(copy.text("timelineRange")): \(formattedTimelineTime(selectedTimelineRange.startMilliseconds))-\(formattedTimelineTime(selectedTimelineRange.endMilliseconds))"
+    }
+
+    private func toggleTimelineTrack(_ id: String) {
+        if collapsedTimelineTrackIDs.contains(id) {
+            collapsedTimelineTrackIDs.remove(id)
+        } else {
+            collapsedTimelineTrackIDs.insert(id)
+        }
+    }
+
+    private func selectTimelineSegment(_ segment: RecordingTimelineSegmentPresentation) {
+        guard let range = segment.exportRange else {
+            return
+        }
+        selectedTimelineRange = range
+        timelinePlayheadMilliseconds = range.startMilliseconds
+    }
+
+    private func formattedTimelineTime(_ milliseconds: Int) -> String {
+        let totalSeconds = max(0, milliseconds) / 1000
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+
     private var timelineRows: [RecordingTimelineRow] {
         guard let session = commandController.lastRecordingSession else {
             return plannedTimelineRows
         }
-
-        let roles = Set(session.manifest.project.rawTracks.map(\.role))
-        var rows: [RecordingTimelineRow] = []
-        if roles.contains(.slidesScreen) {
-            rows.append(
-                RecordingTimelineRow(
-                    title: copy.text("trackSlides"),
-                    detail: screenSourcePreference.localizedLabel(copy),
-                    status: fileStatus(for: session.slidesScreenURL),
-                    color: ConsolePalette.teal
-                )
-            )
-        }
-        if roles.contains(.presenterCamera) {
-            rows.append(
-                RecordingTimelineRow(
-                    title: copy.text("trackSpeaker"),
-                    detail: localizedActiveDeviceName,
-                    status: fileStatus(for: session.presenterCameraURL),
-                    color: ConsolePalette.gold
-                )
-            )
-        }
-        rows.append(
-            RecordingTimelineRow(
-                title: copy.text("trackMic"),
-                detail: selectedAudioInputDeviceTitle,
-                status: fileStatus(for: session.microphoneAudioURL),
-                color: ConsolePalette.textSecondary
-            )
-        )
-        rows.append(
-            RecordingTimelineRow(
-                title: copy.text("trackProgram"),
-                detail: layout.localizedLabel(copy),
-                status: fileStatus(for: session.programOutputURL),
-                color: ConsolePalette.record
-            )
-        )
-        return rows
+        return RecordingTimelineTrackModel.rows(
+            manifest: session.manifest,
+            fileStates: timelineFileStates(for: session),
+            fallbackDurationMilliseconds: max(1, Int(currentActiveRecordingDuration() * 1000))
+        ).map(recordingTimelineRow)
     }
 
     private var plannedTimelineRows: [RecordingTimelineRow] {
@@ -2074,40 +2363,123 @@ struct DashboardView: View {
         if currentProgramUsesScreen {
             rows.append(
                 RecordingTimelineRow(
+                    id: "planned-slides",
                     title: copy.text("trackSlides"),
                     detail: screenSourcePreference.localizedLabel(copy),
                     status: copy.standby,
-                    color: ConsolePalette.teal
+                    color: ConsolePalette.teal,
+                    isCollapsed: collapsedTimelineTrackIDs.contains("planned-slides"),
+                    segments: [.placeholder]
                 )
             )
         }
         if currentProgramUsesCamera {
             rows.append(
                 RecordingTimelineRow(
+                    id: "planned-speaker",
                     title: copy.text("trackSpeaker"),
                     detail: localizedActiveDeviceName,
                     status: copy.standby,
-                    color: ConsolePalette.gold
+                    color: ConsolePalette.gold,
+                    isCollapsed: collapsedTimelineTrackIDs.contains("planned-speaker"),
+                    segments: [.placeholder]
                 )
             )
         }
         rows.append(
             RecordingTimelineRow(
+                id: "planned-mic",
                 title: copy.text("trackMic"),
                 detail: selectedAudioInputDeviceTitle,
                 status: copy.standby,
-                color: ConsolePalette.textSecondary
+                color: ConsolePalette.textSecondary,
+                isCollapsed: collapsedTimelineTrackIDs.contains("planned-mic"),
+                segments: [.placeholder]
             )
         )
         rows.append(
             RecordingTimelineRow(
+                id: "planned-program",
                 title: copy.text("trackProgram"),
                 detail: layout.localizedLabel(copy),
                 status: copy.previewUnavailable,
-                color: ConsolePalette.record
+                color: ConsolePalette.record,
+                isCollapsed: collapsedTimelineTrackIDs.contains("planned-program"),
+                segments: [.placeholder]
             )
         )
         return rows
+    }
+
+    private func recordingTimelineRow(_ model: RecordingTimelineTrackRowModel) -> RecordingTimelineRow {
+        RecordingTimelineRow(
+            id: model.id,
+            title: localizedTimelineTitle(model),
+            detail: model.detail,
+            status: localizedTimelineState(model.state),
+            color: timelineColor(for: model.role),
+            isCollapsed: collapsedTimelineTrackIDs.contains(model.id),
+            segments: model.segments.map {
+                RecordingTimelineSegmentPresentation(
+                    startMilliseconds: $0.startMilliseconds,
+                    endMilliseconds: $0.endMilliseconds,
+                    fraction: $0.fraction,
+                    label: copy.runtimeText($0.label)
+                )
+            }
+        )
+    }
+
+    private func localizedTimelineTitle(_ row: RecordingTimelineTrackRowModel) -> String {
+        switch row.role {
+        case .slidesScreen:
+            return copy.text("trackSlides")
+        case .presenterCamera:
+            return copy.text("trackSpeaker")
+        case .microphoneAudio:
+            return copy.text("trackMic")
+        case nil:
+            return copy.text("trackProgram")
+        }
+    }
+
+    private func localizedTimelineState(_ state: RecordingTimelineFileState) -> String {
+        switch state {
+        case .missing:
+            return copy.previewUnavailable
+        case .writing:
+            return copy.text("trackWriting")
+        case .ready:
+            return copy.ready
+        }
+    }
+
+    private func timelineColor(for role: RecordingTrackRole?) -> Color {
+        switch role {
+        case .slidesScreen:
+            return ConsolePalette.teal
+        case .presenterCamera:
+            return ConsolePalette.gold
+        case .microphoneAudio:
+            return ConsolePalette.textSecondary
+        case nil:
+            return ConsolePalette.record
+        }
+    }
+
+    private func timelineFileStates(for session: RecordingSessionRecord) -> [String: RecordingTimelineFileState] {
+        var states: [String: RecordingTimelineFileState] = [:]
+        for asset in session.manifest.mediaAssets {
+            let url = session.url.appendingPathComponent(asset.relativePath)
+            if commandController.isRecording,
+               asset.output != .programRecording,
+               FileManager.default.fileExists(atPath: url.path) {
+                states[asset.relativePath] = .writing
+            } else {
+                states[asset.relativePath] = FileManager.default.fileExists(atPath: url.path) ? .ready : .missing
+            }
+        }
+        return states
     }
 
     private func fileStatus(for url: URL) -> String {
@@ -2175,11 +2547,19 @@ struct DashboardView: View {
     }
 
     private var selectedAudioInputDeviceTitle: String {
-        copy.runtimeText(selectedAudioInputDevice.name)
+        localizedAudioInputName(selectedAudioInputDevice)
     }
 
     private var selectedAudioInputDeviceDetail: String {
-        copy.runtimeText(selectedAudioInputDevice.detail)
+        localizedAudioInputDetail(selectedAudioInputDevice)
+    }
+
+    private func localizedAudioInputName(_ device: AudioInputDeviceOption) -> String {
+        device.isSystemDefault ? copy.text("systemDefaultMicrophone") : copy.runtimeText(device.name)
+    }
+
+    private func localizedAudioInputDetail(_ device: AudioInputDeviceOption) -> String {
+        device.isSystemDefault ? copy.text("systemDefaultMicrophoneDetail") : copy.runtimeText(device.detail)
     }
 
     private func refreshAudioInputDevices() {
@@ -2302,7 +2682,7 @@ private enum ConsoleButtonVariant {
     case outline
 }
 
-private enum ConsolePalette {
+enum ConsolePalette {
     static let background = Color(red: 13 / 255, green: 10 / 255, blue: 7 / 255)
     static let surface = Color(red: 24 / 255, green: 19 / 255, blue: 9 / 255)
     static let overlay = Color(red: 30 / 255, green: 24 / 255, blue: 16 / 255)
@@ -2477,11 +2857,34 @@ private struct ConsoleDetailLine: View {
 }
 
 private struct RecordingTimelineRow: Identifiable {
-    let id = UUID()
+    let id: String
     let title: String
     let detail: String
     let status: String
     let color: Color
+    let isCollapsed: Bool
+    let segments: [RecordingTimelineSegmentPresentation]
+}
+
+private struct RecordingTimelineSegmentPresentation: Hashable {
+    let startMilliseconds: Int?
+    let endMilliseconds: Int?
+    let fraction: Double
+    let label: String
+
+    var exportRange: TimelineExportRange? {
+        guard let startMilliseconds, let endMilliseconds, startMilliseconds < endMilliseconds else {
+            return nil
+        }
+        return TimelineExportRange(startMilliseconds: startMilliseconds, endMilliseconds: endMilliseconds)
+    }
+
+    static let placeholder = RecordingTimelineSegmentPresentation(
+        startMilliseconds: nil,
+        endMilliseconds: nil,
+        fraction: 1,
+        label: ""
+    )
 }
 
 private struct RecordingLayoutOption: Identifiable {
@@ -2492,9 +2895,24 @@ private struct RecordingLayoutOption: Identifiable {
 
 private struct TimelineTrackRow: View {
     let row: RecordingTimelineRow
+    let selectedRange: TimelineExportRange?
+    let playheadFraction: Double
+    let toggleCollapsed: () -> Void
+    let selectSegment: (RecordingTimelineSegmentPresentation) -> Void
 
     var body: some View {
         HStack(spacing: 9) {
+            Button {
+                toggleCollapsed()
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .rotationEffect(.degrees(row.isCollapsed ? 0 : 90))
+                    .foregroundStyle(ConsolePalette.textTertiary)
+                    .frame(width: 14, height: 14)
+            }
+            .buttonStyle(.plain)
+
             Circle()
                 .fill(row.color)
                 .frame(width: 7, height: 7)
@@ -2505,26 +2923,57 @@ private struct TimelineTrackRow: View {
                 .foregroundStyle(ConsolePalette.textPrimary)
                 .frame(width: 68, alignment: .leading)
 
-            GeometryReader { proxy in
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(row.color.opacity(0.18))
-                    .overlay(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(row.color.opacity(0.42))
-                            .frame(width: max(24, proxy.size.width * 0.72))
+            if row.isCollapsed {
+                Spacer(minLength: 0)
+            } else {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        HStack(spacing: 2) {
+                            ForEach(Array(row.segments.enumerated()), id: \.offset) { _, segment in
+                                Button {
+                                    selectSegment(segment)
+                                } label: {
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .fill(isSelected(segment) ? row.color.opacity(0.72) : row.color.opacity(0.34))
+                                        .overlay {
+                                            if !segment.label.isEmpty && proxy.size.width * segment.fraction > 52 {
+                                                Text(segment.label)
+                                                    .font(.system(size: 8, weight: .semibold))
+                                                    .foregroundStyle(ConsolePalette.textPrimary.opacity(0.72))
+                                                    .lineLimit(1)
+                                                    .minimumScaleFactor(0.7)
+                                            }
+                                        }
+                                }
+                                .buttonStyle(.plain)
+                                .frame(width: max(8, proxy.size.width * segment.fraction))
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(2)
+
+                        Rectangle()
+                            .fill(ConsolePalette.goldBright.opacity(0.86))
+                            .frame(width: 1.5)
+                            .offset(x: max(0, min(proxy.size.width - 1.5, proxy.size.width * playheadFraction)))
                     }
+                    .background(row.color.opacity(0.14))
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .stroke(ConsolePalette.innerBorder, lineWidth: 1)
                     )
+                }
+                .frame(height: 14)
             }
-            .frame(height: 14)
 
-            Text(row.detail)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(ConsolePalette.textTertiary)
-                .lineLimit(1)
-                .frame(width: 150, alignment: .trailing)
+            if !row.isCollapsed {
+                Text(row.detail)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(ConsolePalette.textTertiary)
+                    .lineLimit(1)
+                    .frame(width: 150, alignment: .trailing)
+            }
 
             Text(row.status)
                 .font(.system(size: 10, weight: .semibold))
@@ -2533,6 +2982,13 @@ private struct TimelineTrackRow: View {
                 .frame(width: 64, alignment: .trailing)
         }
         .frame(height: 18)
+    }
+
+    private func isSelected(_ segment: RecordingTimelineSegmentPresentation) -> Bool {
+        guard let selectedRange, let exportRange = segment.exportRange else {
+            return false
+        }
+        return selectedRange == exportRange
     }
 }
 
@@ -2548,6 +3004,8 @@ private struct ConsoleFieldLabel: View {
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(ConsolePalette.textSecondary)
             .tracking(0.8)
+            .lineLimit(1)
+            .minimumScaleFactor(0.68)
     }
 }
 
@@ -2558,7 +3016,7 @@ private struct MenuControlRow<Content: View>: View {
     var body: some View {
         HStack(spacing: 10) {
             ConsoleFieldLabel(label)
-                .frame(width: 58, alignment: .leading)
+                .frame(width: 70, alignment: .leading)
             content
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -2830,6 +3288,22 @@ private struct HelpBubble: View {
                     .foregroundStyle(Color.black.opacity(0.72))
             )
             .shadow(color: .black.opacity(0.28), radius: 10, x: 0, y: 4)
+    }
+}
+
+private struct TimelineMiniButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(ConsolePalette.textSecondary)
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(ConsolePalette.overlay.opacity(configuration.isPressed ? 0.72 : 1))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(ConsolePalette.innerBorder, lineWidth: 1)
+            )
     }
 }
 
@@ -3229,6 +3703,10 @@ private struct ScreenSourcePickerSheet: View {
     let thumbnails: [ScreenCaptureSourceID: CGImage]
     @Binding var viewMode: ScreenSourcePickerViewMode
     @Binding var selectedIDs: Set<ScreenCaptureSourceID>
+    @Binding var sourceSlots: RecordingSourceSlots
+    @Binding var featureTier: RecordingFeatureTier
+    let persistSourceSlots: () -> Void
+    let persistFeatureTier: () -> Void
     let apply: () -> Void
     let refresh: () -> Void
     let requestPermission: () -> Void
@@ -3245,6 +3723,9 @@ private struct ScreenSourcePickerSheet: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(ConsolePalette.textTertiary)
                 Spacer()
+                SourceTierPicker(copy: copy, selection: $featureTier) {
+                    persistFeatureTier()
+                }
                 ScreenSourceViewModePicker(copy: copy, selection: $viewMode)
                 Button(copy.rescan) {
                     refresh()
@@ -3329,7 +3810,12 @@ private struct ScreenSourcePickerSheet: View {
                         copy: copy,
                         option: option,
                         thumbnail: thumbnails[option.id],
-                        isSelected: selectedIDs.contains(option.id)
+                        isSelected: selectedIDs.contains(option.id),
+                        assignedSlot: sourceSlots.slot(for: option.id),
+                        featureTier: featureTier,
+                        assignSlot: { slot in
+                            assign(option, to: slot)
+                        }
                     ) {
                         toggle(option.id)
                     }
@@ -3346,7 +3832,12 @@ private struct ScreenSourcePickerSheet: View {
                     ScreenSourceListRow(
                         copy: copy,
                         option: option,
-                        isSelected: selectedIDs.contains(option.id)
+                        isSelected: selectedIDs.contains(option.id),
+                        assignedSlot: sourceSlots.slot(for: option.id),
+                        featureTier: featureTier,
+                        assignSlot: { slot in
+                            assign(option, to: slot)
+                        }
                     ) {
                         toggle(option.id)
                     }
@@ -3370,6 +3861,49 @@ private struct ScreenSourcePickerSheet: View {
             }
             selectedIDs.insert(id)
         }
+    }
+
+    private func assign(_ option: ScreenCaptureWindowOption, to slot: Int) {
+        guard featureTier.permitsSourceSlot(slot) else {
+            return
+        }
+        if sourceSlots.slot(for: option.id) == slot {
+            sourceSlots.clear(slot: slot)
+        } else {
+            _ = sourceSlots.assign(option, to: slot)
+        }
+        persistSourceSlots()
+    }
+}
+
+private struct SourceTierPicker: View {
+    let copy: AppCopy
+    @Binding var selection: RecordingFeatureTier
+    let persist: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(RecordingFeatureTier.allCases, id: \.self) { tier in
+                Button {
+                    selection = tier
+                    persist()
+                } label: {
+                    Text(tier.localizedLabel(copy))
+                        .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
+                        .frame(width: tier == .free ? 44 : 38, height: 26)
+                        .foregroundStyle(selection == tier ? ConsolePalette.goldBright : ConsolePalette.textTertiary)
+                        .background(selection == tier ? ConsolePalette.overlay : Color.clear)
+                }
+                .buttonStyle(PressablePlainButtonStyle(scale: 0.94))
+                .help("\(copy.text("sourceTierSlots")) \(tier.sourceSlotRange.lowerBound)-\(tier.sourceSlotRange.upperBound)")
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(ConsolePalette.border, lineWidth: 1)
+        )
     }
 }
 
@@ -3406,51 +3940,74 @@ private struct ScreenSourceThumbnailCard: View {
     let option: ScreenCaptureWindowOption
     let thumbnail: CGImage?
     let isSelected: Bool
+    let assignedSlot: Int?
+    let featureTier: RecordingFeatureTier
+    let assignSlot: (Int) -> Void
     let toggle: () -> Void
 
     var body: some View {
-        Button(action: toggle) {
-            VStack(alignment: .leading, spacing: 8) {
-                ZStack(alignment: .topLeading) {
-                    thumbnailLayer
-                        .frame(height: 122)
-                        .frame(maxWidth: .infinity)
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: toggle) {
+                VStack(alignment: .leading, spacing: 8) {
+                    ZStack(alignment: .topLeading) {
+                        thumbnailLayer
+                            .frame(height: 122)
+                            .frame(maxWidth: .infinity)
+                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+                        HStack(spacing: 6) {
+                            Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                                .font(.system(size: 13, weight: .semibold))
+                            Image(systemName: option.iconName)
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundStyle(isSelected ? ConsolePalette.goldBright : ConsolePalette.textSecondary)
+                        .padding(7)
+                        .background(Color.black.opacity(0.42))
                         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .padding(7)
 
-                    HStack(spacing: 6) {
-                        Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                            .font(.system(size: 13, weight: .semibold))
-                        Image(systemName: option.iconName)
-                            .font(.system(size: 12, weight: .semibold))
+                        if let assignedSlot {
+                            Text("\(assignedSlot)")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(ConsolePalette.previewBase)
+                                .frame(width: 24, height: 24)
+                                .background(ConsolePalette.goldBright)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                .padding(7)
+                                .frame(maxWidth: .infinity, alignment: .topTrailing)
+                        }
                     }
-                    .foregroundStyle(isSelected ? ConsolePalette.goldBright : ConsolePalette.textSecondary)
-                    .padding(7)
-                    .background(Color.black.opacity(0.42))
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .padding(7)
-                }
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(copy.runtimeText(option.displayTitle))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(ConsolePalette.textPrimary)
-                        .lineLimit(1)
-                    Text(copy.runtimeText(option.detail))
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(ConsolePalette.textTertiary)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(copy.runtimeText(option.displayTitle))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(ConsolePalette.textPrimary)
+                            .lineLimit(1)
+                        Text(copy.runtimeText(option.detail))
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(ConsolePalette.textTertiary)
+                            .lineLimit(1)
+                    }
                 }
             }
-            .padding(8)
-            .frame(minHeight: 182)
-            .background(isSelected ? ConsolePalette.overlay : ConsolePalette.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .stroke(isSelected ? ConsolePalette.gold.opacity(0.76) : ConsolePalette.border, lineWidth: 1)
+            .buttonStyle(PressablePlainButtonStyle())
+
+            SourceSlotPicker(
+                copy: copy,
+                assignedSlot: assignedSlot,
+                featureTier: featureTier,
+                assignSlot: assignSlot
             )
         }
-        .buttonStyle(PressablePlainButtonStyle())
+        .padding(8)
+        .frame(minHeight: 216)
+        .background(isSelected ? ConsolePalette.overlay : ConsolePalette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(isSelected ? ConsolePalette.gold.opacity(0.76) : ConsolePalette.border, lineWidth: 1)
+        )
     }
 
     @ViewBuilder
@@ -3479,40 +4036,102 @@ private struct ScreenSourceListRow: View {
     let copy: AppCopy
     let option: ScreenCaptureWindowOption
     let isSelected: Bool
+    let assignedSlot: Int?
+    let featureTier: RecordingFeatureTier
+    let assignSlot: (Int) -> Void
     let toggle: () -> Void
 
     var body: some View {
-        Button(action: toggle) {
-            HStack(spacing: 9) {
-                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(isSelected ? ConsolePalette.goldBright : ConsolePalette.textTertiary)
-                Image(systemName: option.iconName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(ConsolePalette.textSecondary)
-                    .frame(width: 16)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(copy.runtimeText(option.displayTitle))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(ConsolePalette.textPrimary)
-                        .lineLimit(1)
-                    Text(copy.runtimeText(option.detail))
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(ConsolePalette.textTertiary)
-                        .lineLimit(1)
+        HStack(spacing: 9) {
+            Button(action: toggle) {
+                HStack(spacing: 9) {
+                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(isSelected ? ConsolePalette.goldBright : ConsolePalette.textTertiary)
+                    Image(systemName: option.iconName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(ConsolePalette.textSecondary)
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(copy.runtimeText(option.displayTitle))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(ConsolePalette.textPrimary)
+                            .lineLimit(1)
+                        Text(copy.runtimeText(option.detail))
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(ConsolePalette.textTertiary)
+                            .lineLimit(1)
+                    }
                 }
-                Spacer()
             }
-            .padding(.horizontal, 10)
-            .frame(height: 46)
-            .background(isSelected ? ConsolePalette.overlay : ConsolePalette.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(isSelected ? ConsolePalette.gold.opacity(0.72) : ConsolePalette.border, lineWidth: 1)
+            .buttonStyle(PressablePlainButtonStyle())
+
+            Spacer()
+            SourceSlotPicker(
+                copy: copy,
+                assignedSlot: assignedSlot,
+                featureTier: featureTier,
+                assignSlot: assignSlot
             )
         }
-        .buttonStyle(PressablePlainButtonStyle())
+        .padding(.horizontal, 10)
+        .frame(height: 52)
+        .background(isSelected ? ConsolePalette.overlay : ConsolePalette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isSelected ? ConsolePalette.gold.opacity(0.72) : ConsolePalette.border, lineWidth: 1)
+        )
+    }
+}
+
+private struct SourceSlotPicker: View {
+    let copy: AppCopy
+    let assignedSlot: Int?
+    let featureTier: RecordingFeatureTier
+    let assignSlot: (Int) -> Void
+
+    var body: some View {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.fixed(22), spacing: 4), count: 5),
+            alignment: .leading,
+            spacing: 4
+        ) {
+            ForEach(Array(RecordingSourceSlots.validSlots), id: \.self) { slot in
+                let isPermitted = featureTier.permitsSourceSlot(slot)
+                Button {
+                    assignSlot(slot)
+                } label: {
+                    Text("\(slot)")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(slotForeground(slot: slot, isPermitted: isPermitted))
+                        .frame(width: 22, height: 20)
+                        .background(slotBackground(slot: slot, isPermitted: isPermitted))
+                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .stroke(assignedSlot == slot ? ConsolePalette.goldBright : ConsolePalette.border, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(PressablePlainButtonStyle(scale: 0.9))
+                .disabled(!isPermitted)
+                .help(isPermitted ? "\(copy.text("sourceSlotHelp")) \(slot) · Command+\(slot)" : "\(featureTier.localizedLabel(copy)) \(copy.text("sourceSlotLocked")) \(slot)")
+            }
+        }
+    }
+
+    private func slotForeground(slot: Int, isPermitted: Bool) -> Color {
+        guard isPermitted else {
+            return ConsolePalette.textTertiary.opacity(0.42)
+        }
+        return assignedSlot == slot ? ConsolePalette.previewBase : ConsolePalette.textTertiary
+    }
+
+    private func slotBackground(slot: Int, isPermitted: Bool) -> Color {
+        guard isPermitted else {
+            return ConsolePalette.overlay.opacity(0.36)
+        }
+        return assignedSlot == slot ? ConsolePalette.goldBright : ConsolePalette.overlay
     }
 }
 
@@ -3586,6 +4205,7 @@ private struct ProgramMonitorView: View {
     @Binding var pipOffset: CGSize
     @Binding var pipScale: CGFloat
     let pipShape: PiPShape
+    let presenterVideoEffects: PresenterVideoEffects
     let canvasSizeChanged: (CGSize) -> Void
     let pipInteractionEnded: () -> Void
     let pipCornerChanged: (PiPCorner) -> Void
@@ -3657,6 +4277,7 @@ private struct ProgramMonitorView: View {
         ZStack {
             if cameraStatus == .running {
                 CameraPreviewView(session: cameraSession)
+                    .modifier(PresenterVideoPreviewEffectModifier(effects: presenterVideoEffects))
             } else {
                 cameraPlaceholder
             }
@@ -3669,6 +4290,7 @@ private struct ProgramMonitorView: View {
         pipChrome {
             if cameraStatus == .running {
                 CameraPreviewView(session: cameraSession)
+                    .modifier(PresenterVideoPreviewEffectModifier(effects: presenterVideoEffects))
             } else {
                 cameraPlaceholder
             }
@@ -3859,6 +4481,18 @@ private struct ProgramMonitorView: View {
             targetY = defaultY
         }
         return CGSize(width: targetX - defaultX, height: targetY - defaultY)
+    }
+}
+
+private struct PresenterVideoPreviewEffectModifier: ViewModifier {
+    let effects: PresenterVideoEffects
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(x: effects.isMirrored ? -1 : 1, y: 1, anchor: .center)
+            .brightness(effects.brightness)
+            .contrast(effects.contrast)
+            .blur(radius: effects.beauty * 1.4)
     }
 }
 

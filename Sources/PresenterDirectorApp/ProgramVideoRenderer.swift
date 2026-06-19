@@ -66,6 +66,7 @@ struct ProgramVideoRenderer {
         session: RecordingSessionRecord,
         settings: RecordingExportSettings = .presentationDefault,
         outputURL: URL? = nil,
+        selectedRange: TimelineExportRange? = nil,
         progress: (@Sendable (ProgramVideoRenderProgress) -> Void)? = nil
     ) async throws -> URL {
         let timeline = session.manifest.project.timeline
@@ -107,6 +108,7 @@ struct ProgramVideoRenderer {
             cameraAsset: cameraSourceTrack == nil ? nil : cameraAsset,
             screenAsset: screenSourceTrack == nil ? nil : screenAsset
         )
+        let exportTimeRange = exportTimeRange(selectedRange, within: duration)
         try await insertMicrophoneAudioIfAvailable(
             into: composition,
             session: session,
@@ -150,7 +152,8 @@ struct ProgramVideoRenderer {
             cameraNaturalSize: cameraNaturalSize,
             screenTrack: screenTrack,
             screenNaturalSize: screenNaturalSize,
-            renderSize: renderSize
+            renderSize: renderSize,
+            presenterVideoEffects: session.manifest.presenterVideoEffects
         )
 
         let destinationURL = outputURL ?? session.programOutputURL
@@ -164,7 +167,7 @@ struct ProgramVideoRenderer {
             settings: settings,
             renderSize: renderSize,
             destinationURL: destinationURL,
-            duration: duration,
+            timeRange: exportTimeRange,
             progress: progress
         )
         try await Self.validatePlayableVideo(at: destinationURL, fileManager: fileManager)
@@ -178,6 +181,22 @@ struct ProgramVideoRenderer {
             )
         )
         return destinationURL
+    }
+
+    private func exportTimeRange(_ selectedRange: TimelineExportRange?, within duration: CMTime) -> CMTimeRange {
+        guard let selectedRange else {
+            return CMTimeRange(start: .zero, duration: duration)
+        }
+        let range = TimelineSelection(ranges: [selectedRange])
+            .normalized(durationMilliseconds: max(1, Int(duration.seconds * 1000)))
+            .ranges
+            .first
+        guard let range else {
+            return CMTimeRange(start: .zero, duration: duration)
+        }
+        let start = CMTime(value: CMTimeValue(range.startMilliseconds), timescale: 1000)
+        let end = CMTime(value: CMTimeValue(range.endMilliseconds), timescale: 1000)
+        return CMTimeRange(start: start, end: end)
     }
 
     private func mediaRequirements(for timeline: RecordingTimeline) -> (camera: Bool, screen: Bool) {
@@ -336,7 +355,8 @@ struct ProgramVideoRenderer {
         cameraNaturalSize: CGSize,
         screenTrack: AVCompositionTrack?,
         screenNaturalSize: CGSize,
-        renderSize: CGSize
+        renderSize: CGSize,
+        presenterVideoEffects: PresenterVideoEffects
     ) throws -> [AVVideoCompositionInstructionProtocol] {
         let totalMilliseconds = max(1, timeline.durationMilliseconds)
         var instructions: [AVVideoCompositionInstructionProtocol] = []
@@ -356,7 +376,8 @@ struct ProgramVideoRenderer {
                     cameraTrack: cameraTrack,
                     cameraNaturalSize: cameraNaturalSize,
                     screenTrack: screenTrack,
-                    screenNaturalSize: screenNaturalSize
+                    screenNaturalSize: screenNaturalSize,
+                    presenterVideoEffects: presenterVideoEffects
                 )
             )
             instructions.append(instruction)
@@ -370,7 +391,8 @@ struct ProgramVideoRenderer {
         cameraTrack: AVCompositionTrack?,
         cameraNaturalSize: CGSize,
         screenTrack: AVCompositionTrack?,
-        screenNaturalSize: CGSize
+        screenNaturalSize: CGSize,
+        presenterVideoEffects: PresenterVideoEffects
     ) throws -> [ProgramVideoRenderLayer] {
         switch scene.view {
         case .speakerFullBody:
@@ -382,7 +404,8 @@ struct ProgramVideoRenderer {
                     trackID: cameraTrack.trackID,
                     naturalSize: cameraNaturalSize,
                     placement: .fullCanvas,
-                    fillMode: .fit
+                    fillMode: .fit,
+                    presenterVideoEffects: presenterVideoEffects
                 )
             ]
         case .speakerCloseUp:
@@ -394,7 +417,8 @@ struct ProgramVideoRenderer {
                     trackID: cameraTrack.trackID,
                     naturalSize: cameraNaturalSize,
                     placement: .fullCanvas,
-                    fillMode: .closeUp
+                    fillMode: .closeUp,
+                    presenterVideoEffects: presenterVideoEffects
                 )
             ]
         case .slidesFullScreen:
@@ -406,7 +430,8 @@ struct ProgramVideoRenderer {
                     trackID: screenTrack.trackID,
                     naturalSize: screenNaturalSize,
                     placement: .fullCanvas,
-                    fillMode: .fit
+                    fillMode: .fit,
+                    presenterVideoEffects: .default
                 )
             ]
         case .slidesWithSpeakerPictureInPicture:
@@ -426,13 +451,15 @@ struct ProgramVideoRenderer {
                     trackID: cameraTrack.trackID,
                     naturalSize: cameraNaturalSize,
                     placement: speakerLayer.placement,
-                    fillMode: speakerLayer.speakerShot == .fullBody ? .fit : .fill
+                    fillMode: speakerLayer.speakerShot == .fullBody ? .fit : .fill,
+                    presenterVideoEffects: presenterVideoEffects
                 ),
                 ProgramVideoRenderLayer(
                     trackID: screenTrack.trackID,
                     naturalSize: screenNaturalSize,
                     placement: .fullCanvas,
-                    fillMode: .fit
+                    fillMode: .fit,
+                    presenterVideoEffects: .default
                 )
             ]
         case .speakerWithSlidesPictureInPicture:
@@ -447,13 +474,15 @@ struct ProgramVideoRenderer {
                     trackID: screenTrack.trackID,
                     naturalSize: screenNaturalSize,
                     placement: scene.layers.first(where: { $0.source == .slidesScreen })?.placement ?? .pictureInPicture(corner: .topRight, size: .medium),
-                    fillMode: .fit
+                    fillMode: .fit,
+                    presenterVideoEffects: .default
                 ),
                 ProgramVideoRenderLayer(
                     trackID: cameraTrack.trackID,
                     naturalSize: cameraNaturalSize,
                     placement: .fullCanvas,
-                    fillMode: .fit
+                    fillMode: .fit,
+                    presenterVideoEffects: presenterVideoEffects
                 )
             ]
         case .sideBySide:
@@ -468,13 +497,15 @@ struct ProgramVideoRenderer {
                     trackID: cameraTrack.trackID,
                     naturalSize: cameraNaturalSize,
                     placement: .rightHalf,
-                    fillMode: .fill
+                    fillMode: .fill,
+                    presenterVideoEffects: presenterVideoEffects
                 ),
                 ProgramVideoRenderLayer(
                     trackID: screenTrack.trackID,
                     naturalSize: screenNaturalSize,
                     placement: .leftHalf,
-                    fillMode: .fit
+                    fillMode: .fit,
+                    presenterVideoEffects: .default
                 )
             ]
         }
@@ -486,13 +517,14 @@ struct ProgramVideoRenderer {
         settings: RecordingExportSettings,
         renderSize: CGSize,
         destinationURL: URL,
-        duration: CMTime,
+        timeRange: CMTimeRange,
         progress: (@Sendable (ProgramVideoRenderProgress) -> Void)?
     ) async throws {
         let reader = try AVAssetReader(asset: asset)
+        reader.timeRange = timeRange
         let writer = try AVAssetWriter(outputURL: destinationURL, fileType: .mp4)
         let progressEmitter = ProgramVideoRenderProgressEmitter(
-            duration: duration,
+            duration: timeRange.duration,
             renderSize: renderSize,
             destinationURL: destinationURL,
             fileManager: fileManager,
@@ -847,6 +879,7 @@ private struct ProgramVideoRenderLayer: Hashable, Sendable {
     let naturalSize: CGSize
     let placement: ProgramLayerPlacement
     let fillMode: ProgramVideoFillMode
+    let presenterVideoEffects: PresenterVideoEffects
 }
 
 private final class ProgramVideoCompositionInstruction: NSObject, AVVideoCompositionInstructionProtocol, @unchecked Sendable {
@@ -912,7 +945,12 @@ private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unche
             let sourceImage = CIImage(cvPixelBuffer: sourceBuffer)
             let fittedImage = sourceImage
                 .transformed(by: geometry.imageTransform)
-            let clippedImage = fittedImage
+            let effectedImage = Self.applyPresenterEffects(
+                to: fittedImage,
+                effects: layer.presenterVideoEffects,
+                targetRect: geometry.rect
+            )
+            let clippedImage = effectedImage
                 .cropped(to: geometry.rect)
                 .applyingFilter("CIBlendWithAlphaMask", parameters: [
                     kCIInputBackgroundImageKey: composedImage,
@@ -926,6 +964,52 @@ private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unche
     }
 
     func cancelAllPendingVideoCompositionRequests() {}
+
+    private static func applyPresenterEffects(
+        to image: CIImage,
+        effects: PresenterVideoEffects,
+        targetRect: CGRect
+    ) -> CIImage {
+        guard !effects.isDefault else {
+            return image
+        }
+
+        var output = image
+        if effects.isMirrored {
+            output = output.transformed(
+                by: CGAffineTransform(translationX: targetRect.midX, y: 0)
+                    .scaledBy(x: -1, y: 1)
+                    .translatedBy(x: -targetRect.midX, y: 0)
+            )
+        }
+
+        if effects.brightness != 0 || effects.contrast != 1 {
+            output = output.applyingFilter("CIColorControls", parameters: [
+                kCIInputBrightnessKey: effects.brightness,
+                kCIInputContrastKey: effects.contrast
+            ])
+        }
+
+        if effects.beauty > 0 {
+            let softened = output
+                .clampedToExtent()
+                .applyingFilter("CIGaussianBlur", parameters: [
+                    kCIInputRadiusKey: 1.2 + effects.beauty * 2.8
+                ])
+                .cropped(to: output.extent)
+            output = softened.applyingFilter("CIBlendWithAlphaMask", parameters: [
+                kCIInputBackgroundImageKey: output,
+                kCIInputMaskImageKey: CIImage(color: CIColor(
+                    red: effects.beauty * 0.35,
+                    green: effects.beauty * 0.35,
+                    blue: effects.beauty * 0.35,
+                    alpha: effects.beauty * 0.35
+                )).cropped(to: output.extent)
+            ])
+        }
+
+        return output
+    }
 }
 
 private struct ProgramLayerGeometry {

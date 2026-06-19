@@ -5,6 +5,8 @@ import CoreGraphics
 import Foundation
 import Testing
 
+@Suite(.serialized)
+struct ProgramVideoRendererTests {
 @Test func programVideoRendererWritesSelectedVideoCodecResolutionAndFrameRate() async throws {
     let fileManager = FileManager.default
     let rootURL = fileManager.temporaryDirectory
@@ -72,6 +74,54 @@ import Testing
     #expect(abs(hevcProbe.frameRate - 60) < 0.5)
     #expect(hevcProbe.hasAudio)
     #expect(hevcProbe.audioDurationSeconds > 0.9)
+}
+
+@Test func programVideoRendererExportsSelectedTimelineRange() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("lingyan-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .camera, duration: 2)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen, duration: 2)
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .screenWithCameraPictureInPicture(corner: .bottomRight),
+        durationMilliseconds: 2_000
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: RecordingProjectManifestFactory().makeManifest(project: project)
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/selection.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264),
+        outputURL: outputURL,
+        selectedRange: TimelineExportRange(startMilliseconds: 400, endMilliseconds: 1_200)
+    )
+
+    let asset = AVURLAsset(url: outputURL)
+    let duration = try await asset.load(.duration).seconds
+    #expect(duration > 0.65)
+    #expect(duration < 0.95)
 }
 
 @Test func programVideoRendererUsesManifestPictureInPictureGeometry() async throws {
@@ -395,6 +445,112 @@ import Testing
     #expect(customPiPGeometry(in: segments[2].scene) == resized)
 }
 
+@Test func programVideoRendererAppliesPresenterMirrorEffect() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("lingyan-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .cameraSplit)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen)
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraOnly,
+        layout: .speakerFullBody,
+        durationMilliseconds: 1_000
+    )
+    let manifest = RecordingProjectManifestFactory().makeManifest(
+        project: project,
+        presenterVideoEffects: PresenterVideoEffects(isMirrored: true)
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: manifest
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/mirrored.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264),
+        outputURL: outputURL
+    )
+
+    let image = try firstFrameImage(from: outputURL)
+    let leftPixel = try #require(pixel(in: image, x: 120, y: 180))
+    let rightPixel = try #require(pixel(in: image, x: 520, y: 180))
+
+    #expect(leftPixel.green > 170)
+    #expect(rightPixel.red > 170)
+}
+
+@Test func programVideoRendererAppliesPresenterBrightnessAndContrastEffect() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("lingyan-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .cameraDim)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen)
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraOnly,
+        layout: .speakerFullBody,
+        durationMilliseconds: 1_000
+    )
+    let manifest = RecordingProjectManifestFactory().makeManifest(
+        project: project,
+        presenterVideoEffects: PresenterVideoEffects(brightness: 0.25, contrast: 1.2, beauty: 0.2)
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: manifest
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/brighter.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264),
+        outputURL: outputURL
+    )
+
+    let image = try firstFrameImage(from: outputURL)
+    let centerPixel = try #require(pixel(in: image, x: 320, y: 180))
+
+    #expect(centerPixel.red > 130)
+    #expect(centerPixel.green > 130)
+    #expect(centerPixel.blue > 130)
+}
+
 @Test func manifestLayoutKeyframesSplitTimelineSegments() {
     let firstGeometry = ProgramPictureInPictureGeometry(
         centerX: 0.78,
@@ -572,13 +728,16 @@ import Testing
     #expect(controller.lastDeliveryDetail.contains("PPT/屏幕原始轨为空"))
     #expect(controller.programPreviewRequest == nil)
 }
+}
 
 private enum TestVideoColor {
     case camera
+    case cameraDim
+    case cameraSplit
     case screen
 }
 
-private func makeTestVideo(url: URL, size: CGSize, color: TestVideoColor) throws {
+private func makeTestVideo(url: URL, size: CGSize, color: TestVideoColor, duration: Int = 1) throws {
     let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
     let input = AVAssetWriterInput(
         mediaType: .video,
@@ -600,7 +759,7 @@ private func makeTestVideo(url: URL, size: CGSize, color: TestVideoColor) throws
     writer.startWriting()
     writer.startSession(atSourceTime: .zero)
 
-    let frameCount = 30
+    let frameCount = max(1, duration) * 30
     for frame in 0..<frameCount {
         while !input.isReadyForMoreMediaData {
             Thread.sleep(forTimeInterval: 0.002)
@@ -656,6 +815,20 @@ private func makePixelBuffer(size: CGSize, color: TestVideoColor, frame: Int) ->
                 pointer[offset] = 90
                 pointer[offset + 1] = 80 &+ pulse
                 pointer[offset + 2] = 220
+            case .cameraDim:
+                pointer[offset] = 72
+                pointer[offset + 1] = 72
+                pointer[offset + 2] = 72
+            case .cameraSplit:
+                if x < width / 2 {
+                    pointer[offset] = 40
+                    pointer[offset + 1] = 40
+                    pointer[offset + 2] = 220
+                } else {
+                    pointer[offset] = 40
+                    pointer[offset + 1] = 220
+                    pointer[offset + 2] = 40
+                }
             case .screen:
                 pointer[offset] = 210
                 pointer[offset + 1] = UInt8((x * 255) / max(1, width - 1))

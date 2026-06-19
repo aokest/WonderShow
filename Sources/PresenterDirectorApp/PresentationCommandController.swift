@@ -152,6 +152,9 @@ final class PresentationCommandController: ObservableObject {
             reportRecordingIssue("尚未创建录制项目")
             return
         }
+        lastActionDescription = "正在打开预览"
+        lastDeliveryBackend = "录制工程"
+        lastDeliveryDetail = "准备合成视频预览"
         guard validateRawTracksForRendering(session: session) else {
             return
         }
@@ -164,13 +167,22 @@ final class PresentationCommandController: ObservableObject {
             Task { @MainActor in
                 do {
                     try await ProgramVideoRenderer.validatePlayableVideo(at: session.programOutputURL)
+                    guard self.lastRecordingSession?.url == session.url else {
+                        return
+                    }
                     openProgramPreview(session.programOutputURL)
                 } catch {
                     do {
+                        lastActionDescription = "正在重新生成预览"
+                        lastDeliveryBackend = "录制工程"
+                        lastDeliveryDetail = "已生成文件不可播放，正在重新合成"
                         let outputURL = try await ProgramVideoRenderer().render(
                             session: session,
                             settings: .presentationDefault
                         )
+                        guard self.lastRecordingSession?.url == session.url else {
+                            return
+                        }
                         openProgramPreview(outputURL)
                     } catch {
                         reportRecordingIssue("预览生成失败：\(error.localizedDescription)")
@@ -190,6 +202,9 @@ final class PresentationCommandController: ObservableObject {
                     session: session,
                     settings: .presentationDefault
                 )
+                guard self.lastRecordingSession?.url == session.url else {
+                    return
+                }
                 openProgramPreview(outputURL)
             } catch {
                 reportRecordingIssue("预览生成失败：\(error.localizedDescription)")
@@ -218,6 +233,17 @@ final class PresentationCommandController: ObservableObject {
         updateRecordingSessionManifest(
             session: session,
             manifest: session.manifest.updatingPictureInPictureKeyframes(keyframes)
+        )
+    }
+
+    func updateLastRecordingPresenterVideoEffects(_ effects: PresenterVideoEffects) {
+        guard let session = lastRecordingSession else {
+            return
+        }
+
+        updateRecordingSessionManifest(
+            session: session,
+            manifest: session.manifest.updatingPresenterVideoEffects(effects)
         )
     }
 
@@ -332,6 +358,7 @@ final class PresentationCommandController: ObservableObject {
 
     func exportProgramVideo(
         settings: RecordingExportSettings = .presentationDefault,
+        selectedRange: TimelineExportRange? = nil,
         onProgress: (@MainActor (ProgramVideoRenderProgress) -> Void)? = nil,
         completion: (@MainActor (Result<ProgramVideoExportResult, Error>) -> Void)? = nil
     ) {
@@ -346,8 +373,8 @@ final class PresentationCommandController: ObservableObject {
         }
 
         let panel = NSSavePanel()
-        panel.title = "导出合成视频"
-        panel.nameFieldStringValue = exportFileName(settings: settings)
+        panel.title = selectedRange == nil ? "导出合成视频" : "导出选区视频"
+        panel.nameFieldStringValue = exportFileName(settings: settings, selectedRange: selectedRange)
         panel.allowedContentTypes = [.mpeg4Movie]
         panel.canCreateDirectories = true
 
@@ -367,6 +394,7 @@ final class PresentationCommandController: ObservableObject {
                     session: session,
                     settings: settings,
                     outputURL: url,
+                    selectedRange: selectedRange,
                     progress: { progress in
                         progressCache.store(progress)
                         Task { @MainActor in
@@ -508,7 +536,8 @@ final class PresentationCommandController: ObservableObject {
         cameraName: String = "未连接",
         mode: RecordingMode = .cameraAndScreen,
         layout: RecordingLayout = .screenWithCameraPictureInPicture(corner: .bottomRight),
-        pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil
+        pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil,
+        presenterVideoEffects: PresenterVideoEffects = .default
     ) {
         let result = sendCommand(
             .toggleRecording,
@@ -517,7 +546,8 @@ final class PresentationCommandController: ObservableObject {
             cameraName: cameraName,
             recordingMode: mode,
             recordingLayout: layout,
-            pictureInPictureGeometry: pictureInPictureGeometry
+            pictureInPictureGeometry: pictureInPictureGeometry,
+            presenterVideoEffects: presenterVideoEffects
         )
         lastActionDescription = result.userFacingAction(action: .toggleRecording)
     }
@@ -531,7 +561,8 @@ final class PresentationCommandController: ObservableObject {
         cameraName: String = "未连接",
         recordingMode: RecordingMode = .cameraAndScreen,
         recordingLayout: RecordingLayout = .screenWithCameraPictureInPicture(corner: .bottomRight),
-        pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil
+        pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil,
+        presenterVideoEffects: PresenterVideoEffects = .default
     ) -> CommandDeliveryResult {
         updateFrontmostApplication()
 
@@ -542,7 +573,8 @@ final class PresentationCommandController: ObservableObject {
                     cameraName: cameraName,
                     mode: recordingMode,
                     layout: recordingLayout,
-                    pictureInPictureGeometry: pictureInPictureGeometry
+                    pictureInPictureGeometry: pictureInPictureGeometry,
+                    presenterVideoEffects: presenterVideoEffects
                 )
             )
         }
@@ -626,7 +658,8 @@ final class PresentationCommandController: ObservableObject {
         cameraName: String = "未连接",
         mode: RecordingMode = .cameraAndScreen,
         layout: RecordingLayout = .screenWithCameraPictureInPicture(corner: .bottomRight),
-        pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil
+        pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil,
+        presenterVideoEffects: PresenterVideoEffects = .default
     ) -> CommandDeliveryResult {
         if isRecording {
             isRecording = false
@@ -643,7 +676,8 @@ final class PresentationCommandController: ObservableObject {
                 cameraName: cameraName,
                 mode: mode,
                 layout: layout,
-                pictureInPictureGeometry: pictureInPictureGeometry
+                pictureInPictureGeometry: pictureInPictureGeometry,
+                presenterVideoEffects: presenterVideoEffects
             )
             activeRecordingSession = session
             lastRecordingSession = session
@@ -659,8 +693,14 @@ final class PresentationCommandController: ObservableObject {
         }
     }
 
-    private func exportFileName(settings: RecordingExportSettings) -> String {
-        "program-\(settings.fileNameSuffix).mp4"
+    private func exportFileName(settings: RecordingExportSettings, selectedRange: TimelineExportRange? = nil) -> String {
+        let rangeSuffix: String
+        if let selectedRange {
+            rangeSuffix = "-selection-\(selectedRange.startMilliseconds)ms-\(selectedRange.endMilliseconds)ms"
+        } else {
+            rangeSuffix = ""
+        }
+        return "program\(rangeSuffix)-\(settings.fileNameSuffix).mp4"
     }
 
     private func sendHTMLCommand(_ action: PresentationAction, swipeVelocity: Double? = nil) -> CommandDeliveryResult {

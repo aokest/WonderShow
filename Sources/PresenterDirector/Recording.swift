@@ -144,6 +144,35 @@ public struct RecordingExportSettings: Codable, Hashable, Sendable {
     }
 }
 
+public struct PresenterVideoEffects: Codable, Hashable, Sendable {
+    public var isMirrored: Bool
+    public var brightness: Double
+    public var contrast: Double
+    public var beauty: Double
+
+    public init(
+        isMirrored: Bool = false,
+        brightness: Double = 0,
+        contrast: Double = 1,
+        beauty: Double = 0
+    ) {
+        self.isMirrored = isMirrored
+        self.brightness = Self.clamp(brightness, lower: -0.5, upper: 0.5)
+        self.contrast = Self.clamp(contrast, lower: 0.5, upper: 1.5)
+        self.beauty = Self.clamp(beauty, lower: 0, upper: 1)
+    }
+
+    public static let `default` = PresenterVideoEffects()
+
+    public var isDefault: Bool {
+        self == .default
+    }
+
+    private static func clamp(_ value: Double, lower: Double, upper: Double) -> Double {
+        min(max(value, lower), upper)
+    }
+}
+
 public enum ProgramComposition: Codable, Hashable, Sendable {
     case singleCamera
     case screenOnly
@@ -632,18 +661,54 @@ public struct RecordingProjectManifest: Codable, Hashable, Sendable {
     public let schemaVersion: Int
     public let project: RecordingProject
     public let mediaAssets: [RecordingMediaAsset]
+    public let presenterVideoEffects: PresenterVideoEffects
 
-    public init(schemaVersion: Int, project: RecordingProject, mediaAssets: [RecordingMediaAsset]) {
+    public init(
+        schemaVersion: Int,
+        project: RecordingProject,
+        mediaAssets: [RecordingMediaAsset],
+        presenterVideoEffects: PresenterVideoEffects = .default
+    ) {
         self.schemaVersion = schemaVersion
         self.project = project
         self.mediaAssets = mediaAssets
+        self.presenterVideoEffects = presenterVideoEffects
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case project
+        case mediaAssets
+        case presenterVideoEffects
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        project = try container.decode(RecordingProject.self, forKey: .project)
+        mediaAssets = try container.decode([RecordingMediaAsset].self, forKey: .mediaAssets)
+        presenterVideoEffects = try container.decodeIfPresent(
+            PresenterVideoEffects.self,
+            forKey: .presenterVideoEffects
+        ) ?? .default
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(project, forKey: .project)
+        try container.encode(mediaAssets, forKey: .mediaAssets)
+        try container.encode(presenterVideoEffects, forKey: .presenterVideoEffects)
     }
 }
 
 public struct RecordingProjectManifestFactory: Sendable {
     public init() {}
 
-    public func makeManifest(project: RecordingProject) -> RecordingProjectManifest {
+    public func makeManifest(
+        project: RecordingProject,
+        presenterVideoEffects: PresenterVideoEffects = .default
+    ) -> RecordingProjectManifest {
         var mediaAssets = project.rawTracks.map { track in
             RecordingMediaAsset(
                 relativePath: relativePath(for: track.role),
@@ -672,7 +737,8 @@ public struct RecordingProjectManifestFactory: Sendable {
         return RecordingProjectManifest(
             schemaVersion: 1,
             project: project,
-            mediaAssets: mediaAssets
+            mediaAssets: mediaAssets,
+            presenterVideoEffects: presenterVideoEffects
         )
     }
 

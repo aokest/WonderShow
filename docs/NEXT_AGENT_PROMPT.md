@@ -48,15 +48,15 @@
 - 录制中切换“布局”现在会生成 `RecordingLayoutKeyframe`，停止保存时拆分 program timeline；预览合成和导出会复现“屏幕主画面/讲者主画面”等切换。
 - 已有测试覆盖：program 音轨时长不是一瞬间、layout keyframes 拆 timeline、真实渲染前后半段主画面变化。用户已确认当前版本稳定；未来改音频/布局时要继续以这些测试作为回归边界。
 
-下一轮优先级大致是：
+当前开发分支建议从 `codex/source-slots-hotkeys-v0.8` 继续，基于用户已确认稳定的 `v0.7.20260619-stable`。用户已确认下一阶段按下面 1-5 顺序推进；第 6 组先进入待办，不混入当前快捷切源/录制工作室主线。
 
-1. P1 增加录制中快捷切源：用户希望按 `Command+1` 到 `Command+6` 分别快速切换不同录制源到监控台；点击“录制源”刷新出的活跃窗格底部，需要允许用户自定义哪个源是 1、2、3、4、5、6。实现时复用现有 ScreenCaptureKit 源选择/缩略图/updateSource 链路，并把源位状态和切源事件设计成未来时间轴可读的数据。
-2. P1 增加讲者画面质量能力：摄像头镜像翻转、调亮/对比度、轻量美颜，要求 preview、raw/export、manifest 一致。
-3. P1 把底部时间轴从占位变成真实轨道编辑器：展示音频/视频轨道，支持折叠、删除、拖拽定位、多选导出，支持单段或多段时间范围导出。
-4. P1 增加 macOS 菜单栏常驻和桌面可拖拽 mini toolbar：显示录制时间，提供暂停、继续、结束录制和切换活动窗格/录制源按钮；mini toolbar 也应能触发源位切换或打开源选择器。
-5. P1 提高手势识别准确度：继续视觉识别主线，建立真实采样/回放测试集，引入基于 landmarks 的动态时序模型；强化学习先用于策略层阈值和触发策略，不要直接替代底层视觉检测。
-6. 观察项：如果用户再次反馈监视器窗口抖动或尺寸变化，优先加真实窗口日志 source id、frame、contentRect、scaleFactor、pixelSize、preview image size、raw track natural size，再查 `ScreenPreviewService`、`ScreenArchiveRecorder`、窗口 source rect、Retina scale 和 aspect-fit 布局。
-7. P2 设计授权验证/付费激活、正式签名公证、多端点支持和多主题皮肤。
+1. P1 增加录制中快捷切源：已在 `codex/source-slots-hotkeys-v0.8` 开始落地。`Command+1` 到 `Command+6` 只在录制中且当前 program 使用屏幕源时生效；触发后重新扫描当前可用 ScreenCaptureKit 源，解析源位并复用现有 `screenSourcePreference -> handleScreenCaptureSourceChange() -> ScreenArchiveRecorder.updateSource` 链路。
+2. P1 在“录制源”弹窗中增加 1-6 源位绑定：已新增 `RecordingSourceSlots`，源选择器缩略图/列表项都显示 1-6 小按钮。源位状态持久化到 UserDefaults，只保存 slot、source id、显示名、类型、尺寸等元数据，不保存窗口截图或隐私内容。测试覆盖槽位边界、重复绑定替换、窗口关闭后不可切和快捷键解析。
+3. P1 增加讲者画面质量能力：已新增镜像、亮度、对比度和轻量柔化控制；预览层即时显示，manifest 记录 `PresenterVideoEffects`，program 导出按 manifest 应用同样效果，旧项目缺字段时默认无效果。
+4. P1 把底部时间轴从占位变成真实轨道编辑器基础：已按 manifest/raw 文件状态展示 PPT/屏幕、讲者、声音、合成轨道，支持轨道折叠、点击片段定位播放头、选择单段范围并导出选区。未做破坏性删除 raw、多段非连续拼接和完整波形/缩略图编辑器。
+5. P1 增加 macOS 菜单栏常驻和桌面可拖拽 mini toolbar：已新增状态栏菜单和浮动 mini toolbar，显示录制时间，复用现有 Dashboard 录制状态机执行开始/取消倒计时/暂停/继续/终止、打开录制源选择器和源位 1-6 切换。
+6. 待办后置：动态手势识别增强、授权验证/付费激活、正式签名公证、多端点支持和多主题皮肤先不进入当前开发分支，等用户重新确认优先级后再单独开分支或专项推进。
+7. 观察项：如果用户再次反馈监视器窗口抖动或尺寸变化，优先加真实窗口日志 source id、frame、contentRect、scaleFactor、pixelSize、preview image size、raw track natural size，再查 `ScreenPreviewService`、`ScreenArchiveRecorder`、窗口 source rect、Retina scale 和 aspect-fit 布局。
 
 关键命令：
 

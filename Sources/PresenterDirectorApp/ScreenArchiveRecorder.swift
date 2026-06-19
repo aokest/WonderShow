@@ -7,7 +7,7 @@ import Foundation
 import PresenterDirector
 @preconcurrency import ScreenCaptureKit
 
-enum ScreenCaptureSourcePreference: Hashable {
+enum ScreenCaptureSourcePreference: Hashable, Sendable {
     case automaticPresentationWindow
     case entireDisplay
     case selectedDisplay(UInt32)
@@ -37,7 +37,7 @@ enum ScreenArchiveRecorderError: Error, LocalizedError {
     }
 }
 
-enum ScreenCaptureSourceID: Hashable, Sendable {
+enum ScreenCaptureSourceID: Codable, Hashable, Sendable {
     case display(UInt32)
     case window(UInt32)
 

@@ -2,6 +2,9 @@
 
 ## 2026-06-19
 
+- 从稳定基线 `v0.7.20260619-stable` 开出后续开发分支 `codex/source-slots-hotkeys-v0.8`，用户确认下一阶段按 1-5 顺序推进：`Command+1` 到 `Command+6` 录制中快捷切源、源选择器 1-6 源位绑定、讲者画面镜像/调亮/轻美颜、真实时间轴、菜单栏常驻与桌面 mini toolbar。动态手势增强、授权付费、多端点和多主题先进入后置待办，不混入当前分支。
+- 落地 v0.8 第一组功能：新增 `RecordingSourceSlots` 源位模型和测试；“录制源”弹窗的缩略图/列表项支持绑定 1-6 源位；录制中按 `Command+1` 到 `Command+6` 会重新扫描当前可用源并复用现有 `screenSourcePreference` / `ScreenArchiveRecorder.updateSource` 切源链路。源位只持久化 source id、显示名、类型和尺寸等元数据，不保存缩略图或窗口内容。
+- 落地 v0.8 后续 3-5 项基础能力：讲者画面新增镜像/亮度/对比度/轻量柔化并写入 manifest 与 program 导出；底部时间轴改为真实轨道/片段显示，支持折叠、片段选区、播放头定位和单段选区导出；新增 macOS 状态栏菜单和桌面 mini toolbar，复用现有录制状态机控制开始/暂停/继续/终止、打开源选择器和切换源位。
 - 根据安全审计更新本地安全边界：DemoControlServer 显式绑定 `127.0.0.1` 并引入本地一次性 token，MediaPipe sidecar `/health` 与 `/infer` 需要 `X-WonderShow-Local-Token`，去除通配 CORS 并限制请求体大小。
 - 更新打包语义：`scripts/build-app.sh` 默认 Release 构建，确保 `#if DEBUG` 调试遥测不进入可分发包。
 - 更新项目导入风险说明：`RecordingProjectStore` 增加 manifest 大小和 `schemaVersion` 校验。

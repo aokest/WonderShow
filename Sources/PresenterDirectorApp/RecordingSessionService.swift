@@ -106,7 +106,8 @@ extension RecordingProjectManifest {
         return RecordingProjectManifest(
             schemaVersion: schemaVersion,
             project: updatedProject,
-            mediaAssets: mediaAssets
+            mediaAssets: mediaAssets,
+            presenterVideoEffects: presenterVideoEffects
         )
     }
 
@@ -153,7 +154,8 @@ extension RecordingProjectManifest {
         return RecordingProjectManifest(
             schemaVersion: schemaVersion,
             project: updatedProject,
-            mediaAssets: mediaAssets
+            mediaAssets: mediaAssets,
+            presenterVideoEffects: presenterVideoEffects
         )
     }
 
@@ -218,7 +220,17 @@ extension RecordingProjectManifest {
         return RecordingProjectManifest(
             schemaVersion: schemaVersion,
             project: updatedProject,
-            mediaAssets: mediaAssets
+            mediaAssets: mediaAssets,
+            presenterVideoEffects: presenterVideoEffects
+        )
+    }
+
+    func updatingPresenterVideoEffects(_ effects: PresenterVideoEffects) -> RecordingProjectManifest {
+        RecordingProjectManifest(
+            schemaVersion: schemaVersion,
+            project: project,
+            mediaAssets: mediaAssets,
+            presenterVideoEffects: effects
         )
     }
 
@@ -408,6 +420,7 @@ struct RecordingSessionService {
         mode: RecordingMode = .cameraAndScreen,
         layout: RecordingLayout = .screenWithCameraPictureInPicture(corner: .bottomRight),
         pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil,
+        presenterVideoEffects: PresenterVideoEffects = .default,
         expectedDurationMilliseconds: Int = 30 * 60 * 1_000
     ) throws -> RecordingSessionRecord {
         let project = projectFactory.makeProject(
@@ -419,7 +432,10 @@ struct RecordingSessionService {
             durationMilliseconds: expectedDurationMilliseconds,
             pictureInPictureGeometry: pictureInPictureGeometry
         )
-        let manifest = manifestFactory.makeManifest(project: project)
+        let manifest = manifestFactory.makeManifest(
+            project: project,
+            presenterVideoEffects: presenterVideoEffects
+        )
         let sessionURL = try makeSessionDirectory()
 
         try fileManager.createDirectory(

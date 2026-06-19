@@ -14,24 +14,26 @@ The current app can be tried as a recording studio baseline:
 - The current record button creates a `.wondershow` project folder under `~/Movies/灵演/` with `Raw/`, `Exports/`, and `project.json`.
 - Presenter camera, selected screen/window, and selected microphone tracks can be recorded to raw media.
 - Screen/window source picking supports list and thumbnail views and filters out background/no-window items.
+- Source picker entries can be assigned to user-defined slots 1-6; during recording `Command+1` through `Command+6` and the mini toolbar reuse the existing ScreenCaptureKit `updateSource` pipeline.
 - Screen/window source switching during recording preserves a fixed raw track canvas and crops ScreenCaptureKit `contentRect` before normalization, so monitor preview and program preview/export stay closer in source size.
 - The monitor supports draggable/resizable shaped PiP, and the same PiP geometry/keyframes are used by preview and export.
+- Presenter video effects support mirror, brightness, contrast, and light beauty, with preview and program export driven by the same manifest value.
 - Layout switching during recording is stored as `RecordingLayoutKeyframe`, so screen-main/speaker-main changes appear in preview and export.
 - Microphone recording uses sample-level `AVCaptureAudioDataOutput + AVAssetWriter`, skips startup transient audio, waits for writer completion on stop, and supports pause/resume retiming.
+- The bottom timeline displays real project tracks and segment ranges, supports folding tracks, selecting a segment, moving the export playhead, and exporting one selected time range.
 - Preview composition and video export are connected to the real renderer.
 - Export settings are real: selected resolution, frame rate, quality, and codec are passed into the writer and covered by tests.
 - Export progress, generated file size, success dialog, and Finder reveal are present.
 - Recording controls support start, pause, resume, terminate, save/discard, and timer reset.
+- The app has a macOS menu bar status item and draggable floating mini toolbar for recording controls, source picker access, and source slot switching.
 
 The following features are not implemented yet:
 
-- Interactive timeline editing UI.
+- Full destructive/non-destructive timeline editing beyond the current fold/select/single-range-export foundation.
 - Live waveform/video thumbnail timeline.
 - Audio input switching during recording.
 - Multi-camera simultaneous recording UI.
-- Beauty, lighting, and mirror controls for presenter video.
-- Menu bar resident app mode and draggable desktop mini toolbar, including pause/resume/stop/time plus active-window/source switching.
-- `Command+1` through `Command+6` fast source switching during recording, with user-defined source slot assignments in the active-window/source picker.
+- Multi-range non-contiguous export and selected-track-only export.
 - Licensing, paid activation, App Store / direct-sale entitlement design.
 - Multi-endpoint support across macOS, iPad, iPhone, Android, Windows PC, and potentially HarmonyOS.
 - Multiple UI skins/themes beyond the current warm dark-gold console.
@@ -197,17 +199,27 @@ The current core model intentionally keeps capture/rendering concerns out of the
 
 ## Implementation Order
 
+Current v0.8 branch sequence confirmed by the user on 2026-06-19:
+
+1. Add `Command+1` to `Command+6` fast source switching during recording, using the existing ScreenCaptureKit source selection and `updateSource` pipeline. Implemented in the v0.8 branch with tests for hotkey parsing and unavailable-source fallback.
+2. Add user-defined source slot assignments in the active-window/source picker. Persist only slot metadata such as stable source id, type, display name, and dimensions; do not persist thumbnails or private window contents. Implemented in the v0.8 branch for both thumbnail and list picker views.
+3. Add presenter video quality controls: mirror, brightness/contrast, and light beauty, with preview/export/manifest consistency. Implemented in the v0.8 branch.
+4. Convert the bottom timeline from status display to real track display and then editable timeline operations. Implemented as a safe foundation in the v0.8 branch: real tracks, folding, segment selection, playhead positioning, and single selected-range export are done; destructive delete, waveform thumbnails, selected-track-only export, and multi-range stitching remain future work.
+5. Add menu bar resident mode and draggable desktop mini toolbar with pause/resume/stop/time plus active-window/source switching. Implemented in the v0.8 branch with a status item, floating mini toolbar, source picker access, and source slot switching.
+
+Deferred backlog for later branches: dynamic gesture recognition improvements, licensing/paid activation, notarized distribution, multi-endpoint support, and multiple UI skins/themes.
+
 1. Gesture calibration and gesture-to-slide control. Done as v0.7 visual/MediaPipe baseline, but still needs dynamic long-range improvement.
 2. Core project model for formal talk and training-course recording. Done.
 3. Screen recording with raw screen plus speaker camera files. Done for single selected screen/window plus one presenter camera.
 4. Basic program export with PiP layout. Done, including draggable/resizable/shaped PiP and keyframes.
 5. Project file serialization for raw media plus metadata. Done for current manifest.
 6. Stabilize active-window monitor preview / program preview source size consistency. Done for the high-probability `contentRect` and source-update causes; keep real-window jitter as watch item.
-7. Add `Command+1` to `Command+6` fast source switching and user-defined source slots in the active-window/source picker. Next P1.
-8. Add presenter video quality controls: mirror, brightness, light beauty. Next P1.
-9. Convert the bottom timeline from status display to real track display. Next P1.
-10. Add editable timeline operations: fold, delete, drag playhead, multi-select, selected-track export, and one-or-many selected time-range export. Next P1.
-11. Add menu bar resident mode and draggable desktop mini toolbar with pause/resume/stop/time plus active-window/source switching. Next P1.
+7. Add `Command+1` to `Command+6` fast source switching and user-defined source slots in the active-window/source picker. Done in v0.8 branch.
+8. Add presenter video quality controls: mirror, brightness, light beauty. Done in v0.8 branch.
+9. Convert the bottom timeline from status display to real track display. Done in v0.8 branch.
+10. Add editable timeline operations: fold, delete, drag playhead, multi-select, selected-track export, and one-or-many selected time-range export. Partially done in v0.8 branch: fold, segment select/playhead, and single selected-range export are done; destructive delete, selected-track-only export, and multi-range export remain.
+11. Add menu bar resident mode and draggable desktop mini toolbar with pause/resume/stop/time plus active-window/source switching. Done in v0.8 branch.
 12. Design licensing, paid activation, App Store distribution, direct-sale license keys, and entitlement recovery. Next P2.
 13. Design multi-endpoint support for macOS, iPad, iPhone, Android, Windows PC, and potentially HarmonyOS. Next P2.
 14. Add a theme system with warm dark-gold, minimalist light, business, geek, gold, black, and white skins. Next P2.

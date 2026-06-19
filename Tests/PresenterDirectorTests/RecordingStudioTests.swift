@@ -217,6 +217,57 @@ import Testing
     #expect(decoded.project.timeline.firstScene(for: .slidesFullScreen)?.layers == [.slidesFullCanvas])
 }
 
+@Test func recordingManifestStoresPresenterVideoEffects() throws {
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        durationMilliseconds: 180_000
+    )
+    let effects = PresenterVideoEffects(
+        isMirrored: true,
+        brightness: 0.2,
+        contrast: 1.15,
+        beauty: 0.35
+    )
+    let manifest = RecordingProjectManifestFactory().makeManifest(
+        project: project,
+        presenterVideoEffects: effects
+    )
+
+    let data = try JSONEncoder().encode(manifest)
+    let decoded = try JSONDecoder().decode(RecordingProjectManifest.self, from: data)
+
+    #expect(decoded.presenterVideoEffects == effects)
+}
+
+@Test func recordingManifestDecodesOldProjectsWithDefaultPresenterVideoEffects() throws {
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        durationMilliseconds: 180_000
+    )
+    let manifest = RecordingProjectManifestFactory().makeManifest(project: project)
+    var json = try #require(String(data: JSONEncoder().encode(manifest), encoding: .utf8))
+    json = json.replacingOccurrences(
+        of: #"{"mediaAssets""#,
+        with: #"{"_legacyMarker":true,"mediaAssets""#
+    )
+    json = json.replacingOccurrences(
+        of: #","presenterVideoEffects":{[^}]+}"#,
+        with: "",
+        options: .regularExpression
+    )
+
+    let decoded = try JSONDecoder().decode(
+        RecordingProjectManifest.self,
+        from: try #require(json.data(using: .utf8))
+    )
+
+    #expect(decoded.presenterVideoEffects == .default)
+}
+
 @Test func exportSettingsMapResolutionFrameRateQualityAndCodecToStableEncodingParameters() {
     let defaultSettings = RecordingExportSettings.presentationDefault
     let socialHighMotion = RecordingExportSettings(

@@ -257,6 +257,8 @@ public struct AppLocalization: Sendable {
                     "chromeBtn": "Chrome 授权", "refreshBtn": "刷新状态", "aboutTitle": "关于灵演",
                     "authorLabel": "作者", "authorVal": "傲客", "genericKeyboard": "通用",
                     "selectInputDevice": "选择输入设备", "deviceListPending": "设备列表待刷新",
+                    "audioInput": "音频输入", "audioDetails": "音频详情",
+                    "systemDefaultMicrophone": "系统默认麦克风", "systemDefaultMicrophoneDetail": "跟随 macOS 当前声音输入设置",
                     "noInputsFound": "未发现可采集摄像头", "inputCountSuffix": "路输入",
                     "supportedDevices": "内置 / DJI / Insta360 / 采集卡 / 网络摄像头",
                     "calibrationTitle": "个人手势校准", "calibrationHint": "点击开始后看着摄像头完成动作，系统会自动判断成功并进入下一次。",
@@ -282,6 +284,11 @@ public struct AppLocalization: Sendable {
                     "noScreenSourcesHint": "当前构建的屏幕录制权限未生效。先请求权限；若仍为空，打开系统设置重新允许灵演。",
                     "requestScreenCaptureAccess": "请求权限", "openScreenCaptureSettings": "系统设置",
                     "thumbnailView": "缩略图", "listView": "列表", "thumbnailLoading": "预览加载中",
+                    "sourceSlot": "源位", "sourceSlotHelp": "源位", "sourceTier": "快捷键权益",
+                    "sourceTierFree": "免费版", "sourceTierVIP": "VIP", "sourceTierSVIP": "SVIP",
+                    "sourceTierSlots": "可用源位", "sourceSlotLocked": "不可使用源位",
+                    "presenterVideoEffects": "讲者画面", "mirrorPresenter": "镜像",
+                    "presenterBrightness": "亮度", "presenterContrast": "对比", "presenterBeauty": "柔化",
                     "pipControls": "画中画", "pipSize": "尺寸",
                     "pipShapeRounded": "长方形", "pipShapeSquare": "正方形", "pipShapeCircle": "圆形",
                     "modeScreenOnly": "只录屏",
@@ -296,7 +303,15 @@ public struct AppLocalization: Sendable {
                     "timelineTitle": "录制时间轴", "timelinePending": "按开始录制后生成项目轨道",
                     "timelineRecording": "正在写入原始轨", "trackSlides": "PPT/屏幕",
                     "trackSpeaker": "讲者", "trackMic": "声音", "trackProgram": "合成",
-                    "trackWriting": "写入中", "trackStarting": "启动中"
+                    "trackWriting": "写入中", "trackStarting": "启动中",
+                    "timelineRange": "导出范围", "timelineFullProgram": "完整合成",
+                    "timelineFullProgramSelected": "已切回完整合成导出",
+                    "timelineExportRange": "导出选区",
+                    "timelineNoSelection": "未选择导出范围，将导出完整合成",
+                    "timelineSelectedRange": "已选范围",
+                    "timelineClearSelection": "清空选区",
+                    "timelineRemoveSelection": "移除选区",
+                    "timelineSelectionRemoved": "时间轴选区已从本次导出中移除"
                 ]
             )
         case .zhHant:
@@ -336,6 +351,8 @@ public struct AppLocalization: Sendable {
                     "chromeBtn": "Chrome 授權", "refreshBtn": "刷新狀態", "aboutTitle": "關於靈演",
                     "authorLabel": "作者", "authorVal": "傲客", "genericKeyboard": "通用",
                     "selectInputDevice": "選擇輸入設備", "deviceListPending": "設備列表待刷新",
+                    "audioInput": "音訊輸入", "audioDetails": "音訊詳情",
+                    "systemDefaultMicrophone": "系統預設麥克風", "systemDefaultMicrophoneDetail": "跟隨 macOS 目前聲音輸入設定",
                     "noInputsFound": "未發現可採集攝像頭", "inputCountSuffix": "路輸入",
                     "supportedDevices": "內建 / DJI / Insta360 / 採集卡 / 網路攝像頭",
                     "calibrationTitle": "個人手勢校準", "calibrationHint": "點擊開始後看著攝像頭完成動作，系統會自動判斷成功並進入下一次。",
@@ -361,6 +378,11 @@ public struct AppLocalization: Sendable {
                     "noScreenSourcesHint": "目前構建的螢幕錄製權限未生效。先請求權限；若仍為空，開啟系統設定重新允許靈演。",
                     "requestScreenCaptureAccess": "請求權限", "openScreenCaptureSettings": "系統設定",
                     "thumbnailView": "縮圖", "listView": "列表", "thumbnailLoading": "預覽載入中",
+                    "sourceSlot": "源位", "sourceSlotHelp": "源位", "sourceTier": "快捷鍵權益",
+                    "sourceTierFree": "免費版", "sourceTierVIP": "VIP", "sourceTierSVIP": "SVIP",
+                    "sourceTierSlots": "可用源位", "sourceSlotLocked": "不可使用源位",
+                    "presenterVideoEffects": "講者畫面", "mirrorPresenter": "鏡像",
+                    "presenterBrightness": "亮度", "presenterContrast": "對比", "presenterBeauty": "柔化",
                     "pipControls": "子母畫面", "pipSize": "尺寸",
                     "pipShapeRounded": "長方形", "pipShapeSquare": "正方形", "pipShapeCircle": "圓形",
                     "modeScreenOnly": "只錄屏",
@@ -375,7 +397,15 @@ public struct AppLocalization: Sendable {
                     "timelineTitle": "錄製時間軸", "timelinePending": "按開始錄製後生成專案軌道",
                     "timelineRecording": "正在寫入原始軌", "trackSlides": "PPT/螢幕",
                     "trackSpeaker": "講者", "trackMic": "聲音", "trackProgram": "合成",
-                    "trackWriting": "寫入中", "trackStarting": "啟動中"
+                    "trackWriting": "寫入中", "trackStarting": "啟動中",
+                    "timelineRange": "匯出範圍", "timelineFullProgram": "完整合成",
+                    "timelineFullProgramSelected": "已切回完整合成匯出",
+                    "timelineExportRange": "匯出選區",
+                    "timelineNoSelection": "未選擇匯出範圍，將匯出完整合成",
+                    "timelineSelectedRange": "已選範圍",
+                    "timelineClearSelection": "清空選區",
+                    "timelineRemoveSelection": "移除選區",
+                    "timelineSelectionRemoved": "時間軸選區已從本次匯出中移除"
                 ]
             )
         case .en:
@@ -415,13 +445,15 @@ public struct AppLocalization: Sendable {
                     "chromeBtn": "Chrome Auth", "refreshBtn": "Refresh", "aboutTitle": "About WonderShow",
                     "authorLabel": "Author", "authorVal": "Aokest", "genericKeyboard": "Generic",
                     "selectInputDevice": "Select input", "deviceListPending": "Device list pending",
+                    "audioInput": "Audio Input", "audioDetails": "Audio Details",
+                    "systemDefaultMicrophone": "System Default", "systemDefaultMicrophoneDetail": "Follow macOS sound input",
                     "noInputsFound": "No camera inputs found", "inputCountSuffix": "inputs",
                     "supportedDevices": "Built-in / DJI / Insta360 / capture cards / network cameras",
                     "calibrationTitle": "Personal Gesture Calibration", "calibrationHint": "After starting, face the camera and perform the action. The system advances after a good sample.",
                     "startAutoSample": "Start Auto Sample", "finish": "Finish", "currentHandShape": "Current hand",
-                    "projectTitle": "Project", "projectLocation": "Save Location", "projectPending": "No recording project yet",
+                    "projectTitle": "Project", "projectLocation": "Save Location", "projectPending": "No project",
                     "openProject": "Open Project", "revealProject": "Show in Finder", "previewProgram": "Preview Program",
-                    "previewUnavailable": "Program export not ready", "rehearsalPurpose": "Tests playback, slide control, and gestures only. No recording or project is saved.",
+                    "previewUnavailable": "Not ready", "rehearsalPurpose": "Tests playback, slide control, and gestures only. No recording or project is saved.",
                     "autoDirector": "Auto Director", "autoDirectorStage": "Talk template: full body / close-up / PPT PiP / PPT full screen",
                     "autoDirectorTraining": "Course template: close-up PiP / PPT full screen / speaker close-up",
                     "programExport": "Program Export", "rawTracks": "Raw Tracks",
@@ -440,6 +472,11 @@ public struct AppLocalization: Sendable {
                     "noScreenSourcesHint": "Screen Recording permission is not active for this build. Request access first; if it remains empty, reopen System Settings.",
                     "requestScreenCaptureAccess": "Request Access", "openScreenCaptureSettings": "System Settings",
                     "thumbnailView": "Thumbnails", "listView": "List", "thumbnailLoading": "Loading preview",
+                    "sourceSlot": "Slot", "sourceSlotHelp": "Source slot", "sourceTier": "Hotkey Tier",
+                    "sourceTierFree": "Free", "sourceTierVIP": "VIP", "sourceTierSVIP": "SVIP",
+                    "sourceTierSlots": "Enabled slots", "sourceSlotLocked": "cannot use slot",
+                    "presenterVideoEffects": "Presenter", "mirrorPresenter": "Mirror",
+                    "presenterBrightness": "Light", "presenterContrast": "Contrast", "presenterBeauty": "Soften",
                     "pipControls": "PiP", "pipSize": "Size",
                     "pipShapeRounded": "Rectangle", "pipShapeSquare": "Square", "pipShapeCircle": "Circle",
                     "modeScreenOnly": "Screen Only",
@@ -454,7 +491,15 @@ public struct AppLocalization: Sendable {
                     "timelineTitle": "Recording Timeline", "timelinePending": "Tracks appear after recording starts",
                     "timelineRecording": "Writing raw tracks", "trackSlides": "PPT/Screen",
                     "trackSpeaker": "Speaker", "trackMic": "Audio", "trackProgram": "Program",
-                    "trackWriting": "Writing", "trackStarting": "Starting"
+                    "trackWriting": "Writing", "trackStarting": "Starting",
+                    "timelineRange": "Range", "timelineFullProgram": "Full",
+                    "timelineFullProgramSelected": "Full program export selected",
+                    "timelineExportRange": "Export Range",
+                    "timelineNoSelection": "Full program export",
+                    "timelineSelectedRange": "Selected range",
+                    "timelineClearSelection": "Clear",
+                    "timelineRemoveSelection": "Remove",
+                    "timelineSelectionRemoved": "Timeline range removed from this export"
                 ]
             )
         }
