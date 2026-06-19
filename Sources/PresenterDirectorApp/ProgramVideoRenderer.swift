@@ -106,7 +106,8 @@ struct ProgramVideoRenderer {
 
         let duration = await bestDuration(
             cameraAsset: cameraSourceTrack == nil ? nil : cameraAsset,
-            screenAsset: screenSourceTrack == nil ? nil : screenAsset
+            screenAsset: screenSourceTrack == nil ? nil : screenAsset,
+            timelineDurationMilliseconds: timeline.durationMilliseconds
         )
         let exportTimeRange = exportTimeRange(selectedRange, within: duration)
         try await insertMicrophoneAudioIfAvailable(
@@ -324,7 +325,11 @@ struct ProgramVideoRenderer {
         )
     }
 
-    private func bestDuration(cameraAsset: AVAsset?, screenAsset: AVAsset?) async -> CMTime {
+    private func bestDuration(
+        cameraAsset: AVAsset?,
+        screenAsset: AVAsset?,
+        timelineDurationMilliseconds: Int
+    ) async -> CMTime {
         let cameraDuration = if let cameraAsset {
             (try? await cameraAsset.load(.duration)) ?? .invalid
         } else {
@@ -335,15 +340,18 @@ struct ProgramVideoRenderer {
         } else {
             CMTime.invalid
         }
-        if cameraDuration.isValid, cameraDuration.seconds > 0,
-           screenDuration.isValid, screenDuration.seconds > 0 {
-            return min(cameraDuration, screenDuration)
+        var candidates: [CMTime] = []
+        if cameraDuration.isValid, cameraDuration.seconds > 0 {
+            candidates.append(cameraDuration)
         }
         if screenDuration.isValid, screenDuration.seconds > 0 {
-            return screenDuration
+            candidates.append(screenDuration)
         }
-        if cameraDuration.isValid, cameraDuration.seconds > 0 {
-            return cameraDuration
+        if timelineDurationMilliseconds > 0 {
+            candidates.append(CMTime(value: CMTimeValue(timelineDurationMilliseconds), timescale: 1_000))
+        }
+        if let shortestDuration = candidates.min(by: { $0.seconds < $1.seconds }) {
+            return shortestDuration
         }
         return CMTime(seconds: 1, preferredTimescale: 600)
     }
@@ -430,7 +438,7 @@ struct ProgramVideoRenderer {
                     trackID: screenTrack.trackID,
                     naturalSize: screenNaturalSize,
                     placement: .fullCanvas,
-                    fillMode: .fit,
+                    fillMode: .fill,
                     presenterVideoEffects: .default
                 )
             ]
@@ -458,7 +466,7 @@ struct ProgramVideoRenderer {
                     trackID: screenTrack.trackID,
                     naturalSize: screenNaturalSize,
                     placement: .fullCanvas,
-                    fillMode: .fit,
+                    fillMode: .fill,
                     presenterVideoEffects: .default
                 )
             ]
@@ -504,7 +512,7 @@ struct ProgramVideoRenderer {
                     trackID: screenTrack.trackID,
                     naturalSize: screenNaturalSize,
                     placement: .leftHalf,
-                    fillMode: .fit,
+                    fillMode: .fill,
                     presenterVideoEffects: .default
                 )
             ]

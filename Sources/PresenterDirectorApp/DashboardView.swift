@@ -18,6 +18,10 @@ private enum ScreenSourcePickerViewMode: String, CaseIterable, Hashable {
 
 private enum ProgramCanvasAspect: String, CaseIterable, Hashable {
     case widescreen
+    case classic
+    case classicVertical
+    case photo
+    case photoVertical
     case vertical
     case square
     case ultrawide
@@ -26,6 +30,14 @@ private enum ProgramCanvasAspect: String, CaseIterable, Hashable {
         switch self {
         case .widescreen:
             return "16:9"
+        case .classic:
+            return "4:3"
+        case .classicVertical:
+            return "3:4"
+        case .photo:
+            return "3:2"
+        case .photoVertical:
+            return "2:3"
         case .vertical:
             return "9:16"
         case .square:
@@ -39,6 +51,14 @@ private enum ProgramCanvasAspect: String, CaseIterable, Hashable {
         switch self {
         case .widescreen:
             return 16 / 9
+        case .classic:
+            return 4 / 3
+        case .classicVertical:
+            return 3 / 4
+        case .photo:
+            return 3 / 2
+        case .photoVertical:
+            return 2 / 3
         case .vertical:
             return 9 / 16
         case .square:
@@ -54,6 +74,22 @@ private enum ProgramCanvasAspect: String, CaseIterable, Hashable {
             return RecordingExportPixelSize(width: 1920, height: 1080)
         case (.widescreen, .uhd):
             return RecordingExportPixelSize(width: 3840, height: 2160)
+        case (.classic, .hd):
+            return RecordingExportPixelSize(width: 1440, height: 1080)
+        case (.classic, .uhd):
+            return RecordingExportPixelSize(width: 2880, height: 2160)
+        case (.classicVertical, .hd):
+            return RecordingExportPixelSize(width: 1080, height: 1440)
+        case (.classicVertical, .uhd):
+            return RecordingExportPixelSize(width: 2160, height: 2880)
+        case (.photo, .hd):
+            return RecordingExportPixelSize(width: 1620, height: 1080)
+        case (.photo, .uhd):
+            return RecordingExportPixelSize(width: 3240, height: 2160)
+        case (.photoVertical, .hd):
+            return RecordingExportPixelSize(width: 1080, height: 1620)
+        case (.photoVertical, .uhd):
+            return RecordingExportPixelSize(width: 2160, height: 3240)
         case (.vertical, .hd):
             return RecordingExportPixelSize(width: 1080, height: 1920)
         case (.vertical, .uhd):
@@ -1056,6 +1092,7 @@ struct DashboardView: View {
                 ProgramMonitorView(
                     copy: copy,
                     layout: layout,
+                    canvasAspectRatio: programCanvasAspect.aspectRatio,
                     screenImage: monitorScreenImage,
                     cameraSession: camera.session,
                     cameraStatus: camera.status,
@@ -1099,11 +1136,11 @@ struct DashboardView: View {
                 aspect: $programCanvasAspect,
                 resolution: $programCanvasResolution
             )
-            .padding(.top, 14)
-            .padding(.trailing, 14)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(.trailing, 16)
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         }
-        .aspectRatio(programCanvasAspect.aspectRatio, contentMode: .fit)
+        .aspectRatio(16 / 9, contentMode: .fit)
     }
 
     private var recordingTimelineStrip: some View {
@@ -4337,21 +4374,35 @@ private struct ProgramCanvasControls: View {
         HStack(spacing: 7) {
             Image(systemName: icon)
                 .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ConsolePalette.goldBright)
             Text(title)
                 .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ConsolePalette.textPrimary)
             Text(text)
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(ConsolePalette.goldBright)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(ConsolePalette.textPrimary.opacity(0.86))
         }
-        .foregroundStyle(ConsolePalette.goldBright)
-        .padding(.horizontal, 11)
-        .frame(height: 32)
-        .background(ConsolePalette.surface.opacity(0.94))
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.92),
+                    ConsolePalette.surface.opacity(0.98)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(ConsolePalette.gold.opacity(0.82), lineWidth: 1)
+                .stroke(ConsolePalette.goldBright.opacity(0.92), lineWidth: 1.2)
         )
-        .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 4)
+        .shadow(color: .black.opacity(0.86), radius: 14, x: 0, y: 6)
     }
 }
 
@@ -4416,6 +4467,7 @@ private struct ProgramCanvasPlaceholder: View {
 private struct ProgramMonitorView: View {
     let copy: AppCopy
     let layout: RecordingLayout
+    let canvasAspectRatio: CGFloat
     let screenImage: CGImage?
     let cameraSession: AVCaptureSession
     let cameraStatus: CameraStatus
@@ -4435,49 +4487,120 @@ private struct ProgramMonitorView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack {
-                switch layout {
-                case .screenOnly:
-                    screenLayer
-                case .speakerCloseUp, .speakerFullBody:
-                    cameraLayer
-                case .screenWithCameraPictureInPicture:
-                    screenLayer
-                    pipCameraLayer
-                        .position(pipPosition(in: proxy.size))
-                        .gesture(pipDrag(in: proxy.size))
-                case .cameraWithScreenPictureInPicture:
-                    cameraLayer
-                    pipScreenLayer
-                        .position(pipPosition(in: proxy.size))
-                        .gesture(pipDrag(in: proxy.size))
-                case .sideBySide:
-                    HStack(spacing: 0) {
-                        screenLayer
-                        cameraLayer
-                    }
-                }
+            let canvasRect = canvasRect(in: proxy.size)
+
+            ZStack(alignment: .topLeading) {
+                Color.black
+                canvasScene(in: canvasRect.size)
+                    .frame(width: canvasRect.width, height: canvasRect.height)
+                    .background(Color.black)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(ConsolePalette.goldBright.opacity(0.72), lineWidth: 1.2)
+                    )
+                    .shadow(color: .black.opacity(0.65), radius: 18, x: 0, y: 8)
+                    .position(x: canvasRect.midX, y: canvasRect.midY)
+                canvasMask(outside: canvasRect, in: proxy.size)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .background(Color.black)
             .onAppear {
-                canvasSizeChanged(proxy.size)
+                canvasSizeChanged(canvasRect.size)
             }
-            .onChange(of: proxy.size) {
-                canvasSizeChanged(proxy.size)
+            .onChange(of: proxy.size) { _, newSize in
+                canvasSizeChanged(self.canvasRect(in: newSize).size)
+            }
+            .onChange(of: canvasAspectRatio) { _, _ in
+                canvasSizeChanged(self.canvasRect(in: proxy.size).size)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private var screenLayer: some View {
+    private func canvasRect(in size: CGSize) -> CGRect {
+        let safeAspectRatio = max(0.1, canvasAspectRatio)
+        let containerAspectRatio = max(0.1, size.width / max(1, size.height))
+        let canvasSize: CGSize
+
+        if containerAspectRatio > safeAspectRatio {
+            let height = size.height
+            canvasSize = CGSize(width: height * safeAspectRatio, height: height)
+        } else {
+            let width = size.width
+            canvasSize = CGSize(width: width, height: width / safeAspectRatio)
+        }
+
+        return CGRect(
+            x: (size.width - canvasSize.width) / 2,
+            y: (size.height - canvasSize.height) / 2,
+            width: canvasSize.width,
+            height: canvasSize.height
+        )
+    }
+
+    private func canvasMask(outside rect: CGRect, in size: CGSize) -> some View {
+        ZStack(alignment: .topLeading) {
+            Rectangle()
+                .fill(Color.black.opacity(0.44))
+                .frame(width: size.width, height: max(0, rect.minY))
+                .position(x: size.width / 2, y: max(0, rect.minY) / 2)
+
+            Rectangle()
+                .fill(Color.black.opacity(0.44))
+                .frame(width: size.width, height: max(0, size.height - rect.maxY))
+                .position(x: size.width / 2, y: rect.maxY + max(0, size.height - rect.maxY) / 2)
+
+            Rectangle()
+                .fill(Color.black.opacity(0.44))
+                .frame(width: max(0, rect.minX), height: rect.height)
+                .position(x: max(0, rect.minX) / 2, y: rect.midY)
+
+            Rectangle()
+                .fill(Color.black.opacity(0.44))
+                .frame(width: max(0, size.width - rect.maxX), height: rect.height)
+                .position(x: rect.maxX + max(0, size.width - rect.maxX) / 2, y: rect.midY)
+        }
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func canvasScene(in size: CGSize) -> some View {
+        ZStack {
+            switch layout {
+            case .screenOnly:
+                screenLayer(fillMode: .fill)
+            case .speakerCloseUp, .speakerFullBody:
+                cameraLayer
+            case .screenWithCameraPictureInPicture:
+                screenLayer(fillMode: .fill)
+                pipCameraLayer
+                    .position(pipPosition(in: size))
+                    .gesture(pipDrag(in: size))
+            case .cameraWithScreenPictureInPicture:
+                cameraLayer
+                pipScreenLayer
+                    .position(pipPosition(in: size))
+                    .gesture(pipDrag(in: size))
+            case .sideBySide:
+                HStack(spacing: 0) {
+                    screenLayer(fillMode: .fill)
+                    cameraLayer
+                }
+            }
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
+    private func screenLayer(fillMode: ContentMode) -> some View {
         GeometryReader { proxy in
             ZStack {
                 if let screenImage {
                     Image(decorative: screenImage, scale: 1)
                         .resizable()
-                        .scaledToFit()
+                        .aspectRatio(contentMode: fillMode)
                         .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
                 } else {
                     ProgramCanvasPlaceholder(
                         copy: copy,
@@ -4522,7 +4645,7 @@ private struct ProgramMonitorView: View {
             if let screenImage {
                 Image(decorative: screenImage, scale: 1)
                     .resizable()
-                    .scaledToFit()
+                    .aspectRatio(contentMode: .fit)
                     .background(Color.black)
             } else {
                 ProgramCanvasPlaceholder(
