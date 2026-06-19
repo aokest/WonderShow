@@ -934,7 +934,7 @@ enum ScreenCaptureSourceResolver {
                 return $0.applicationName.localizedCaseInsensitiveCompare($1.applicationName) == .orderedAscending
             }
 
-        return displayOptions + windowOptions
+        return windowOptions + displayOptions
     }
 
     private static func selection(

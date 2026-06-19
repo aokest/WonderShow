@@ -104,6 +104,27 @@ import Testing
     #expect(slots.assignment(for: 3)?.sourceID == .display(99))
 }
 
+@Test func sourceSlotsRebalancesLegacyAutoDisplaySlotsToWindowFirstDefaults() {
+    let display = makeDisplayOption(id: 99, title: "Ultra Wide")
+    let browser = makeWindowOption(id: 10, title: "Browser")
+    let notes = makeWindowOption(id: 20, title: "Notes")
+    let legacyAutoAssignments = [
+        RecordingSourceSlotAssignment(slot: 1, option: display, isUserDefined: false),
+        RecordingSourceSlotAssignment(slot: 2, option: browser, isUserDefined: false)
+    ]
+    var slots = RecordingSourceSlots(assignments: legacyAutoAssignments)
+
+    let changed = slots.assignDefaultSlots(
+        for: [display, browser, notes],
+        featureTier: .vip
+    )
+
+    #expect(changed)
+    #expect(slots.assignment(for: 1)?.sourceID == .window(10))
+    #expect(slots.assignment(for: 2)?.sourceID == .window(20))
+    #expect(slots.assignment(for: 3)?.sourceID == .display(99))
+}
+
 @Test func sourceSlotsAutoAssignRespectsFeatureTier() {
     var slots = RecordingSourceSlots()
     let options = [

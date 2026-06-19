@@ -59,6 +59,19 @@ struct ProgramVideoRendererTests {
     #expect(h264Probe.hasAudio)
     #expect(h264Probe.audioDurationSeconds > 0.9)
 
+    let customCanvasURL = rootURL.appendingPathComponent("Exports/custom-vertical.mp4")
+    let customCanvasSettings = RecordingExportSettings(
+        resolution: .hd1080,
+        frameRate: .fps30,
+        quality: .standard,
+        codec: .h264,
+        customPixelSize: RecordingExportPixelSize(width: 1080, height: 1920)
+    )
+    _ = try await ProgramVideoRenderer().render(session: session, settings: customCanvasSettings, outputURL: customCanvasURL)
+    let customCanvasProbe = try await probe(url: customCanvasURL)
+    #expect(customCanvasProbe.width == 1080)
+    #expect(customCanvasProbe.height == 1920)
+
     let hevcURL = rootURL.appendingPathComponent("Exports/hevc-1440p.mp4")
     let hevcSettings = RecordingExportSettings(
         resolution: .qhd1440,

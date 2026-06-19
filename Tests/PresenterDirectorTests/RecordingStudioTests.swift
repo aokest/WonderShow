@@ -277,14 +277,15 @@ import Testing
         codec: .hevc
     )
 
-    #expect(defaultSettings.resolution == .source)
-    #expect(defaultSettings.resolution.pixelSize == nil)
+    #expect(defaultSettings.resolution == .hd1080)
+    #expect(defaultSettings.effectivePixelSize?.width == 1920)
+    #expect(defaultSettings.effectivePixelSize?.height == 1080)
     #expect(defaultSettings.frameRate.rawValue == 30)
     #expect(defaultSettings.bitrateBitsPerSecond == 12_000_000)
     #expect(defaultSettings.audioBitrateBitsPerSecond == 192_000)
 
-    #expect(socialHighMotion.resolution.pixelSize?.width == 3840)
-    #expect(socialHighMotion.resolution.pixelSize?.height == 2160)
+    #expect(socialHighMotion.effectivePixelSize?.width == 3840)
+    #expect(socialHighMotion.effectivePixelSize?.height == 2160)
     #expect(socialHighMotion.frameRate.rawValue == 60)
     #expect(socialHighMotion.bitrateBitsPerSecond > defaultSettings.bitrateBitsPerSecond)
     #expect(socialHighMotion.audioBitrateBitsPerSecond == 256_000)
@@ -297,6 +298,17 @@ import Testing
     )
     #expect(compactHevc.bitrateBitsPerSecond < defaultSettings.bitrateBitsPerSecond)
     #expect(compactHevc.audioBitrateBitsPerSecond == 128_000)
+
+    let verticalProgramCanvas = RecordingExportSettings(
+        resolution: .hd1080,
+        frameRate: .fps30,
+        quality: .high,
+        codec: .h264,
+        customPixelSize: RecordingExportPixelSize(width: 1080, height: 1920)
+    )
+    #expect(verticalProgramCanvas.effectivePixelSize?.width == 1080)
+    #expect(verticalProgramCanvas.effectivePixelSize?.height == 1920)
+    #expect(verticalProgramCanvas.bitrateBitsPerSecond == defaultSettings.bitrateBitsPerSecond)
 }
 
 @Test func recordingPipelineModelCanRepresentMultipleCameraAndMicrophoneInputs() {

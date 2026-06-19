@@ -81,26 +81,44 @@ public enum RecordingExportCodec: String, Codable, CaseIterable, Hashable, Senda
     case hevc
 }
 
+public struct RecordingExportPixelSize: Codable, Hashable, Sendable {
+    public let width: Int
+    public let height: Int
+
+    public init(width: Int, height: Int) {
+        self.width = Self.evenPixelDimension(width)
+        self.height = Self.evenPixelDimension(height)
+    }
+
+    private static func evenPixelDimension(_ value: Int) -> Int {
+        let bounded = max(2, value)
+        return bounded.isMultiple(of: 2) ? bounded : bounded + 1
+    }
+}
+
 public struct RecordingExportSettings: Codable, Hashable, Sendable {
     public var resolution: RecordingExportResolution
     public var frameRate: RecordingExportFrameRate
     public var quality: RecordingExportQuality
     public var codec: RecordingExportCodec
+    public var customPixelSize: RecordingExportPixelSize?
 
     public init(
         resolution: RecordingExportResolution,
         frameRate: RecordingExportFrameRate,
         quality: RecordingExportQuality,
-        codec: RecordingExportCodec
+        codec: RecordingExportCodec,
+        customPixelSize: RecordingExportPixelSize? = nil
     ) {
         self.resolution = resolution
         self.frameRate = frameRate
         self.quality = quality
         self.codec = codec
+        self.customPixelSize = customPixelSize
     }
 
     public static let presentationDefault = RecordingExportSettings(
-        resolution: .source,
+        resolution: .hd1080,
         frameRate: .fps30,
         quality: .high,
         codec: .h264
@@ -108,13 +126,23 @@ public struct RecordingExportSettings: Codable, Hashable, Sendable {
 
     public var bitrateBitsPerSecond: Int {
         let base: Int
-        switch resolution {
-        case .source, .hd1080:
-            base = 12_000_000
-        case .qhd1440:
-            base = 24_000_000
-        case .uhd4k:
+        let pixelCount = effectivePixelSize.map { $0.width * $0.height }
+        switch pixelCount {
+        case let count? where count > 2560 * 1440:
             base = 48_000_000
+        case let count? where count > 1920 * 1080:
+            base = 24_000_000
+        case _?:
+            base = 12_000_000
+        case nil:
+            switch resolution {
+            case .source, .hd1080:
+                base = 12_000_000
+            case .qhd1440:
+                base = 24_000_000
+            case .uhd4k:
+                base = 48_000_000
+            }
         }
 
         let qualityMultiplier: Double
@@ -130,6 +158,23 @@ public struct RecordingExportSettings: Codable, Hashable, Sendable {
         let frameMultiplier = frameRate == .fps60 ? 1.6 : 1.0
         let codecMultiplier = codec == .hevc ? 0.65 : 1.0
         return Int(Double(base) * qualityMultiplier * frameMultiplier * codecMultiplier)
+    }
+
+    public var effectivePixelSize: RecordingExportPixelSize? {
+        if let customPixelSize {
+            return customPixelSize
+        }
+
+        switch resolution {
+        case .source:
+            return nil
+        case .hd1080:
+            return RecordingExportPixelSize(width: 1920, height: 1080)
+        case .qhd1440:
+            return RecordingExportPixelSize(width: 2560, height: 1440)
+        case .uhd4k:
+            return RecordingExportPixelSize(width: 3840, height: 2160)
+        }
     }
 
     public var audioBitrateBitsPerSecond: Int {

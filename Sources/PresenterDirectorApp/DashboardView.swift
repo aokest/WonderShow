@@ -16,6 +16,83 @@ private enum ScreenSourcePickerViewMode: String, CaseIterable, Hashable {
     case list
 }
 
+private enum ProgramCanvasAspect: String, CaseIterable, Hashable {
+    case widescreen
+    case vertical
+    case square
+    case ultrawide
+
+    var label: String {
+        switch self {
+        case .widescreen:
+            return "16:9"
+        case .vertical:
+            return "9:16"
+        case .square:
+            return "1:1"
+        case .ultrawide:
+            return "32:9"
+        }
+    }
+
+    var aspectRatio: CGFloat {
+        switch self {
+        case .widescreen:
+            return 16 / 9
+        case .vertical:
+            return 9 / 16
+        case .square:
+            return 1
+        case .ultrawide:
+            return 32 / 9
+        }
+    }
+
+    func pixelSize(for resolution: ProgramCanvasResolution) -> RecordingExportPixelSize {
+        switch (self, resolution) {
+        case (.widescreen, .hd):
+            return RecordingExportPixelSize(width: 1920, height: 1080)
+        case (.widescreen, .uhd):
+            return RecordingExportPixelSize(width: 3840, height: 2160)
+        case (.vertical, .hd):
+            return RecordingExportPixelSize(width: 1080, height: 1920)
+        case (.vertical, .uhd):
+            return RecordingExportPixelSize(width: 2160, height: 3840)
+        case (.square, .hd):
+            return RecordingExportPixelSize(width: 1080, height: 1080)
+        case (.square, .uhd):
+            return RecordingExportPixelSize(width: 2160, height: 2160)
+        case (.ultrawide, .hd):
+            return RecordingExportPixelSize(width: 3840, height: 1080)
+        case (.ultrawide, .uhd):
+            return RecordingExportPixelSize(width: 7680, height: 2160)
+        }
+    }
+}
+
+private enum ProgramCanvasResolution: String, CaseIterable, Hashable {
+    case hd
+    case uhd
+
+    var label: String {
+        switch self {
+        case .hd:
+            return "1080p"
+        case .uhd:
+            return "4K"
+        }
+    }
+
+    var baseResolution: RecordingExportResolution {
+        switch self {
+        case .hd:
+            return .hd1080
+        case .uhd:
+            return .uhd4k
+        }
+    }
+}
+
 private struct ExportProgressPresentation: Identifiable, Equatable {
     let id = "export-progress"
     var fraction: Double
@@ -103,6 +180,8 @@ struct DashboardView: View {
     @State private var presenterContrast: CGFloat = 1
     @State private var presenterBeauty: CGFloat = 0
     @State private var monitorCanvasSize = CGSize(width: 1280, height: 720)
+    @State private var programCanvasAspect: ProgramCanvasAspect = .widescreen
+    @State private var programCanvasResolution: ProgramCanvasResolution = .hd
     @State private var recordingStartedAt: Date?
     @State private var recordingPiPKeyframes: [RecordingPiPKeyframe] = []
     @State private var recordingLayoutKeyframes: [RecordingLayoutKeyframe] = []
@@ -154,6 +233,28 @@ struct DashboardView: View {
 
     private var localizedCommandSummary: String {
         copy.runtimeText(commandSummary)
+    }
+
+    private var programCanvasExportSettings: RecordingExportSettings {
+        RecordingExportSettings(
+            resolution: programCanvasResolution.baseResolution,
+            frameRate: .fps30,
+            quality: .high,
+            codec: .h264,
+            customPixelSize: programCanvasAspect.pixelSize(for: programCanvasResolution)
+        )
+    }
+
+    private var exportResolutionBinding: Binding<RecordingExportResolution> {
+        Binding(
+            get: {
+                exportDraftSettings.resolution
+            },
+            set: { resolution in
+                exportDraftSettings.resolution = resolution
+                exportDraftSettings.customPixelSize = nil
+            }
+        )
     }
 
     private var localizedCalibrationStatus: String {
@@ -976,7 +1077,6 @@ struct DashboardView: View {
                     },
                     reconnect: { camera.start() }
                 )
-
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -993,8 +1093,15 @@ struct DashboardView: View {
                 .padding([.top, .leading], 12)
                 .frame(maxHeight: .infinity, alignment: .topLeading)
             }
+
+            ProgramCanvasControls(
+                aspect: $programCanvasAspect,
+                resolution: $programCanvasResolution
+            )
+            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         }
-        .aspectRatio(16 / 9, contentMode: .fit)
+        .aspectRatio(programCanvasAspect.aspectRatio, contentMode: .fit)
     }
 
     private var recordingTimelineStrip: some View {
@@ -1064,7 +1171,7 @@ struct DashboardView: View {
 
             Button(copy.text("timelineExportRange")) {
                 saveCurrentPiPTimelineForLastRecording()
-                exportDraftSettings = .presentationDefault
+                exportDraftSettings = programCanvasExportSettings
                 showsExportSettings = true
             }
             .buttonStyle(TimelineMiniButtonStyle())
@@ -1132,9 +1239,9 @@ struct DashboardView: View {
                         .buttonStyle(ConsoleGradientButtonStyle(variant: .gold, expands: true))
                         .disabled(commandController.lastRecordingSession == nil)
 
-                    Button(copy.previewProgram) {
+                        Button(copy.previewProgram) {
                             saveCurrentPiPTimelineForLastRecording()
-                            commandController.previewLastProgramExport()
+                            commandController.previewLastProgramExport(settings: programCanvasExportSettings)
                         }
                         .buttonStyle(ConsoleGradientButtonStyle(variant: .outline, expands: true))
                         .disabled(commandController.lastRecordingSession == nil)
@@ -1149,7 +1256,7 @@ struct DashboardView: View {
 
                         Button(copy.text("exportVideo")) {
                             saveCurrentPiPTimelineForLastRecording()
-                            exportDraftSettings = .presentationDefault
+                            exportDraftSettings = programCanvasExportSettings
                             showsExportSettings = true
                         }
                         .buttonStyle(ConsoleGradientButtonStyle(variant: .outline, expands: true))
@@ -1580,7 +1687,7 @@ struct DashboardView: View {
             ExportPickerRow(label: copy.resolution) {
                 ExportOptionGrid(
                     items: RecordingExportResolution.allCases,
-                    selection: $exportDraftSettings.resolution
+                    selection: exportResolutionBinding
                 ) { $0.localizedLabel(copy) }
             }
 
@@ -4181,6 +4288,60 @@ private struct SourceSlotPicker: View {
     }
 }
 
+private struct ProgramCanvasControls: View {
+    @Binding var aspect: ProgramCanvasAspect
+    @Binding var resolution: ProgramCanvasResolution
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Menu {
+                ForEach(ProgramCanvasAspect.allCases, id: \.self) { option in
+                    Button(option.label) {
+                        aspect = option
+                    }
+                }
+            } label: {
+                canvasControlLabel(icon: "aspectratio", text: aspect.label)
+            }
+            .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
+            .help("Program canvas aspect")
+
+            Menu {
+                ForEach(ProgramCanvasResolution.allCases, id: \.self) { option in
+                    Button(option.label) {
+                        resolution = option
+                    }
+                }
+            } label: {
+                canvasControlLabel(icon: "rectangle.compress.vertical", text: resolution.label)
+            }
+            .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
+            .help("Program canvas resolution")
+        }
+    }
+
+    private func canvasControlLabel(icon: String, text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+            Text(text)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+        }
+        .foregroundStyle(ConsolePalette.goldBright)
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .background(ConsolePalette.surface.opacity(0.88))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(ConsolePalette.gold.opacity(0.72), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.36), radius: 8, x: 0, y: 3)
+    }
+}
+
 private struct ResizableSheetWindowAccessor: NSViewRepresentable {
     let minSize: NSSize
 
@@ -4723,6 +4884,9 @@ private struct ExportProgressSheet: View {
 
     private var resolutionLabel: String {
         guard progress.width > 0, progress.height > 0 else {
+            if let customPixelSize = progress.settings.customPixelSize {
+                return "\(customPixelSize.width)x\(customPixelSize.height)"
+            }
             return progress.settings.resolution.localizedLabel(copy)
         }
         return "\(progress.width)x\(progress.height)"

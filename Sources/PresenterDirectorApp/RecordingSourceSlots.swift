@@ -61,10 +61,11 @@ struct RecordingSourceSlotAssignment: Codable, Hashable, Identifiable, Sendable 
     let detail: String
     let width: Int
     let height: Int
+    let isUserDefined: Bool
 
     var id: Int { slot }
 
-    init(slot: Int, option: ScreenCaptureWindowOption) {
+    init(slot: Int, option: ScreenCaptureWindowOption, isUserDefined: Bool = true) {
         self.slot = slot
         self.sourceID = option.id
         switch option.id {
@@ -77,6 +78,30 @@ struct RecordingSourceSlotAssignment: Codable, Hashable, Identifiable, Sendable 
         self.detail = option.detail
         self.width = option.width
         self.height = option.height
+        self.isUserDefined = isUserDefined
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case slot
+        case sourceID
+        case kind
+        case displayName
+        case detail
+        case width
+        case height
+        case isUserDefined
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        slot = try container.decode(Int.self, forKey: .slot)
+        sourceID = try container.decode(ScreenCaptureSourceID.self, forKey: .sourceID)
+        kind = try container.decode(RecordingSourceSlotKind.self, forKey: .kind)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        detail = try container.decode(String.self, forKey: .detail)
+        width = try container.decode(Int.self, forKey: .width)
+        height = try container.decode(Int.self, forKey: .height)
+        isUserDefined = try container.decodeIfPresent(Bool.self, forKey: .isUserDefined) ?? false
     }
 
     var sourcePreference: ScreenCaptureSourcePreference {
@@ -144,6 +169,7 @@ struct RecordingSourceSlots: Codable, Hashable, Sendable {
         assignments = assignments.filter { assignment in
             availableIDs.contains(assignment.sourceID)
                 && featureTier.permitsSourceSlot(assignment.slot)
+                && assignment.isUserDefined
         }
         assignments = Self.normalized(assignments)
 
@@ -155,7 +181,7 @@ struct RecordingSourceSlots: Codable, Hashable, Sendable {
             }) else {
                 break
             }
-            assignments.append(RecordingSourceSlotAssignment(slot: slot, option: option))
+            assignments.append(RecordingSourceSlotAssignment(slot: slot, option: option, isUserDefined: false))
             occupiedSlots.insert(slot)
             assignedSources.insert(option.id)
         }

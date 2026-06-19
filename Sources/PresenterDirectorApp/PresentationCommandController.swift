@@ -147,7 +147,7 @@ final class PresentationCommandController: ObservableObject {
         lastDeliveryDetail = url?.path ?? "未保留项目"
     }
 
-    func previewLastProgramExport() {
+    func previewLastProgramExport(settings: RecordingExportSettings = .presentationDefault) {
         guard let session = lastRecordingSession else {
             reportRecordingIssue("尚未创建录制项目")
             return
@@ -167,7 +167,7 @@ final class PresentationCommandController: ObservableObject {
             do {
                 let outputURL = try await ProgramVideoRenderer().render(
                     session: session,
-                    settings: .presentationDefault
+                    settings: settings
                 )
                 guard self.lastRecordingSession?.url == session.url else {
                     return
@@ -966,8 +966,15 @@ private extension PresentationTarget {
 
 private extension RecordingExportSettings {
     var fileNameSuffix: String {
-        [
-            resolution.fileNameToken,
+        let resolutionToken: String
+        if let customPixelSize {
+            resolutionToken = "custom-\(customPixelSize.width)x\(customPixelSize.height)"
+        } else {
+            resolutionToken = resolution.fileNameToken
+        }
+
+        return [
+            resolutionToken,
             "\(frameRate.rawValue)fps",
             quality.fileNameToken,
             codec.rawValue
@@ -975,15 +982,21 @@ private extension RecordingExportSettings {
     }
 
     var userFacingSummary: String {
-        "\(resolution.label) / \(frameRate.rawValue)fps / \(quality.label) / \(codec.label)"
+        let resolutionLabel: String
+        if let customPixelSize {
+            resolutionLabel = "\(customPixelSize.width)x\(customPixelSize.height)"
+        } else {
+            resolutionLabel = resolution.label
+        }
+        return "\(resolutionLabel) / \(frameRate.rawValue)fps / \(quality.label) / \(codec.label)"
     }
 
     var exportWidthFallback: Int {
-        resolution.pixelSize?.width ?? 0
+        effectivePixelSize?.width ?? 0
     }
 
     var exportHeightFallback: Int {
-        resolution.pixelSize?.height ?? 0
+        effectivePixelSize?.height ?? 0
     }
 }
 

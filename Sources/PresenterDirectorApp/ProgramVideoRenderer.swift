@@ -239,7 +239,7 @@ struct ProgramVideoRenderer {
         settings: RecordingExportSettings,
         primaryNaturalSize: CGSize
     ) -> CGSize {
-        if let pixelSize = settings.resolution.pixelSize {
+        if let pixelSize = settings.effectivePixelSize {
             return CGSize(width: pixelSize.width, height: pixelSize.height)
         }
 

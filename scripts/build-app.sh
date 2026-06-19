@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="灵演"
-APP_MARKETING_VERSION="${APP_MARKETING_VERSION:-0.7.$(date +%Y%m%d)}"
+APP_MARKETING_VERSION="${APP_MARKETING_VERSION:-0.8.$(date +%Y%m%d)}"
 APP_BUILD_VERSION="${APP_BUILD_VERSION:-$(date +%Y%m%d%H%M)}"
 BUILD_CONFIGURATION="${BUILD_CONFIGURATION:-release}"
 BUNDLE_DIR="$ROOT_DIR/dist/$APP_NAME.app"
@@ -30,7 +30,7 @@ plutil -insert CFBundleExecutable -string "$EXECUTABLE" "$BUNDLE_DIR/Contents/In
 plutil -insert CFBundleIdentifier -string "com.local.LingYan" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleName -string "$APP_NAME" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleDisplayName -string "$APP_NAME" "$BUNDLE_DIR/Contents/Info.plist"
-plutil -insert CFBundleIconFile -string "AppIcon" "$BUNDLE_DIR/Contents/Info.plist"
+plutil -insert CFBundleIconFile -string "AppIcon.icns" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleIconName -string "AppIcon" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundlePackageType -string APPL "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleVersion -string "$APP_BUILD_VERSION" "$BUNDLE_DIR/Contents/Info.plist"
