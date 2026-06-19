@@ -159,39 +159,6 @@ final class PresentationCommandController: ObservableObject {
             return
         }
 
-        if FileManager.default.fileExists(atPath: session.programOutputURL.path) {
-            lastActionDescription = "正在检查预览"
-            lastDeliveryBackend = "录制工程"
-            lastDeliveryDetail = "正在检查已生成的合成视频"
-
-            Task { @MainActor in
-                do {
-                    try await ProgramVideoRenderer.validatePlayableVideo(at: session.programOutputURL)
-                    guard self.lastRecordingSession?.url == session.url else {
-                        return
-                    }
-                    openProgramPreview(session.programOutputURL)
-                } catch {
-                    do {
-                        lastActionDescription = "正在重新生成预览"
-                        lastDeliveryBackend = "录制工程"
-                        lastDeliveryDetail = "已生成文件不可播放，正在重新合成"
-                        let outputURL = try await ProgramVideoRenderer().render(
-                            session: session,
-                            settings: .presentationDefault
-                        )
-                        guard self.lastRecordingSession?.url == session.url else {
-                            return
-                        }
-                        openProgramPreview(outputURL)
-                    } catch {
-                        reportRecordingIssue("预览生成失败：\(error.localizedDescription)")
-                    }
-                }
-            }
-            return
-        }
-
         lastActionDescription = "正在生成预览"
         lastDeliveryBackend = "录制工程"
         lastDeliveryDetail = "正在从原始轨合成预览视频"

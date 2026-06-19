@@ -112,6 +112,57 @@ struct RecordingSourceSlots: Codable, Hashable, Sendable {
         return true
     }
 
+    @discardableResult
+    mutating func assignWithoutReplacingOccupiedSlot(
+        _ option: ScreenCaptureWindowOption,
+        to slot: Int
+    ) -> RecordingSourceSlotUpdate {
+        guard Self.validSlots.contains(slot) else {
+            return .invalidSlot
+        }
+        if let existing = assignment(for: slot), existing.sourceID != option.id {
+            return .slotOccupied(existing)
+        }
+        if self.slot(for: option.id) == slot {
+            clear(slot: slot)
+            return .cleared
+        }
+
+        assignments.removeAll { $0.sourceID == option.id }
+        assignments.append(RecordingSourceSlotAssignment(slot: slot, option: option))
+        assignments = Self.normalized(assignments)
+        return .assigned
+    }
+
+    @discardableResult
+    mutating func assignDefaultSlots(
+        for options: [ScreenCaptureWindowOption],
+        featureTier: RecordingFeatureTier
+    ) -> Bool {
+        let originalAssignments = assignments
+        let availableIDs = Set(options.map(\.id))
+        assignments = assignments.filter { assignment in
+            availableIDs.contains(assignment.sourceID)
+                && featureTier.permitsSourceSlot(assignment.slot)
+        }
+        assignments = Self.normalized(assignments)
+
+        var occupiedSlots = Set(assignments.map(\.slot))
+        var assignedSources = Set(assignments.map(\.sourceID))
+        for option in options where !assignedSources.contains(option.id) {
+            guard let slot = Self.validSlots.first(where: { slot in
+                featureTier.permitsSourceSlot(slot) && !occupiedSlots.contains(slot)
+            }) else {
+                break
+            }
+            assignments.append(RecordingSourceSlotAssignment(slot: slot, option: option))
+            occupiedSlots.insert(slot)
+            assignedSources.insert(option.id)
+        }
+        assignments = Self.normalized(assignments)
+        return assignments != originalAssignments
+    }
+
     mutating func clear(slot: Int) {
         assignments.removeAll { $0.slot == slot }
     }
@@ -174,6 +225,13 @@ struct RecordingSourceSlots: Codable, Hashable, Sendable {
         }
         return normalized
     }
+}
+
+enum RecordingSourceSlotUpdate: Equatable, Sendable {
+    case assigned
+    case cleared
+    case slotOccupied(RecordingSourceSlotAssignment)
+    case invalidSlot
 }
 
 enum RecordingSourceSlotHotKey {

@@ -634,6 +634,20 @@ struct ProgramVideoRendererTests {
     #expect(size.height == 1912)
 }
 
+@Test func windowCapturePixelSizeUsesHighResolutionMinimumScale() {
+    let size = ScreenArchiveRecorder.capturePixelSize(
+        width: 886,
+        height: 728,
+        frame: nil,
+        displays: [],
+        scaleFactor: 1,
+        minimumScaleFactor: 2
+    )
+
+    #expect(size.width == 1772)
+    #expect(size.height == 1456)
+}
+
 @Test func screenCaptureStreamOutputSizeUsesNewSourceSizeDuringRecordingSourceSwitch() {
     let switchedWindowSize = ScreenArchiveRecorder.streamOutputSize(
         selectionWidth: 1080,
