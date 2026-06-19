@@ -332,18 +332,27 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
         frame: CGRect?,
         displays: [SCDisplay],
         scaleFactor: CGFloat? = nil,
-        minimumScaleFactor: CGFloat = 1
+        minimumScaleFactor: CGFloat = 1,
+        maximumLongEdge: Int? = nil
     ) -> CapturePixelSize {
         let scale = max(
             1,
             minimumScaleFactor,
             scaleFactor ?? displayScaleFactor(displayID: displayID, containing: frame, displays: displays)
         )
-        let scaledWidth = Int((CGFloat(max(1, width)) * scale).rounded())
-        let scaledHeight = Int((CGFloat(max(1, height)) * scale).rounded())
+        var scaledWidth = CGFloat(max(1, width)) * scale
+        var scaledHeight = CGFloat(max(1, height)) * scale
+        if let maximumLongEdge, maximumLongEdge > 0 {
+            let longEdge = max(scaledWidth, scaledHeight)
+            if longEdge > CGFloat(maximumLongEdge) {
+                let downscale = CGFloat(maximumLongEdge) / longEdge
+                scaledWidth *= downscale
+                scaledHeight *= downscale
+            }
+        }
         return CapturePixelSize(
-            width: evenPixelDimension(scaledWidth),
-            height: evenPixelDimension(scaledHeight)
+            width: evenPixelDimension(Int(scaledWidth.rounded())),
+            height: evenPixelDimension(Int(scaledHeight.rounded()))
         )
     }
 
@@ -967,7 +976,8 @@ enum ScreenCaptureSourceResolver {
                 height: max(1, Int(window.frame.height)),
                 frame: window.frame,
                 displays: content.displays,
-                minimumScaleFactor: 2
+                minimumScaleFactor: 3,
+                maximumLongEdge: 4096
             )
             return ScreenArchiveRecorder.CaptureSelection(
                 filter: SCContentFilter(desktopIndependentWindow: window),
@@ -1037,7 +1047,8 @@ enum ScreenCaptureSourceResolver {
                     height: max(1, Int(window.frame.height)),
                     frame: window.frame,
                     displays: content.displays,
-                    minimumScaleFactor: 2
+                    minimumScaleFactor: 3,
+                    maximumLongEdge: 4096
                 )
                 return ScreenArchiveRecorder.CaptureSelection(
                     filter: SCContentFilter(desktopIndependentWindow: window),
@@ -1088,7 +1099,8 @@ enum ScreenCaptureSourceResolver {
                 height: max(1, Int(window.frame.height)),
                 frame: window.frame,
                 displays: displays,
-                minimumScaleFactor: 2
+                minimumScaleFactor: 3,
+                maximumLongEdge: 4096
             )
             return ScreenArchiveRecorder.CaptureSelection(
                 filter: SCContentFilter(desktopIndependentWindow: window),

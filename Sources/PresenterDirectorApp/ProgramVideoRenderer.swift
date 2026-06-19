@@ -943,8 +943,11 @@ private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unche
                 fillMode: layer.fillMode
             )
             let sourceImage = CIImage(cvPixelBuffer: sourceBuffer)
-            let fittedImage = sourceImage
-                .transformed(by: geometry.imageTransform)
+            let fittedImage = Self.scaledImage(
+                sourceImage,
+                scale: geometry.scale,
+                translation: geometry.translation
+            )
             let effectedImage = Self.applyPresenterEffects(
                 to: fittedImage,
                 effects: layer.presenterVideoEffects,
@@ -1010,11 +1013,25 @@ private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unche
 
         return output
     }
+
+    private static func scaledImage(
+        _ image: CIImage,
+        scale: CGFloat,
+        translation: CGSize
+    ) -> CIImage {
+        image
+            .applyingFilter("CILanczosScaleTransform", parameters: [
+                kCIInputScaleKey: scale,
+                kCIInputAspectRatioKey: 1
+            ])
+            .transformed(by: CGAffineTransform(translationX: translation.width, y: translation.height))
+    }
 }
 
 private struct ProgramLayerGeometry {
     let rect: CGRect
-    let imageTransform: CGAffineTransform
+    let scale: CGFloat
+    let translation: CGSize
     let maskImage: CIImage
 
     init(
@@ -1043,13 +1060,10 @@ private struct ProgramLayerGeometry {
         }
         let scaledSize = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
         self.rect = rect
-        self.imageTransform = CGAffineTransform(
-            a: scale,
-            b: 0,
-            c: 0,
-            d: scale,
-            tx: rect.midX - scaledSize.width / 2,
-            ty: rect.midY - scaledSize.height / 2
+        self.scale = scale
+        self.translation = CGSize(
+            width: rect.midX - scaledSize.width / 2,
+            height: rect.midY - scaledSize.height / 2
         )
         self.maskImage = Self.maskImage(for: placement, rect: rect)
     }

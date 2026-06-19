@@ -654,11 +654,27 @@ struct ProgramVideoRendererTests {
         frame: nil,
         displays: [],
         scaleFactor: 1,
-        minimumScaleFactor: 2
+        minimumScaleFactor: 3,
+        maximumLongEdge: 4096
     )
 
-    #expect(size.width == 1772)
-    #expect(size.height == 1456)
+    #expect(size.width == 2658)
+    #expect(size.height == 2184)
+}
+
+@Test func windowCapturePixelSizeCapsOversizedHighResolutionWindows() {
+    let size = ScreenArchiveRecorder.capturePixelSize(
+        width: 2200,
+        height: 1600,
+        frame: nil,
+        displays: [],
+        scaleFactor: 2,
+        minimumScaleFactor: 3,
+        maximumLongEdge: 4096
+    )
+
+    #expect(size.width == 4096)
+    #expect(size.height == 2980)
 }
 
 @Test func screenCaptureStreamOutputSizeUsesNewSourceSizeDuringRecordingSourceSwitch() {

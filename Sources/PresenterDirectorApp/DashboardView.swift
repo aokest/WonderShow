@@ -1095,11 +1095,13 @@ struct DashboardView: View {
             }
 
             ProgramCanvasControls(
+                copy: copy,
                 aspect: $programCanvasAspect,
                 resolution: $programCanvasResolution
             )
-            .padding(12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .padding(.top, 14)
+            .padding(.trailing, 14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         }
         .aspectRatio(programCanvasAspect.aspectRatio, contentMode: .fit)
     }
@@ -4289,11 +4291,12 @@ private struct SourceSlotPicker: View {
 }
 
 private struct ProgramCanvasControls: View {
+    let copy: AppCopy
     @Binding var aspect: ProgramCanvasAspect
     @Binding var resolution: ProgramCanvasResolution
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Menu {
                 ForEach(ProgramCanvasAspect.allCases, id: \.self) { option in
                     Button(option.label) {
@@ -4301,11 +4304,15 @@ private struct ProgramCanvasControls: View {
                     }
                 }
             } label: {
-                canvasControlLabel(icon: "aspectratio", text: aspect.label)
+                canvasControlLabel(
+                    title: copy.runtimeText("画布"),
+                    icon: "aspectratio",
+                    text: aspect.label
+                )
             }
             .menuStyle(.borderlessButton)
             .buttonStyle(.plain)
-            .help("Program canvas aspect")
+            .help(copy.runtimeText("切换监视器和默认导出的画面比例"))
 
             Menu {
                 ForEach(ProgramCanvasResolution.allCases, id: \.self) { option in
@@ -4314,31 +4321,37 @@ private struct ProgramCanvasControls: View {
                     }
                 }
             } label: {
-                canvasControlLabel(icon: "rectangle.compress.vertical", text: resolution.label)
+                canvasControlLabel(
+                    title: copy.runtimeText("清晰度"),
+                    icon: "rectangle.compress.vertical",
+                    text: resolution.label
+                )
             }
             .menuStyle(.borderlessButton)
             .buttonStyle(.plain)
-            .help("Program canvas resolution")
+            .help(copy.runtimeText("切换预览和默认导出的输出分辨率"))
         }
     }
 
-    private func canvasControlLabel(icon: String, text: String) -> some View {
-        HStack(spacing: 5) {
+    private func canvasControlLabel(title: String, icon: String, text: String) -> some View {
+        HStack(spacing: 7) {
             Image(systemName: icon)
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
             Text(text)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
         }
         .foregroundStyle(ConsolePalette.goldBright)
-        .padding(.horizontal, 8)
-        .frame(height: 26)
-        .background(ConsolePalette.surface.opacity(0.88))
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .padding(.horizontal, 11)
+        .frame(height: 32)
+        .background(ConsolePalette.surface.opacity(0.94))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(ConsolePalette.gold.opacity(0.72), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(ConsolePalette.gold.opacity(0.82), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.36), radius: 8, x: 0, y: 3)
+        .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 4)
     }
 }
 

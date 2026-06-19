@@ -23,6 +23,22 @@ import Testing
     #expect(state.stopEnabled == false)
 }
 
+@MainActor
+@Test func miniToolbarDefaultsBelowTheMenuBarNearTopCenter() {
+    let visibleFrame = NSRect(x: 0, y: 0, width: 1440, height: 840)
+    let panelSize = NSSize(width: 350, height: 54)
+
+    let frame = WonderShowAppCoordinator.defaultMiniToolbarFrame(
+        visibleFrame: visibleFrame,
+        panelSize: panelSize
+    )
+
+    #expect(frame.width == panelSize.width)
+    #expect(frame.height == panelSize.height)
+    #expect(frame.midX == visibleFrame.midX)
+    #expect(frame.maxY == visibleFrame.maxY - 12)
+}
+
 @Test func recordingControlHotKeysUseExplicitNonSystemCombos() {
     #expect(
         RecordingControlHotKey.action(

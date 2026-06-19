@@ -25,6 +25,8 @@ final class RecordingControlCenter: ObservableObject {
 
 @MainActor
 final class WonderShowAppCoordinator: NSObject, NSApplicationDelegate {
+    private static let miniToolbarSize = NSSize(width: 350, height: 54)
+
     let controlCenter = RecordingControlCenter()
     private var statusItem: NSStatusItem?
     private var miniToolbarPanel: NSPanel?
@@ -130,7 +132,7 @@ final class WonderShowAppCoordinator: NSObject, NSApplicationDelegate {
     private func showMiniToolbar() {
         if miniToolbarPanel == nil {
             let panel = NSPanel(
-                contentRect: NSRect(x: 120, y: 120, width: 350, height: 54),
+                contentRect: Self.defaultMiniToolbarFrame(),
                 styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false
@@ -149,7 +151,24 @@ final class WonderShowAppCoordinator: NSObject, NSApplicationDelegate {
             )
             miniToolbarPanel = panel
         }
+        miniToolbarPanel?.setFrame(Self.defaultMiniToolbarFrame(), display: false)
         miniToolbarPanel?.orderFrontRegardless()
+    }
+
+    static func defaultMiniToolbarFrame(
+        visibleFrame: NSRect = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900),
+        panelSize: NSSize = miniToolbarSize
+    ) -> NSRect {
+        let margin: CGFloat = 12
+        let x = min(
+            max(visibleFrame.minX + margin, visibleFrame.midX - panelSize.width / 2),
+            visibleFrame.maxX - panelSize.width - margin
+        )
+        let y = max(
+            visibleFrame.minY + margin,
+            visibleFrame.maxY - panelSize.height - margin
+        )
+        return NSRect(origin: CGPoint(x: x, y: y), size: panelSize)
     }
 }
 
@@ -184,7 +203,7 @@ private struct MiniRecordingToolbar: View {
             }
             .buttonStyle(MiniToolbarButtonStyle(isProminent: false))
             .disabled(!controlCenter.state.stopEnabled)
-            .help("终止录制")
+            .help("终止录制 · Command+Option+.")
 
             Button {
                 controlCenter.showSourcePickerAction?()
@@ -257,13 +276,13 @@ private struct MiniRecordingToolbar: View {
     private var primaryHelp: String {
         switch controlCenter.state.primaryAction {
         case .start:
-            return "开始录制"
+            return "开始录制 · Command+Option+R"
         case .cancelStart:
-            return "取消倒计时"
+            return "取消倒计时 · Command+Option+R"
         case .pause:
-            return "暂停录制"
+            return "暂停录制 · Command+Option+R / P"
         case .resume:
-            return "继续录制"
+            return "继续录制 · Command+Option+R / P"
         }
     }
 }
