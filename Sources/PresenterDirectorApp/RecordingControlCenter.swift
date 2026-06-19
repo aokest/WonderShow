@@ -68,7 +68,7 @@ final class WonderShowAppCoordinator: NSObject, NSApplicationDelegate {
         for slot in RecordingSourceSlots.validSlots {
             let item = menuItem(title: "源位 \(slot)", action: #selector(switchSourceSlotFromMenu(_:)))
             item.tag = slot
-            item.isEnabled = controlCenter.state.stopEnabled && activeFeatureTier.permitsSourceSlot(slot)
+            item.isEnabled = activeFeatureTier.permitsSourceSlot(slot)
             slotMenu.addItem(item)
         }
         menu.setSubmenu(slotMenu, for: slotMenuItem)
@@ -202,15 +202,20 @@ private struct MiniRecordingToolbar: View {
                 }
             } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: "square.grid.3x3")
+                    Image(systemName: "square.grid.3x3.fill")
                     Text("Slot")
                     Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .heavy))
                 }
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(ConsolePalette.previewBase)
+                .frame(width: 74, height: 30)
+                .background(ConsolePalette.goldBright)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
             .menuStyle(.borderlessButton)
-            .buttonStyle(MiniToolbarMenuButtonStyle())
-            .disabled(!controlCenter.state.stopEnabled || permittedSlots.isEmpty)
+            .tint(ConsolePalette.goldBright)
+            .disabled(permittedSlots.isEmpty)
             .help("切换源位")
 
             Divider()
@@ -228,6 +233,7 @@ private struct MiniRecordingToolbar: View {
         .padding(.horizontal, 10)
         .frame(width: 350, height: 54)
         .background(ConsolePalette.surface.opacity(0.96))
+        .environment(\.colorScheme, .dark)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -259,21 +265,6 @@ private struct MiniRecordingToolbar: View {
         case .resume:
             return "继续录制"
         }
-    }
-}
-
-private struct MiniToolbarMenuButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(ConsolePalette.textPrimary)
-            .frame(width: 74, height: 30)
-            .background(ConsolePalette.overlay.opacity(configuration.isPressed ? 0.72 : 1))
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(ConsolePalette.innerBorder, lineWidth: 1)
-            )
     }
 }
 

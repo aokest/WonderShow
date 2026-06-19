@@ -40,6 +40,8 @@
 - 2026-06-19 追加修复了“监视器里源正常变大，但预览合成里屏幕源变小”：`ScreenArchiveRecorder` 读取 `SCStreamFrameInfo.contentRect` / `scaleFactor`，先裁掉 ScreenCaptureKit sampleBuffer 的实际内容外黑边，再归一化写入固定 raw 屏幕轨；recorder preview 也走同一裁切路径。
 - 这轮主要修的是“录制中切源后窗口变小/画面轻微跳动”以及“合成预览小画面”的高概率原因。用户已经确认当前版本稳定；若未来再次复现，再补真实窗口日志定位，不要先重写录制主链路。
 - 重要边界：旧项目如果已经把小窗口和黑边写进 `Raw/slides-screen.mov`，新代码不能无损恢复；验证这项修复要用新构建重新录一段。
+- 2026-06-20 追加修复了用户新一轮 QA 反馈：状态栏/mini toolbar 的公共主按钮在录制中会真正暂停，不再误走终止录制；新增 `Command+Option+R` 开始/暂停/继续、`Command+Option+P` 暂停/继续、`Command+Option+.` 终止录制；`Command+0` 到 `Command+9` 源位切换不再要求正在录制，只要当前 program 使用屏幕源即可复用现有 ScreenCaptureKit 源选择和 `updateSource` 链路。
+- 同轮还修了 mini toolbar 源位下拉触发器对比度、录制中监视器混入截图 preview 导致的抖动高概率原因、主监视器屏幕层黑边过多的问题，并提高 program 导出和 raw 屏幕轨码率。若用户仍反馈窗口源“小/糊”，下一步优先采集真实 `contentRect`、`scaleFactor`、raw track natural size 和导出尺寸，不要先重写录制主链路。
 
 最近音频与布局时间轴修复也已经落地：
 
@@ -50,8 +52,8 @@
 
 当前开发分支建议从 `codex/source-slots-hotkeys-v0.8` 继续，基于用户已确认稳定的 `v0.7.20260619-stable`。用户已确认下一阶段按下面 1-5 顺序推进；第 6 组先进入待办，不混入当前快捷切源/录制工作室主线。
 
-1. P1 增加录制中快捷切源：已在 `codex/source-slots-hotkeys-v0.8` 开始落地。`Command+1` 到 `Command+6` 只在录制中且当前 program 使用屏幕源时生效；触发后重新扫描当前可用 ScreenCaptureKit 源，解析源位并复用现有 `screenSourcePreference -> handleScreenCaptureSourceChange() -> ScreenArchiveRecorder.updateSource` 链路。
-2. P1 在“录制源”弹窗中增加 1-6 源位绑定：已新增 `RecordingSourceSlots`，源选择器缩略图/列表项都显示 1-6 小按钮。源位状态持久化到 UserDefaults，只保存 slot、source id、显示名、类型、尺寸等元数据，不保存窗口截图或隐私内容。测试覆盖槽位边界、重复绑定替换、窗口关闭后不可切和快捷键解析。
+1. P1 增加快捷切源：已在 `codex/source-slots-hotkeys-v0.8` 落地到 0-9 源位。`Command+0` 到 `Command+9` 在当前 program 使用屏幕源时生效，非录制状态也能切监视器/预览源；触发后重新扫描当前可用 ScreenCaptureKit 源，解析源位并复用现有 `screenSourcePreference -> handleScreenCaptureSourceChange() -> ScreenArchiveRecorder.updateSource` 链路。权益边界：免费 1-2，VIP 1-6，SVIP 0-9。
+2. P1 在“录制源”弹窗中增加 0-9 源位绑定：已新增 `RecordingSourceSlots`，源选择器缩略图/列表项都显示源位按钮，并按权益置灰不可用源位。源位状态持久化到 UserDefaults，只保存 slot、source id、显示名、类型、尺寸等元数据，不保存窗口截图或隐私内容。测试覆盖槽位边界、重复绑定替换、窗口关闭后不可切、权益 gating 和快捷键解析。
 3. P1 增加讲者画面质量能力：已新增镜像、亮度、对比度和轻量柔化控制；预览层即时显示，manifest 记录 `PresenterVideoEffects`，program 导出按 manifest 应用同样效果，旧项目缺字段时默认无效果。下一阶段把高级人像美化与 emoji 虚拟面孔放到同一条 portrait pipeline：先做人物/脸部区域识别，只美化脸、脖子等肤区；再做可选 emoji 面孔替换，并跟随讲者表情。
 4. P1 把底部时间轴从占位变成真实轨道编辑器基础：已按 manifest/raw 文件状态展示 PPT/屏幕、讲者、声音、合成轨道，支持轨道折叠、点击片段定位播放头、选择单段范围并导出选区。未做破坏性删除 raw、多段非连续拼接和完整波形/缩略图编辑器。
 5. P1 增加 macOS 菜单栏常驻和桌面可拖拽 mini toolbar：已新增状态栏菜单和浮动 mini toolbar，显示录制时间，复用现有 Dashboard 录制状态机执行开始/取消倒计时/暂停/继续/终止、打开录制源选择器和源位切换；mini toolbar 源位切换用紧凑下拉菜单，不把 0-9 横向摊开。

@@ -110,11 +110,11 @@ public struct RecordingExportSettings: Codable, Hashable, Sendable {
         let base: Int
         switch resolution {
         case .source, .hd1080:
-            base = 8_000_000
+            base = 12_000_000
         case .qhd1440:
-            base = 16_000_000
+            base = 24_000_000
         case .uhd4k:
-            base = 35_000_000
+            base = 48_000_000
         }
 
         let qualityMultiplier: Double

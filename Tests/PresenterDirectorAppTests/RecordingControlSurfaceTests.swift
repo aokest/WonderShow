@@ -1,4 +1,5 @@
 @testable import PresenterDirectorApp
+import AppKit
 import Testing
 
 @Test func recordingControlSurfaceFormatsElapsedTimeAndActions() {
@@ -20,4 +21,46 @@ import Testing
 
     #expect(state.primaryAction == .cancelStart)
     #expect(state.stopEnabled == false)
+}
+
+@Test func recordingControlHotKeysUseExplicitNonSystemCombos() {
+    #expect(
+        RecordingControlHotKey.action(
+            charactersIgnoringModifiers: "r",
+            modifierFlags: [.command, .option]
+        ) == .toggleStartPauseResume
+    )
+    #expect(
+        RecordingControlHotKey.action(
+            charactersIgnoringModifiers: "p",
+            modifierFlags: [.command, .option]
+        ) == .pauseResume
+    )
+    #expect(
+        RecordingControlHotKey.action(
+            charactersIgnoringModifiers: ".",
+            modifierFlags: [.command, .option]
+        ) == .finish
+    )
+}
+
+@Test func recordingControlHotKeysRejectSourceSlotAndSystemLikeCombos() {
+    #expect(
+        RecordingControlHotKey.action(
+            charactersIgnoringModifiers: "1",
+            modifierFlags: [.command]
+        ) == nil
+    )
+    #expect(
+        RecordingControlHotKey.action(
+            charactersIgnoringModifiers: "r",
+            modifierFlags: [.command]
+        ) == nil
+    )
+    #expect(
+        RecordingControlHotKey.action(
+            charactersIgnoringModifiers: "p",
+            modifierFlags: [.command, .option, .shift]
+        ) == nil
+    )
 }

@@ -280,7 +280,7 @@ import Testing
     #expect(defaultSettings.resolution.pixelSize?.width == 1920)
     #expect(defaultSettings.resolution.pixelSize?.height == 1080)
     #expect(defaultSettings.frameRate.rawValue == 30)
-    #expect(defaultSettings.bitrateBitsPerSecond == 8_000_000)
+    #expect(defaultSettings.bitrateBitsPerSecond == 12_000_000)
     #expect(defaultSettings.audioBitrateBitsPerSecond == 192_000)
 
     #expect(socialHighMotion.resolution.pixelSize?.width == 3840)

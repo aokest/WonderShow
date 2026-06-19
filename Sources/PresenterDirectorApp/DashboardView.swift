@@ -433,7 +433,7 @@ struct DashboardView: View {
         case .starting:
             cancelRecordingCountdown()
         case .recording:
-            requestFinishRecording()
+            pauseRecording()
         case .paused:
             resumeRecording()
         }
@@ -597,8 +597,8 @@ struct DashboardView: View {
                requestRecordingSourceSlotSwitch(slot) {
                 return nil
             }
-            if isRecordingHotKey(event) {
-                requestRecordingToggle()
+            if let action = RecordingControlHotKey.action(for: event) {
+                handleRecordingHotKey(action)
                 return nil
             }
             return event
@@ -607,8 +607,8 @@ struct DashboardView: View {
             if let slot = RecordingSourceSlotHotKey.slot(for: event) {
                 _ = requestRecordingSourceSlotSwitch(slot)
             }
-            if isRecordingHotKey(event) {
-                requestRecordingToggle()
+            if let action = RecordingControlHotKey.action(for: event) {
+                handleRecordingHotKey(action)
             }
         }
     }
@@ -624,16 +624,32 @@ struct DashboardView: View {
         }
     }
 
-    private func isRecordingHotKey(_ event: NSEvent) -> Bool {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        return event.charactersIgnoringModifiers?.lowercased() == "r"
-            && flags.contains(.command)
-            && flags.contains(.option)
+    private func handleRecordingHotKey(_ action: RecordingControlHotKeyAction) {
+        switch action {
+        case .toggleStartPauseResume:
+            requestRecordingToggle()
+        case .pauseResume:
+            switch recordingControlState {
+            case .recording:
+                pauseRecording()
+            case .paused:
+                resumeRecording()
+            case .idle, .starting:
+                break
+            }
+        case .finish:
+            switch recordingControlState {
+            case .starting, .recording, .paused:
+                requestFinishRecording()
+            case .idle:
+                break
+            }
+        }
     }
 
     @discardableResult
     private func requestRecordingSourceSlotSwitch(_ slot: Int) -> Bool {
-        guard commandController.isRecording, currentProgramUsesScreen else {
+        guard currentProgramUsesScreen else {
             return false
         }
         guard recordingFeatureTier.permitsSourceSlot(slot) else {
@@ -2047,8 +2063,8 @@ struct DashboardView: View {
         let selectedSourcePreference = screenSourcePreference
         let selectedSourceLabel = screenSourcePreference.localizedLabel(copy)
         latestScreenPreviewImage = nil
+        screenPreview.stop()
         screenPreview.resetImage()
-        restartScreenPreviewIfNeeded()
         Task {
             do {
                 try await screenArchiveRecorder.updateSource(
@@ -4256,8 +4272,9 @@ private struct ProgramMonitorView: View {
                 if let screenImage {
                     Image(decorative: screenImage, scale: 1)
                         .resizable()
-                        .scaledToFit()
+                        .scaledToFill()
                         .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
                 } else {
                     ProgramCanvasPlaceholder(
                         copy: copy,

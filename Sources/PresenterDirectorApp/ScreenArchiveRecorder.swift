@@ -743,7 +743,7 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
             AVVideoWidthKey: max(2, width),
             AVVideoHeightKey: max(2, height),
             AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: max(8_000_000, width * height * 2)
+                AVVideoAverageBitRateKey: max(12_000_000, width * height * 4)
             ]
         ]
     }
