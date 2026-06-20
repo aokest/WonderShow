@@ -268,6 +268,10 @@ public struct PresenterVideoEffects: Codable, Hashable, Sendable {
     public var faceLandmarkBeautyEnabled: Bool
     public var faceSlimming: Double
     public var eyeEnlargement: Double
+    public var emojiFaceReplacementEnabled: Bool
+    public var emojiFaceReplacementSymbol: String
+    public var emojiFaceReplacementStrength: Double
+    public var emojiFaceReplacementScale: Double
 
     public init(
         isMirrored: Bool = false,
@@ -287,7 +291,11 @@ public struct PresenterVideoEffects: Codable, Hashable, Sendable {
         backgroundBlur: Double = 0,
         faceLandmarkBeautyEnabled: Bool = false,
         faceSlimming: Double = 0,
-        eyeEnlargement: Double = 0
+        eyeEnlargement: Double = 0,
+        emojiFaceReplacementEnabled: Bool = false,
+        emojiFaceReplacementSymbol: String = "😀",
+        emojiFaceReplacementStrength: Double = 0,
+        emojiFaceReplacementScale: Double = 1
     ) {
         self.isMirrored = isMirrored
         self.brightness = Self.clamp(brightness, lower: -0.5, upper: 0.5)
@@ -307,6 +315,10 @@ public struct PresenterVideoEffects: Codable, Hashable, Sendable {
         self.faceLandmarkBeautyEnabled = faceLandmarkBeautyEnabled
         self.faceSlimming = Self.clamp01(faceSlimming)
         self.eyeEnlargement = Self.clamp01(eyeEnlargement)
+        self.emojiFaceReplacementEnabled = emojiFaceReplacementEnabled
+        self.emojiFaceReplacementSymbol = emojiFaceReplacementSymbol.isEmpty ? "😀" : emojiFaceReplacementSymbol
+        self.emojiFaceReplacementStrength = Self.clamp01(emojiFaceReplacementStrength)
+        self.emojiFaceReplacementScale = Self.clamp(emojiFaceReplacementScale, lower: 0.55, upper: 1.8)
     }
 
     public static let `default` = PresenterVideoEffects()
@@ -345,6 +357,10 @@ public struct PresenterVideoEffects: Codable, Hashable, Sendable {
         case faceLandmarkBeautyEnabled
         case faceSlimming
         case eyeEnlargement
+        case emojiFaceReplacementEnabled
+        case emojiFaceReplacementSymbol
+        case emojiFaceReplacementStrength
+        case emojiFaceReplacementScale
     }
 
     public init(from decoder: any Decoder) throws {
@@ -379,7 +395,23 @@ public struct PresenterVideoEffects: Codable, Hashable, Sendable {
                 forKey: .faceLandmarkBeautyEnabled
             ) ?? false,
             faceSlimming: try container.decodeIfPresent(Double.self, forKey: .faceSlimming) ?? 0,
-            eyeEnlargement: try container.decodeIfPresent(Double.self, forKey: .eyeEnlargement) ?? 0
+            eyeEnlargement: try container.decodeIfPresent(Double.self, forKey: .eyeEnlargement) ?? 0,
+            emojiFaceReplacementEnabled: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .emojiFaceReplacementEnabled
+            ) ?? false,
+            emojiFaceReplacementSymbol: try container.decodeIfPresent(
+                String.self,
+                forKey: .emojiFaceReplacementSymbol
+            ) ?? "😀",
+            emojiFaceReplacementStrength: try container.decodeIfPresent(
+                Double.self,
+                forKey: .emojiFaceReplacementStrength
+            ) ?? 0,
+            emojiFaceReplacementScale: try container.decodeIfPresent(
+                Double.self,
+                forKey: .emojiFaceReplacementScale
+            ) ?? 1
         )
     }
 

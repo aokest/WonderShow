@@ -10,6 +10,8 @@ import Testing
     let script = try String(contentsOf: scriptURL, encoding: .utf8)
 
     #expect(script.contains("AppIcon.icns"))
+    #expect(script.contains("PresenterDirector_PresenterDirectorApp.bundle"))
+    #expect(script.contains("cp -R \"$RESOURCE_BUNDLE\" \"$BUNDLE_DIR/Contents/Resources/\""))
     #expect(script.contains("CFBundleIconFile -string \"AppIcon\""))
     #expect(script.contains("PkgInfo"))
     #expect(!script.contains("CFBundleIconName"))

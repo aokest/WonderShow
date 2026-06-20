@@ -21,6 +21,7 @@ BUILD_CONFIGURATION="${BUILD_CONFIGURATION:-release}"
 BUNDLE_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 EXECUTABLE="PresenterDirectorApp"
 BUILD_EXECUTABLE="$ROOT_DIR/.build/arm64-apple-macosx/$BUILD_CONFIGURATION/$EXECUTABLE"
+RESOURCE_BUNDLE="$ROOT_DIR/.build/arm64-apple-macosx/$BUILD_CONFIGURATION/PresenterDirector_PresenterDirectorApp.bundle"
 
 cd "$ROOT_DIR"
 # SwiftPM manifest evaluation is sandboxed by default on macOS and fails in this repo path.
@@ -30,6 +31,9 @@ swift build -c "$BUILD_CONFIGURATION" --disable-sandbox
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/Contents/MacOS" "$BUNDLE_DIR/Contents/Resources"
 cp "$BUILD_EXECUTABLE" "$BUNDLE_DIR/Contents/MacOS/$EXECUTABLE"
+if [[ -d "$RESOURCE_BUNDLE" ]]; then
+  cp -R "$RESOURCE_BUNDLE" "$BUNDLE_DIR/Contents/Resources/"
+fi
 cp "$ROOT_DIR/examples/wondershow-demo.html" "$BUNDLE_DIR/Contents/Resources/wondershow-demo.html"
 cp "$ROOT_DIR/Sources/PresenterDirectorApp/Resources/AppIcon.icns" "$BUNDLE_DIR/Contents/Resources/AppIcon.icns"
 if [[ -f "$ROOT_DIR/sidecar/models/wondershow_gesture_model.json" ]]; then

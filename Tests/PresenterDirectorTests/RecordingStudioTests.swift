@@ -271,7 +271,11 @@ import Testing
         backgroundBlur: 0.45,
         faceLandmarkBeautyEnabled: true,
         faceSlimming: 0.24,
-        eyeEnlargement: 0.18
+        eyeEnlargement: 0.18,
+        emojiFaceReplacementEnabled: true,
+        emojiFaceReplacementSymbol: "😀",
+        emojiFaceReplacementStrength: 0.86,
+        emojiFaceReplacementScale: 1.34
     )
 
     let data = try JSONEncoder().encode(effects)
@@ -284,6 +288,10 @@ import Testing
     #expect(decoded.faceLandmarkBeautyEnabled)
     #expect(decoded.faceSlimming == 0.24)
     #expect(decoded.eyeEnlargement == 0.18)
+    #expect(decoded.emojiFaceReplacementEnabled)
+    #expect(decoded.emojiFaceReplacementSymbol == "😀")
+    #expect(decoded.emojiFaceReplacementStrength == 0.86)
+    #expect(decoded.emojiFaceReplacementScale == 1.34)
 }
 
 @Test func presenterVideoEffectsDecodesLegacyBeautyFieldsWithSubjectAwareDefaults() throws {
@@ -319,6 +327,16 @@ import Testing
     #expect(decoded.faceLandmarkBeautyEnabled == false)
     #expect(decoded.faceSlimming == 0)
     #expect(decoded.eyeEnlargement == 0)
+    #expect(decoded.emojiFaceReplacementEnabled == false)
+    #expect(decoded.emojiFaceReplacementSymbol == "😀")
+    #expect(decoded.emojiFaceReplacementStrength == 0)
+    #expect(decoded.emojiFaceReplacementScale == 1)
+}
+
+@Test func presenterVideoEffectsDefaultsEmojiReplacementScaleToOne() {
+    let effects = PresenterVideoEffects()
+
+    #expect(effects.emojiFaceReplacementScale == 1)
 }
 
 @Test func recordingManifestDecodesOldProjectsWithDefaultPresenterVideoEffects() throws {

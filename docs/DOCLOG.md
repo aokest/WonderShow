@@ -9,6 +9,9 @@
 - 收紧 `SubjectAwarePresenterBeautyProcessor` 的颈部 mask：由软矩形改为随下颌向下渐缩的多段椭圆 mask，只保留颈部中心弱美化，避免颈部两侧角落被整块刷亮；新增 `subjectAwareBeautyUsesTaperedNeckMaskWithoutRectangularCorners` 回归测试。
 - 更新 `docs/modules/presenter-beauty/BEAUTY_FEATURE_BRIEF.md`，补充第一阶段方案边界、失败回退和第二阶段能力边界。
 - 启动 MediaPipe portrait pipeline：sidecar 下载并加载 `face_landmarker.task` 与 `selfie_multiclass_256x256.tflite`，`/infer` 返回 face landmarks/blendshapes 与 gray8 人像 mask；Swift 新增 portrait Codable 模型、背景虚化/颜色背景替换处理器、高级局部美颜处理器，并在摄像头预览链路缓存 MediaPipe portrait frame。当前完成预览/算法管线，导出逐帧 MediaPipe 推理和真实 mesh warp 仍为下一步。
+- 在 v1.0.0 受保护录制合同之上新增 emoji 替脸预览能力：`EmojiFaceOverlayProcessor` 基于 MediaPipe face bbox 叠加 emoji 面孔，`PresenterVideoEffects` 增加 emoji 开关/符号/强度字段，Dashboard 美颜面板提供最小开关入口；该能力仅走讲者增强层，不改活动窗口直接采集、切源、完整窗口显示、预览/导出一致和高清导出主链路。
+- 复测确认高级美颜、背景虚化/分割、Emoji 替脸尚不具备可交付质量：实时预览与导出一致性不足，人像贴合与跟随不稳定。新增 `PresenterExperimentalEffectsGate` 将三类入口置灰，并在参数层清零，保留亮度/对比度/镜像等基础稳定调整。
+- 关于面板新增“感谢作者 / Buy me a coffee”区域，打包资源内置支付宝与微信小尺寸收款码；新增 `releases/README-1.0.0-20260620181913.md` 记录当前版本状态、实验功能困境和重新开放门槛。
 
 ## 2026-06-19
 

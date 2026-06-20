@@ -12,9 +12,10 @@
 - Program 导出已接入 `SubjectAwarePresenterBeautyProcessor`：使用 Apple Vision 检测单张讲者脸，Core Image 只对脸部和估算颈部 mask 做自然美化；无脸、低置信度或多人脸时回退到镜像/亮度/对比等基础效果。
 - 2026-06-20 针对“脸部一块、脖子一块”的方块感风险收紧 mask：颈部区域从软矩形改为随下颌向下渐缩的多段椭圆 mask，并补充回归测试，确保颈部中心可以被轻量美化、颈部两侧角落不会被整块刷亮。
 - 2026-06-20 下一阶段已开始落地 MediaPipe portrait pipeline：sidecar 同时加载 Face Landmarker 和 selfie multiclass segmenter，`/infer` 除手势外返回 faces、blendshapes 和 gray8 人像 segmentation mask；Swift 端新增 portrait 数据模型、背景虚化/颜色背景替换处理器，以及基于 MediaPipe face bbox 的高级局部美颜处理器。
+- 2026-06-20 v1.0.0 之后继续新增 `EmojiFaceOverlayProcessor`：基于 MediaPipe face bbox 在讲者预览画面叠加 emoji 面孔，并通过 `PresenterVideoEffects` 保存开关、emoji 符号和强度；默认关闭，不改变 raw 讲者轨、窗口采集、屏幕合成或高清导出规则。
 - 监视器底部与画布/清晰度按钮平齐新增 `智能美颜` 快捷按钮，并保留右侧“讲者画面”详细参数区。
 - 实时预览已具备 sample-buffer 渲染路径，可应用 MediaPipe segmentation 的背景替换/虚化和 MediaPipe face bbox 的高级局部美颜；Program 导出仍使用当前 manifest/Core Image 链路，逐帧 MediaPipe 推理导出需要单独做性能预算。
-- 第二阶段仍保留：真正的瘦脸/大眼 mesh warp、基于 face parsing 更精细避开眼眉唇、emoji 虚拟头像和表情跟随。
+- 第二阶段仍保留：真正的瘦脸/大眼 mesh warp、基于 face parsing 更精细避开眼眉唇、emoji 表情跟随和导出逐帧 MediaPipe 推理。
 
 ## 方案结论
 

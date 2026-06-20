@@ -1185,7 +1185,7 @@ private final class ProgramVideoCompositionInstruction: NSObject, AVVideoComposi
 
 private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
     private let context = CIContext()
-    private let presenterBeautyProcessor = SubjectAwarePresenterBeautyProcessor()
+    private let presenterEnhancementPipeline = PresenterEnhancementPipeline()
     private var renderSize = CGSize(width: 1920, height: 1080)
 
     var sourcePixelBufferAttributes: [String: any Sendable]? {
@@ -1205,53 +1205,56 @@ private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unche
     }
 
     func startRequest(_ request: AVAsynchronousVideoCompositionRequest) {
-        guard let instruction = request.videoCompositionInstruction as? ProgramVideoCompositionInstruction else {
-            request.finish(with: ProgramVideoRendererError.exportFailed("合成指令类型不匹配"))
-            return
-        }
-        guard let outputBuffer = request.renderContext.newPixelBuffer() else {
-            request.finish(with: ProgramVideoRendererError.exportFailed("无法创建合成帧"))
-            return
-        }
-
-        let renderRect = CGRect(origin: .zero, size: renderSize)
-        var composedImage = CIImage(color: .black).cropped(to: renderRect)
-
-        for layer in instruction.layers.reversed() {
-            guard let sourceBuffer = request.sourceFrame(byTrackID: layer.trackID) else {
-                continue
+        autoreleasepool {
+            guard let instruction = request.videoCompositionInstruction as? ProgramVideoCompositionInstruction else {
+                request.finish(with: ProgramVideoRendererError.exportFailed("合成指令类型不匹配"))
+                return
             }
-            let geometry = ProgramLayerGeometry(
-                naturalSize: layer.naturalSize,
-                placement: layer.placement,
-                renderSize: renderSize,
-                fillMode: layer.fillMode
-            )
-            let sourceImage = Self.sourceImage(
-                from: sourceBuffer,
-                cropRect: layer.sourceCropRect
-            )
-            let fittedImage = Self.scaledImage(
-                sourceImage,
-                scale: geometry.scale,
-                translation: geometry.translation
-            )
-            let effectedImage = presenterBeautyProcessor.applyPresenterEffects(
-                to: fittedImage,
-                effects: layer.presenterVideoEffects,
-                targetRect: geometry.rect
-            )
-            let clippedImage = effectedImage
-                .cropped(to: geometry.rect)
-                .applyingFilter("CIBlendWithAlphaMask", parameters: [
-                    kCIInputBackgroundImageKey: composedImage,
-                    kCIInputMaskImageKey: geometry.maskImage
-                ])
-            composedImage = clippedImage.cropped(to: renderRect)
-        }
+            guard let outputBuffer = request.renderContext.newPixelBuffer() else {
+                request.finish(with: ProgramVideoRendererError.exportFailed("无法创建合成帧"))
+                return
+            }
 
-        context.render(composedImage, to: outputBuffer)
-        request.finish(withComposedVideoFrame: outputBuffer)
+            let renderRect = CGRect(origin: .zero, size: renderSize)
+            var composedImage = CIImage(color: .black).cropped(to: renderRect)
+
+            for layer in instruction.layers.reversed() {
+                guard let sourceBuffer = request.sourceFrame(byTrackID: layer.trackID) else {
+                    continue
+                }
+                let geometry = ProgramLayerGeometry(
+                    naturalSize: layer.naturalSize,
+                    placement: layer.placement,
+                    renderSize: renderSize,
+                    fillMode: layer.fillMode
+                )
+                let sourceImage = Self.sourceImage(
+                    from: sourceBuffer,
+                    cropRect: layer.sourceCropRect
+                )
+                let fittedImage = Self.scaledImage(
+                    sourceImage,
+                    scale: geometry.scale,
+                    translation: geometry.translation
+                )
+                let effectedImage = presenterEnhancementPipeline.apply(
+                    to: fittedImage,
+                    effects: layer.presenterVideoEffects,
+                    targetRect: geometry.rect,
+                    fallbackPortrait: true
+                )
+                let clippedImage = effectedImage
+                    .cropped(to: geometry.rect)
+                    .applyingFilter("CIBlendWithAlphaMask", parameters: [
+                        kCIInputBackgroundImageKey: composedImage,
+                        kCIInputMaskImageKey: geometry.maskImage
+                    ])
+                composedImage = clippedImage.cropped(to: renderRect)
+            }
+
+            context.render(composedImage, to: outputBuffer)
+            request.finish(withComposedVideoFrame: outputBuffer)
+        }
     }
 
     func cancelAllPendingVideoCompositionRequests() {}

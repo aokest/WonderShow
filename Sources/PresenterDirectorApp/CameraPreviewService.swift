@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 @preconcurrency import Vision
+import Foundation
 import PresenterDirector
 import SwiftUI
 
@@ -10,6 +11,7 @@ final class CaptureSessionBox: @unchecked Sendable {
     let videoOutput = AVCaptureVideoDataOutput()
     let videoQueue = DispatchQueue(label: "com.lingyan.camera-frames")
     let previewContext = CIContext()
+    let previewPipeline = PresenterEnhancementPipeline()
     var lastPreviewFramePublishedAt = Date.distantPast
     var previewEffects = PresenterVideoEffects.default
     var latestPortraitFrame: MediaPipePortraitFrame?
@@ -21,6 +23,32 @@ private struct CameraGestureRuntimeSnapshot: Sendable {
     let isMediaPipeAvailable: Bool
     let mediaPipeInferenceInFlight: Bool
     let lastMediaPipeFrameTimestampMilliseconds: Int
+}
+
+enum CameraPreviewMediaPipePolicy {
+    static func requiresPortraitInference(for effects: PresenterVideoEffects) -> Bool {
+        effects.advancedBeautyEnabled
+            || effects.portraitSegmentationEnabled
+            || effects.faceLandmarkBeautyEnabled
+            || effects.emojiFaceReplacementEnabled
+            || effects.backgroundBlur > 0
+            || effects.backgroundEffect != .none
+    }
+
+    static func shouldRunMediaPipe(
+        gestureControlEnabled: Bool,
+        effects: PresenterVideoEffects
+    ) -> Bool {
+        gestureControlEnabled || requiresPortraitInference(for: effects)
+    }
+
+    static func shouldUseSyntheticPortraitFallbackForLiveMonitor(_ effects: PresenterVideoEffects) -> Bool {
+        false
+    }
+
+    static func shouldRunSubjectAwareBeautyDetectionForLiveMonitor(_ effects: PresenterVideoEffects) -> Bool {
+        false
+    }
 }
 
 private final class CameraGestureRuntimeState: @unchecked Sendable {
@@ -516,10 +544,10 @@ final class CameraPreviewService: NSObject, ObservableObject {
         let snapshot = gestureRuntimeState.snapshot()
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let previewEffects = sessionBox.previewEffects
-        let needsPortraitInference = previewEffects.advancedBeautyEnabled
-            || previewEffects.portraitSegmentationEnabled
-            || previewEffects.faceLandmarkBeautyEnabled
-        guard snapshot.gestureControlEnabled || needsPortraitInference else { return }
+        guard CameraPreviewMediaPipePolicy.shouldRunMediaPipe(
+            gestureControlEnabled: snapshot.gestureControlEnabled,
+            effects: previewEffects
+        ) else { return }
 
         if snapshot.isMediaPipeAvailable {
             guard !snapshot.mediaPipeInferenceInFlight else { return }
@@ -556,37 +584,33 @@ final class CameraPreviewService: NSObject, ObservableObject {
     }
 
     private nonisolated func publishPreviewFrameIfNeeded(_ sampleBuffer: CMSampleBuffer) {
-        let now = Date()
-        guard now.timeIntervalSince(sessionBox.lastPreviewFramePublishedAt) >= CaptureSessionBox.previewFrameInterval else {
-            return
-        }
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            return
-        }
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
-        let effects = sessionBox.previewEffects
-        let portraitFrame = sessionBox.latestPortraitFrame
-        let backgroundImage = PortraitBackgroundProcessor().apply(
-            to: image,
-            segmentation: sessionBox.latestPortraitSegmentation,
-            effects: effects
-        )
-        let advancedImage = AdvancedPortraitBeautyProcessor().apply(
-            to: backgroundImage,
-            portrait: portraitFrame ?? MediaPipePortraitFrame(timestampMilliseconds: 0),
-            effects: effects
-        )
-        let previewImage = SubjectAwarePresenterBeautyProcessor().applyPresenterEffects(
-            to: advancedImage,
-            effects: effects,
-            targetRect: advancedImage.extent
-        )
-        guard let cgImage = sessionBox.previewContext.createCGImage(previewImage, from: image.extent) else {
-            return
-        }
-        sessionBox.lastPreviewFramePublishedAt = now
-        Task { @MainActor [weak self, cgImage] in
-            self?.latestPreviewImage = cgImage
+        autoreleasepool {
+            let now = Date()
+            guard now.timeIntervalSince(sessionBox.lastPreviewFramePublishedAt) >= CaptureSessionBox.previewFrameInterval else {
+                return
+            }
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                return
+            }
+            let image = CIImage(cvPixelBuffer: pixelBuffer)
+            let effects = sessionBox.previewEffects
+            let previewImage = sessionBox.previewPipeline.apply(
+                to: image,
+                effects: effects,
+                targetRect: image.extent,
+                portrait: sessionBox.latestPortraitFrame,
+                segmentation: sessionBox.latestPortraitSegmentation,
+                fallbackPortrait: CameraPreviewMediaPipePolicy.shouldUseSyntheticPortraitFallbackForLiveMonitor(effects),
+                allowSubjectAwareBeautyDetection: CameraPreviewMediaPipePolicy
+                    .shouldRunSubjectAwareBeautyDetectionForLiveMonitor(effects)
+            )
+            guard let cgImage = sessionBox.previewContext.createCGImage(previewImage, from: image.extent) else {
+                return
+            }
+            sessionBox.lastPreviewFramePublishedAt = now
+            Task { @MainActor [weak self, cgImage] in
+                self?.latestPreviewImage = cgImage
+            }
         }
     }
 
@@ -620,7 +644,11 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         jpegData: Data,
         timestampMilliseconds: Int
     ) {
-        guard gestureControlEnabled else { return }
+        let shouldRunForPreview = CameraPreviewMediaPipePolicy.shouldRunMediaPipe(
+            gestureControlEnabled: gestureControlEnabled,
+            effects: sessionBox.previewEffects
+        )
+        guard shouldRunForPreview else { return }
         guard !mediaPipeInferenceInFlight else { return }
         guard timestampMilliseconds - lastMediaPipeFrameTimestampMilliseconds >= mediaPipeMinimumFrameIntervalMilliseconds else {
             return

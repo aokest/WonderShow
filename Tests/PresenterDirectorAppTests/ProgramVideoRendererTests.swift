@@ -1104,6 +1104,87 @@ struct ProgramVideoRendererTests {
     #expect(image.height == 360)
 }
 
+@Test func programVideoRendererAppliesAdvancedPresenterEnhancementsToCameraLayer() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("lingyan-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .cameraPortrait)
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraOnly,
+        layout: .speakerFullBody,
+        durationMilliseconds: 1_000
+    )
+    let settings = RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264)
+    let baselineSession = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: rootURL.appendingPathComponent("Raw/slides-screen.mov"),
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: RecordingProjectManifestFactory().makeManifest(project: project)
+    )
+    let enhancedSession = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project-enhanced.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: rootURL.appendingPathComponent("Raw/slides-screen.mov"),
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program-enhanced.mp4"),
+        manifest: RecordingProjectManifestFactory().makeManifest(
+            project: project,
+            presenterVideoEffects: PresenterVideoEffects(
+                beauty: 0.45,
+                isSubjectAwareBeautyEnabled: true,
+                skinSmoothing: 0.55,
+                skinBrightening: 0.55,
+                skinWhitening: 0.42,
+                blemishReduction: 0.45,
+                complexion: 0.28,
+                beautyStyle: .cameraReady,
+                advancedBeautyEnabled: true,
+                portraitSegmentationEnabled: true,
+                backgroundEffect: .replacement(colorHex: "#203040", strength: 1),
+                backgroundBlur: 0.75,
+                faceLandmarkBeautyEnabled: true,
+                faceSlimming: 0.55,
+                eyeEnlargement: 0.45,
+                emojiFaceReplacementEnabled: true,
+                emojiFaceReplacementSymbol: "😀",
+                emojiFaceReplacementStrength: 1,
+                emojiFaceReplacementScale: 1.3
+            )
+        )
+    )
+
+    let baselineURL = rootURL.appendingPathComponent("Exports/baseline-camera.mp4")
+    let enhancedURL = rootURL.appendingPathComponent("Exports/enhanced-camera.mp4")
+    _ = try await ProgramVideoRenderer().render(session: baselineSession, settings: settings, outputURL: baselineURL)
+    _ = try await ProgramVideoRenderer().render(session: enhancedSession, settings: settings, outputURL: enhancedURL)
+
+    let baselineImage = try firstFrameImage(from: baselineURL)
+    let enhancedImage = try firstFrameImage(from: enhancedURL)
+    let faceBefore = try #require(pixel(in: baselineImage, x: 320, y: 210))
+    let faceAfter = try #require(pixel(in: enhancedImage, x: 320, y: 210))
+    let backgroundBefore = try #require(pixel(in: baselineImage, x: 96, y: 72))
+    let backgroundAfter = try #require(pixel(in: enhancedImage, x: 96, y: 72))
+
+    #expect(colorDistance(faceBefore, faceAfter) > 20)
+    #expect(colorDistance(backgroundBefore, backgroundAfter) > 8)
+}
+
 @Test func manifestLayoutKeyframesSplitTimelineSegments() {
     let firstGeometry = ProgramPictureInPictureGeometry(
         centerX: 0.78,
@@ -1344,6 +1425,7 @@ struct ProgramVideoRendererTests {
 private enum TestVideoColor {
     case camera
     case cameraDim
+    case cameraPortrait
     case cameraSplit
     case screen
     case screenWithTopChrome
@@ -1432,6 +1514,25 @@ private func makePixelBuffer(size: CGSize, color: TestVideoColor, frame: Int) ->
                 pointer[offset] = 72
                 pointer[offset + 1] = 72
                 pointer[offset + 2] = 72
+            case .cameraPortrait:
+                let faceRect = CGRect(x: CGFloat(width) * 0.36, y: CGFloat(height) * 0.30, width: CGFloat(width) * 0.28, height: CGFloat(height) * 0.38)
+                let leftEyeRect = CGRect(x: CGFloat(width) * 0.43, y: CGFloat(height) * 0.50, width: CGFloat(width) * 0.035, height: CGFloat(height) * 0.035)
+                let rightEyeRect = CGRect(x: CGFloat(width) * 0.525, y: CGFloat(height) * 0.50, width: CGFloat(width) * 0.035, height: CGFloat(height) * 0.035)
+                let point = CGPoint(x: x, y: y)
+                if faceRect.contains(point) {
+                    pointer[offset] = 86
+                    pointer[offset + 1] = 118
+                    pointer[offset + 2] = 172
+                    if leftEyeRect.contains(point) || rightEyeRect.contains(point) {
+                        pointer[offset] = 18
+                        pointer[offset + 1] = 22
+                        pointer[offset + 2] = 28
+                    }
+                } else {
+                    pointer[offset] = UInt8(42 + (x * 70) / max(1, width - 1))
+                    pointer[offset + 1] = UInt8(52 + (y * 68) / max(1, height - 1))
+                    pointer[offset + 2] = UInt8(68 + ((x + y) * 44) / max(1, width + height - 2))
+                }
             case .cameraSplit:
                 if x < width / 2 {
                     pointer[offset] = 40

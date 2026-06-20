@@ -5,6 +5,8 @@ import AVKit
 import PresenterDirector
 import SwiftUI
 
+private let presenterEmojiChoices = ["😀", "😎", "🤩", "🙂", "😄", "🤖", "🫥", "🥸"]
+
 private enum PiPShape: String, CaseIterable, Hashable {
     case roundedRectangle
     case square
@@ -233,6 +235,9 @@ struct DashboardView: View {
     @State private var presenterFaceLandmarkBeautyEnabled = false
     @State private var presenterFaceSlimming: CGFloat = 0
     @State private var presenterEyeEnlargement: CGFloat = 0
+    @State private var presenterEmojiFaceReplacementEnabled = false
+    @State private var presenterEmojiFaceReplacementSymbol = "😀"
+    @State private var presenterEmojiFaceReplacementScale: CGFloat = 1
     @State private var presenterBeautyControlsExpanded = false
     @State private var monitorCanvasSize = CGSize(width: 1280, height: 720)
     @State private var programCanvasAspect: ProgramCanvasAspect = .widescreen
@@ -301,7 +306,7 @@ struct DashboardView: View {
     }
 
     private var effectivePresenterVideoEffects: PresenterVideoEffects {
-        currentPresenterVideoEffects(permittedBy: recordingFeatureTier)
+        PresenterExperimentalEffectsGate.mask(currentPresenterVideoEffects(permittedBy: recordingFeatureTier))
     }
 
     private var exportResolutionBinding: Binding<RecordingExportResolution> {
@@ -539,6 +544,9 @@ struct DashboardView: View {
         .onChange(of: presenterBackgroundReplacementEnabled) {
             handleBackgroundReplacementToggleChange()
         }
+        .onChange(of: presenterEmojiFaceReplacementEnabled) {
+            handleEmojiFaceReplacementToggleChange()
+        }
         .onChange(of: effectivePresenterVideoEffects) {
             handlePresenterVideoEffectsChange()
         }
@@ -583,6 +591,13 @@ struct DashboardView: View {
                 presenterBackgroundReplacementStrength = 0.72
             }
         }
+    }
+
+    private func handleEmojiFaceReplacementToggleChange() {
+        guard presenterEmojiFaceReplacementEnabled else {
+            return
+        }
+        presenterEmojiFaceReplacementScale = max(0.68, presenterEmojiFaceReplacementScale)
     }
 
     private func handlePresenterVideoEffectsChange() {
@@ -1239,11 +1254,23 @@ struct DashboardView: View {
                 presenterSkinWhitening: $presenterSkinWhitening,
                 presenterBlemishReduction: $presenterBlemishReduction,
                 presenterComplexion: $presenterComplexion,
-                onBeautyEditingEnded: updatePresenterVideoEffectsForLastRecording,
+                presenterAdvancedBeautyEnabled: $presenterAdvancedBeautyEnabled,
+                presenterPortraitSegmentationEnabled: $presenterPortraitSegmentationEnabled,
+                presenterBackgroundBlur: $presenterBackgroundBlur,
+                presenterBackgroundReplacementEnabled: $presenterBackgroundReplacementEnabled,
+                presenterBackgroundReplacementStrength: $presenterBackgroundReplacementStrength,
+                presenterFaceLandmarkBeautyEnabled: $presenterFaceLandmarkBeautyEnabled,
+                presenterFaceSlimming: $presenterFaceSlimming,
+                presenterEyeEnlargement: $presenterEyeEnlargement,
+                presenterEmojiFaceReplacementEnabled: $presenterEmojiFaceReplacementEnabled,
+                presenterEmojiFaceReplacementSymbol: $presenterEmojiFaceReplacementSymbol,
+                presenterEmojiFaceReplacementScale: $presenterEmojiFaceReplacementScale,
+                onBeautyEditingEnded: handlePresenterVideoEffectsChange,
                 onBeautyEnabled: seedSubjectAwareBeautyDefaultsIfNeeded,
                 isSubjectAwareBeautyPermitted: recordingFeatureTier.permitsSubjectAwareBeauty
+                    && PresenterExperimentalEffectsGate.isEnabled
             )
-            .frame(width: 48, height: 156)
+            .frame(width: 48, height: 258)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
             .padding(.trailing, 12)
             .zIndex(20)
@@ -1721,8 +1748,8 @@ struct DashboardView: View {
                 range: 0...0.8,
                 format: { value in "\(Int((value * 100).rounded()))%" }
             )
-            .disabled(!recordingFeatureTier.permitsPresenterColorEffects)
-            .opacity(recordingFeatureTier.permitsPresenterColorEffects ? 1 : 0.42)
+            .disabled(!recordingFeatureTier.permitsPresenterColorEffects || !PresenterExperimentalEffectsGate.isEnabled)
+            .opacity(recordingFeatureTier.permitsPresenterColorEffects && PresenterExperimentalEffectsGate.isEnabled ? 1 : 0.42)
             HStack(spacing: 8) {
                 Text(copy.text("presenterSmartBeauty"))
                     .font(.system(size: 11, weight: .medium))
@@ -1741,11 +1768,11 @@ struct DashboardView: View {
                         updatePresenterVideoEffectsForLastRecording()
                     }
             }
-            .disabled(!recordingFeatureTier.permitsSubjectAwareBeauty)
-            .opacity(recordingFeatureTier.permitsSubjectAwareBeauty ? 1 : 0.42)
+            .disabled(!recordingFeatureTier.permitsSubjectAwareBeauty || !PresenterExperimentalEffectsGate.isEnabled)
+            .opacity(recordingFeatureTier.permitsSubjectAwareBeauty && PresenterExperimentalEffectsGate.isEnabled ? 1 : 0.42)
             .help(copy.text("presenterBeautyHelp"))
 
-            if presenterSmartBeautyEnabled && recordingFeatureTier.permitsSubjectAwareBeauty {
+            if presenterSmartBeautyEnabled && recordingFeatureTier.permitsSubjectAwareBeauty && PresenterExperimentalEffectsGate.isEnabled {
                 HStack(spacing: 8) {
                     Text(copy.runtimeText("高级美颜"))
                         .font(.system(size: 11, weight: .medium))
@@ -1823,6 +1850,37 @@ struct DashboardView: View {
                         label: copy.runtimeText("替换强度"),
                         value: $presenterBackgroundReplacementStrength,
                         range: 0...1,
+                        format: { value in "\(Int((value * 100).rounded()))%" }
+                    )
+                }
+                HStack(spacing: 8) {
+                    Text(copy.runtimeText("Emoji脸"))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ConsolePalette.textSecondary)
+                    Spacer()
+                    Toggle("", isOn: $presenterEmojiFaceReplacementEnabled)
+                        .labelsHidden()
+                        .toggleStyle(ConsoleSwitchToggleStyle())
+                }
+                if presenterEmojiFaceReplacementEnabled {
+                    MenuControlRow(label: copy.runtimeText("Emoji")) {
+                        Menu {
+                            ForEach(presenterEmojiChoices, id: \.self) { symbol in
+                                Button(symbol) {
+                                    presenterEmojiFaceReplacementSymbol = symbol
+                                    handlePresenterVideoEffectsChange()
+                                }
+                            }
+                        } label: {
+                            MenuFieldLabel(text: presenterEmojiFaceReplacementSymbol)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .buttonStyle(.plain)
+                    }
+                    presenterEffectSlider(
+                        label: copy.runtimeText("大小"),
+                        value: $presenterEmojiFaceReplacementScale,
+                        range: 0.68...1.65,
                         format: { value in "\(Int((value * 100).rounded()))%" }
                     )
                 }
@@ -2743,7 +2801,11 @@ struct DashboardView: View {
             backgroundBlur: permitsSubjectAwareBeauty ? Double(presenterBackgroundBlur) : 0,
             faceLandmarkBeautyEnabled: permitsSubjectAwareBeauty && presenterFaceLandmarkBeautyEnabled,
             faceSlimming: permitsSubjectAwareBeauty ? Double(presenterFaceSlimming) : 0,
-            eyeEnlargement: permitsSubjectAwareBeauty ? Double(presenterEyeEnlargement) : 0
+            eyeEnlargement: permitsSubjectAwareBeauty ? Double(presenterEyeEnlargement) : 0,
+            emojiFaceReplacementEnabled: permitsSubjectAwareBeauty && presenterEmojiFaceReplacementEnabled,
+            emojiFaceReplacementSymbol: presenterEmojiFaceReplacementSymbol,
+            emojiFaceReplacementStrength: permitsSubjectAwareBeauty && presenterEmojiFaceReplacementEnabled ? 1 : 0,
+            emojiFaceReplacementScale: permitsSubjectAwareBeauty ? Double(presenterEmojiFaceReplacementScale) : 1
         )
     }
 
@@ -3822,6 +3884,22 @@ private struct AboutPopoverCard: View {
 
             ConsoleDivider()
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("感谢作者")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ConsolePalette.textPrimary)
+                Text("Buy me a coffee")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(ConsolePalette.gold)
+                HStack(spacing: 10) {
+                    ForEach(AboutSupportQRCodeResource.allCases, id: \.rawValue) { code in
+                        AboutSupportQRCodeTile(resource: code)
+                    }
+                }
+            }
+
+            ConsoleDivider()
+
             HStack {
                 Text(DashboardView.appVersion)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -3833,7 +3911,7 @@ private struct AboutPopoverCard: View {
             }
         }
         .padding(16)
-        .frame(width: 220)
+        .frame(width: 236)
         .background(ConsolePalette.overlay)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
@@ -3841,6 +3919,43 @@ private struct AboutPopoverCard: View {
                 .stroke(ConsolePalette.border, lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.6), radius: 16, x: 0, y: 8)
+    }
+}
+
+private struct AboutSupportQRCodeTile: View {
+    let resource: AboutSupportQRCodeResource
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Group {
+                if let image = resource.image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(.none)
+                        .scaledToFit()
+                } else {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(ConsolePalette.surface.opacity(0.65))
+                        .overlay(
+                            Image(systemName: "qrcode")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(ConsolePalette.textTertiary)
+                        )
+                }
+            }
+            .frame(width: 72, height: 72)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(ConsolePalette.border.opacity(0.9), lineWidth: 1)
+            )
+
+            Text(resource.label)
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundStyle(ConsolePalette.textTertiary)
+        }
+        .frame(width: 82)
     }
 }
 
@@ -4718,6 +4833,17 @@ private struct ProgramCanvasControls: View {
     @Binding var presenterSkinWhitening: CGFloat
     @Binding var presenterBlemishReduction: CGFloat
     @Binding var presenterComplexion: CGFloat
+    @Binding var presenterAdvancedBeautyEnabled: Bool
+    @Binding var presenterPortraitSegmentationEnabled: Bool
+    @Binding var presenterBackgroundBlur: CGFloat
+    @Binding var presenterBackgroundReplacementEnabled: Bool
+    @Binding var presenterBackgroundReplacementStrength: CGFloat
+    @Binding var presenterFaceLandmarkBeautyEnabled: Bool
+    @Binding var presenterFaceSlimming: CGFloat
+    @Binding var presenterEyeEnlargement: CGFloat
+    @Binding var presenterEmojiFaceReplacementEnabled: Bool
+    @Binding var presenterEmojiFaceReplacementSymbol: String
+    @Binding var presenterEmojiFaceReplacementScale: CGFloat
     let onBeautyEditingEnded: () -> Void
     let onBeautyEnabled: () -> Void
     let isSubjectAwareBeautyPermitted: Bool
@@ -4733,7 +4859,7 @@ private struct ProgramCanvasControls: View {
                         .transition(.opacity.combined(with: .move(edge: .trailing)))
                 }
             }
-            .frame(width: 48, height: 156)
+            .frame(width: 48, height: 258)
         .zIndex(20)
     }
 
@@ -4743,7 +4869,7 @@ private struct ProgramCanvasControls: View {
                 title: copy.text("presenterSmartBeauty"),
                 shortTitle: copy.runtimeText("美颜"),
                 icon: "sparkles",
-                isActive: presenterSmartBeautyEnabled,
+                isActive: isSubjectAwareBeautyPermitted && presenterSmartBeautyEnabled,
                 isEnabled: isSubjectAwareBeautyPermitted,
                 help: copy.text("presenterBeautyHelp")
             ) {
@@ -4753,6 +4879,39 @@ private struct ProgramCanvasControls: View {
                 if willExpand && presenterSmartBeautyEnabled {
                     onBeautyEnabled()
                 }
+            }
+
+            CanvasControlRailButton(
+                title: copy.runtimeText("背景虚化"),
+                shortTitle: copy.runtimeText("背景"),
+                icon: "person.crop.rectangle",
+                isActive: isSubjectAwareBeautyPermitted
+                    && presenterPortraitSegmentationEnabled
+                    && (presenterBackgroundBlur > 0 || presenterBackgroundReplacementEnabled),
+                isEnabled: isSubjectAwareBeautyPermitted,
+                help: copy.runtimeText("直接开启人像分割、背景虚化或自然换背景")
+            ) {
+                guard isSubjectAwareBeautyPermitted else { return }
+                enablePortraitEffects()
+                if presenterBackgroundBlur == 0, !presenterBackgroundReplacementEnabled {
+                    presenterBackgroundBlur = 0.55
+                }
+                togglePopover(.background)
+                onBeautyEditingEnded()
+            }
+
+            CanvasControlRailButton(
+                title: copy.runtimeText("Emoji替脸"),
+                shortTitle: copy.runtimeText("Emoji"),
+                icon: "face.smiling",
+                isActive: isSubjectAwareBeautyPermitted && presenterEmojiFaceReplacementEnabled,
+                isEnabled: isSubjectAwareBeautyPermitted,
+                help: copy.runtimeText("用 Emoji 直接覆盖讲者脸部，预览实时生效")
+            ) {
+                guard isSubjectAwareBeautyPermitted else { return }
+                presenterEmojiFaceReplacementEnabled.toggle()
+                togglePopover(.emoji)
+                onBeautyEditingEnded()
             }
 
             CanvasControlRailButton(
@@ -4788,6 +4947,14 @@ private struct ProgramCanvasControls: View {
         .shadow(color: .black.opacity(0.82), radius: 16, x: 0, y: 7)
     }
 
+    private func enablePortraitEffects() {
+        presenterSmartBeautyEnabled = true
+        presenterAdvancedBeautyEnabled = true
+        presenterFaceLandmarkBeautyEnabled = true
+        presenterPortraitSegmentationEnabled = true
+        onBeautyEnabled()
+    }
+
     private func togglePopover(_ popover: CanvasControlPopover) {
         if expandedPopover == popover {
             expandedPopover = nil
@@ -4805,6 +4972,10 @@ private struct ProgramCanvasControls: View {
         switch popover {
         case .beauty:
             presenterBeautyPanel
+        case .background:
+            backgroundPanel
+        case .emoji:
+            emojiPanel
         case .aspect:
             CanvasOptionPanel(
                 title: copy.runtimeText("画布"),
@@ -4893,6 +5064,8 @@ private struct ProgramCanvasControls: View {
             beautyPanelSlider(label: copy.text("presenterSkinWhitening"), value: $presenterSkinWhitening, range: 0...1)
             beautyPanelSlider(label: copy.text("presenterBlemishReduction"), value: $presenterBlemishReduction, range: 0...1)
             beautyPanelSlider(label: copy.text("presenterComplexion"), value: $presenterComplexion, range: 0...1)
+            beautyPanelSlider(label: copy.runtimeText("瘦脸"), value: $presenterFaceSlimming, range: 0...0.8)
+            beautyPanelSlider(label: copy.runtimeText("大眼"), value: $presenterEyeEnlargement, range: 0...0.65)
         }
         .padding(12)
         .frame(width: 292)
@@ -4912,6 +5085,106 @@ private struct ProgramCanvasControls: View {
                 .stroke(ConsolePalette.goldBright.opacity(0.78), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.78), radius: 16, x: 0, y: 8)
+    }
+
+    private var backgroundPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            panelHeader(title: copy.runtimeText("背景效果"))
+            CanvasToggleRow(
+                title: copy.runtimeText("背景分割"),
+                isOn: $presenterPortraitSegmentationEnabled,
+                onChange: {
+                    if presenterPortraitSegmentationEnabled {
+                        enablePortraitEffects()
+                    }
+                    onBeautyEditingEnded()
+                }
+            )
+            beautyPanelSlider(label: copy.runtimeText("虚化"), value: $presenterBackgroundBlur, range: 0...1)
+            CanvasToggleRow(
+                title: copy.runtimeText("自然换背景"),
+                isOn: $presenterBackgroundReplacementEnabled,
+                onChange: {
+                    enablePortraitEffects()
+                    if presenterBackgroundReplacementEnabled, presenterBackgroundReplacementStrength == 0 {
+                        presenterBackgroundReplacementStrength = 0.85
+                    }
+                    onBeautyEditingEnded()
+                }
+            )
+            if presenterBackgroundReplacementEnabled {
+                beautyPanelSlider(label: copy.runtimeText("替换强度"), value: $presenterBackgroundReplacementStrength, range: 0...1)
+            }
+        }
+        .padding(12)
+        .frame(width: 292)
+        .background(panelBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(ConsolePalette.goldBright.opacity(0.78), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.78), radius: 16, x: 0, y: 8)
+    }
+
+    private var emojiPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            panelHeader(title: copy.runtimeText("Emoji替脸"))
+            CanvasToggleRow(
+                title: copy.runtimeText("启用 Emoji 脸"),
+                isOn: $presenterEmojiFaceReplacementEnabled,
+                onChange: {
+                    onBeautyEditingEnded()
+                }
+            )
+            MenuControlRow(label: copy.runtimeText("Emoji")) {
+                Menu {
+                    ForEach(presenterEmojiChoices, id: \.self) { symbol in
+                        Button(symbol) {
+                            presenterEmojiFaceReplacementSymbol = symbol
+                            onBeautyEditingEnded()
+                        }
+                    }
+                } label: {
+                    MenuFieldLabel(text: presenterEmojiFaceReplacementSymbol)
+                }
+                .menuStyle(.borderlessButton)
+                .buttonStyle(.plain)
+            }
+            beautyPanelSlider(label: copy.runtimeText("大小"), value: $presenterEmojiFaceReplacementScale, range: 0.68...1.65)
+        }
+        .padding(12)
+        .frame(width: 292)
+        .background(panelBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(ConsolePalette.goldBright.opacity(0.78), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.78), radius: 16, x: 0, y: 8)
+    }
+
+    private func panelHeader(title: String) -> some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ConsolePalette.textPrimary)
+            Spacer()
+            Button {
+                closePopover()
+            } label: {
+                CanvasControlIcon(name: "xmark")
+                    .frame(width: 24, height: 24)
+                    .background(ConsolePalette.overlay.opacity(0.58))
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(ConsolePalette.innerBorder, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help(copy.runtimeText("关闭面板"))
+        }
     }
 
     private func beautyPanelSlider(
@@ -4936,6 +5209,17 @@ private struct ProgramCanvasControls: View {
         }
     }
 
+    private var panelBackground: some View {
+        LinearGradient(
+            colors: [
+                Color.black.opacity(0.94),
+                ConsolePalette.surface.opacity(0.98)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
     private func closePopover() {
         expandedPopover = nil
         presenterBeautyControlsExpanded = false
@@ -4943,8 +5227,33 @@ private struct ProgramCanvasControls: View {
 
 }
 
+private struct CanvasToggleRow: View {
+    let title: String
+    @Binding var isOn: Bool
+    let onChange: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(ConsolePalette.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Spacer()
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(ConsoleSwitchToggleStyle())
+                .onChange(of: isOn) {
+                    onChange()
+                }
+        }
+    }
+}
+
 private enum CanvasControlPopover: Hashable {
     case beauty
+    case background
+    case emoji
     case aspect
     case resolution
 }
