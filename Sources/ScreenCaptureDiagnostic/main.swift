@@ -4,7 +4,7 @@ import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Foundation
-import PresenterDirector
+import WonderShow
 @preconcurrency import ScreenCaptureKit
 
 private final class QueuedSampleBuffer: @unchecked Sendable {
@@ -76,7 +76,7 @@ do {
             exit(2)
         }
         let outputURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("lingyan-screen-smoke-\(UUID().uuidString).mov")
+            .appendingPathComponent("wondershow-screen-smoke-\(UUID().uuidString).mov")
         let recorder = SmokeRecorder(outputURL: outputURL)
         try await recorder.start(display: display)
         try await Task.sleep(for: .seconds(2))
@@ -105,7 +105,7 @@ private final class SmokeRecorder: NSObject, SCStreamOutput, @unchecked Sendable
     }
 
     private let outputURL: URL
-    private let queue = DispatchQueue(label: "lingyan.screen-smoke")
+    private let queue = DispatchQueue(label: "wondershow.screen-smoke")
     private var stream: SCStream?
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?

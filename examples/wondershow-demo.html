@@ -332,7 +332,7 @@
       return 'ok';
     };
 
-    async function pollLingYanCommand() {
+    async function pollWonderShowCommand() {
       try {
         const response = await fetch('/api/command', {
           cache: 'no-store',
@@ -347,11 +347,11 @@
       } catch (error) {
         bridgeStatus.textContent = '灵演桥接：未连接';
       } finally {
-        window.setTimeout(pollLingYanCommand, 220);
+        window.setTimeout(pollWonderShowCommand, 220);
       }
     }
 
-    pollLingYanCommand();
+    pollWonderShowCommand();
   </script>
 </body>
 </html>

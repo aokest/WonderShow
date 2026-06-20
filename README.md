@@ -65,7 +65,7 @@ rtk swift test --disable-sandbox
 Run the current macOS prototype from Terminal:
 
 ```bash
-rtk swift run --disable-sandbox PresenterDirectorApp
+rtk swift run --disable-sandbox WonderShowApp
 ```
 
 The macOS prototype uses AVFoundation camera discovery and prefers a recognizable tracking camera such as `OsmoPocket3` when it is present, while still falling back to other available camera inputs.

@@ -16,8 +16,8 @@ fi
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/Contents/MacOS" "$BUNDLE_DIR/Contents/Resources"
 
-if [[ -f "$ROOT_DIR/Sources/PresenterDirectorApp/Resources/AppIcon.icns" ]]; then
-  cp "$ROOT_DIR/Sources/PresenterDirectorApp/Resources/AppIcon.icns" "$BUNDLE_DIR/Contents/Resources/AppIcon.icns"
+if [[ -f "$ROOT_DIR/Sources/WonderShowApp/Resources/AppIcon.icns" ]]; then
+  cp "$ROOT_DIR/Sources/WonderShowApp/Resources/AppIcon.icns" "$BUNDLE_DIR/Contents/Resources/AppIcon.icns"
 fi
 
 cat > "$BUNDLE_DIR/Contents/MacOS/$EXECUTABLE" <<EOF
@@ -32,7 +32,7 @@ chmod +x "$BUNDLE_DIR/Contents/MacOS/$EXECUTABLE"
 
 plutil -create xml1 "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleExecutable -string "$EXECUTABLE" "$BUNDLE_DIR/Contents/Info.plist"
-plutil -insert CFBundleIdentifier -string "com.local.LingYanGestureSampler" "$BUNDLE_DIR/Contents/Info.plist"
+plutil -insert CFBundleIdentifier -string "com.wondershow.gesture-sampler" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleName -string "$APP_NAME" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleDisplayName -string "$APP_NAME" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleIconFile -string "AppIcon" "$BUNDLE_DIR/Contents/Info.plist"

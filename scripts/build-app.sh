@@ -19,9 +19,9 @@ APP_MARKETING_VERSION="${APP_MARKETING_VERSION:-${DEFAULT_MARKETING_VERSION:-1.0
 APP_BUILD_VERSION="${APP_BUILD_VERSION:-${DEFAULT_BUILD_VERSION:-$(date +%Y%m%d%H%M%S)}}"
 BUILD_CONFIGURATION="${BUILD_CONFIGURATION:-release}"
 BUNDLE_DIR="$ROOT_DIR/dist/$APP_NAME.app"
-EXECUTABLE="PresenterDirectorApp"
+EXECUTABLE="WonderShowApp"
 BUILD_EXECUTABLE="$ROOT_DIR/.build/arm64-apple-macosx/$BUILD_CONFIGURATION/$EXECUTABLE"
-RESOURCE_BUNDLE="$ROOT_DIR/.build/arm64-apple-macosx/$BUILD_CONFIGURATION/PresenterDirector_PresenterDirectorApp.bundle"
+RESOURCE_BUNDLE="$ROOT_DIR/.build/arm64-apple-macosx/$BUILD_CONFIGURATION/WonderShow_WonderShowApp.bundle"
 
 cd "$ROOT_DIR"
 # SwiftPM manifest evaluation is sandboxed by default on macOS and fails in this repo path.
@@ -35,7 +35,7 @@ if [[ -d "$RESOURCE_BUNDLE" ]]; then
   cp -R "$RESOURCE_BUNDLE" "$BUNDLE_DIR/Contents/Resources/"
 fi
 cp "$ROOT_DIR/examples/wondershow-demo.html" "$BUNDLE_DIR/Contents/Resources/wondershow-demo.html"
-cp "$ROOT_DIR/Sources/PresenterDirectorApp/Resources/AppIcon.icns" "$BUNDLE_DIR/Contents/Resources/AppIcon.icns"
+cp "$ROOT_DIR/Sources/WonderShowApp/Resources/AppIcon.icns" "$BUNDLE_DIR/Contents/Resources/AppIcon.icns"
 if [[ -f "$ROOT_DIR/sidecar/models/wondershow_gesture_model.json" ]]; then
   mkdir -p "$BUNDLE_DIR/Contents/Resources/sidecar/models"
   cp "$ROOT_DIR/sidecar/models/wondershow_gesture_model.json" "$BUNDLE_DIR/Contents/Resources/sidecar/models/wondershow_gesture_model.json"
@@ -43,7 +43,7 @@ fi
 
 plutil -create xml1 "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleExecutable -string "$EXECUTABLE" "$BUNDLE_DIR/Contents/Info.plist"
-plutil -insert CFBundleIdentifier -string "com.local.LingYan" "$BUNDLE_DIR/Contents/Info.plist"
+plutil -insert CFBundleIdentifier -string "com.wondershow.studio" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleName -string "$APP_NAME" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleDisplayName -string "$APP_NAME" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleIconFile -string "AppIcon" "$BUNDLE_DIR/Contents/Info.plist"
@@ -58,7 +58,7 @@ plutil -insert NSAppleEventsUsageDescription -string "灵演需要控制 Google 
 printf "APPL????" > "$BUNDLE_DIR/Contents/PkgInfo"
 
 codesign --force --deep --sign - \
-  --requirements '=designated => identifier "com.local.LingYan"' \
+  --requirements '=designated => identifier "com.wondershow.studio"' \
   "$BUNDLE_DIR"
 
 touch "$BUNDLE_DIR/Contents/Resources/AppIcon.icns"
