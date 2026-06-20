@@ -62,6 +62,35 @@ import Testing
     #expect(window?.id == 31)
 }
 
+@Test func screenCapturePlannerIgnoresSystemBackstopWhenChoosingDirectWindow() {
+    let windows = [
+        CaptureWindowCandidate(
+            id: 40,
+            displayID: 1,
+            title: "Display 1 Backstop",
+            applicationName: "",
+            frameWidth: 3840,
+            frameHeight: 2160
+        ),
+        CaptureWindowCandidate(
+            id: 41,
+            displayID: 1,
+            title: "Client Brief",
+            applicationName: "Google Chrome",
+            bundleIdentifier: "com.google.Chrome",
+            frameWidth: 1440,
+            frameHeight: 900
+        )
+    ]
+
+    let window = ScreenCapturePlanner().preferredWindow(
+        windows: windows,
+        target: .genericKeyboard
+    )
+
+    #expect(window?.id == 41)
+}
+
 
 @Test func screenCapturePlannerAvoidsPresenterViewWhenSlideShowExists() {
     let displays = [

@@ -124,9 +124,12 @@ private final class ScreenSampleBuffer: @unchecked Sendable {
 
 final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
     struct CaptureSelection {
+        let sourceID: ScreenCaptureSourceID
         let filter: SCContentFilter
         let width: Int
         let height: Int
+        let sourceWidth: Int
+        let sourceHeight: Int
     }
 
     struct CapturePixelSize: Equatable, Sendable {
@@ -178,9 +181,10 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
     private var framePump: DispatchSourceTimer?
     private var latestPixelBuffer: CVPixelBuffer?
     private var latestContentRect: CGRect?
+    private var activeSourceID: ScreenCaptureSourceID?
     private var writerError: String?
     private var isUpdatingSource = false
-    var onPreviewImage: (@MainActor (CGImage) -> Void)?
+    var onPreviewImage: (@MainActor (CGImage, ScreenCaptureSourceID) -> Void)?
 
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -205,7 +209,8 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
     func startRecording(
         to outputURL: URL,
         target: PresentationTarget = .genericKeyboard,
-        sourcePreference: ScreenCaptureSourcePreference = .automaticPresentationWindow
+        sourcePreference: ScreenCaptureSourcePreference = .automaticPresentationWindow,
+        recordingPixelSize: CapturePixelSize? = nil
     ) async throws {
         try fileManager.createDirectory(
             at: outputURL.deletingLastPathComponent(),
@@ -230,10 +235,14 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
 
         let stream = SCStream(filter: selection.filter, configuration: configuration, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
-        let recording = try makeRecording(
-            url: outputURL,
+        let outputSize = recordingPixelSize ?? CapturePixelSize(
             width: configuration.width,
             height: configuration.height
+        )
+        let recording = try makeRecording(
+            url: outputURL,
+            width: outputSize.width,
+            height: outputSize.height
         )
 
         queue.sync {
@@ -247,6 +256,7 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
             self.isPaused = false
             self.latestPixelBuffer = nil
             self.latestContentRect = nil
+            self.activeSourceID = selection.sourceID
             self.writerError = nil
             self.startFramePumpOnQueue()
         }
@@ -283,6 +293,7 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
         }
         let configuration = Self.streamConfiguration(for: selection)
         queue.sync {
+            self.activeSourceID = selection.sourceID
             self.beginSourceUpdateOnQueue()
         }
         do {
@@ -383,17 +394,31 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
     }
 
     static func aspectFitRect(sourceSize: CGSize, targetSize: CGSize) -> CGRect {
+        maxIntegralAspectFitRect(sourceSize: sourceSize, targetSize: targetSize)
+    }
+
+    static func maxIntegralAspectFitRect(sourceSize: CGSize, targetSize: CGSize) -> CGRect {
         let sourceWidth = max(1, sourceSize.width)
         let sourceHeight = max(1, sourceSize.height)
         let targetWidth = max(1, targetSize.width)
         let targetHeight = max(1, targetSize.height)
         let scale = min(targetWidth / sourceWidth, targetHeight / sourceHeight)
         let fittedSize = CGSize(width: sourceWidth * scale, height: sourceHeight * scale)
-        return CGRect(
+        let rect = CGRect(
             x: (targetWidth - fittedSize.width) / 2,
             y: (targetHeight - fittedSize.height) / 2,
             width: fittedSize.width,
             height: fittedSize.height
+        )
+        let minX = rect.minX.rounded(.up)
+        let minY = rect.minY.rounded(.up)
+        let maxX = rect.maxX.rounded(.down)
+        let maxY = rect.maxY.rounded(.down)
+        return CGRect(
+            x: minX,
+            y: minY,
+            width: max(1, maxX - minX),
+            height: max(1, maxY - minY)
         )
     }
 
@@ -543,6 +568,7 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
         framePump = nil
         latestPixelBuffer = nil
         latestContentRect = nil
+        activeSourceID = nil
         isPaused = false
         isUpdatingSource = false
         let finishedOutputURL = outputURL
@@ -796,9 +822,12 @@ final class ScreenArchiveRecorder: NSObject, @unchecked Sendable {
         guard let image = previewContext.createCGImage(ciImage, from: ciImage.extent) else {
             return
         }
+        guard let activeSourceID else {
+            return
+        }
 
         Task { @MainActor in
-            onPreviewImage(image)
+            onPreviewImage(image, activeSourceID)
         }
     }
 }
@@ -963,9 +992,12 @@ enum ScreenCaptureSourceResolver {
                 displays: content.displays
             )
             return ScreenArchiveRecorder.CaptureSelection(
+                sourceID: .display(display.displayID),
                 filter: SCContentFilter(display: display, excludingWindows: []),
                 width: pixelSize.width,
-                height: pixelSize.height
+                height: pixelSize.height,
+                sourceWidth: display.width,
+                sourceHeight: display.height
             )
         case .window(let windowID):
             guard let window = content.windows.first(where: { $0.windowID == windowID }) else {
@@ -980,9 +1012,12 @@ enum ScreenCaptureSourceResolver {
                 maximumLongEdge: 4096
             )
             return ScreenArchiveRecorder.CaptureSelection(
+                sourceID: .window(window.windowID),
                 filter: SCContentFilter(desktopIndependentWindow: window),
                 width: pixelSize.width,
-                height: pixelSize.height
+                height: pixelSize.height,
+                sourceWidth: max(1, Int(window.frame.width)),
+                sourceHeight: max(1, Int(window.frame.height))
             )
         }
     }
@@ -1022,9 +1057,12 @@ enum ScreenCaptureSourceResolver {
                 displays: content.displays
             )
             return ScreenArchiveRecorder.CaptureSelection(
+                sourceID: .display(display.displayID),
                 filter: SCContentFilter(display: display, excludingWindows: []),
                 width: pixelSize.width,
-                height: pixelSize.height
+                height: pixelSize.height,
+                sourceWidth: display.width,
+                sourceHeight: display.height
             )
         }
 
@@ -1051,9 +1089,12 @@ enum ScreenCaptureSourceResolver {
                     maximumLongEdge: 4096
                 )
                 return ScreenArchiveRecorder.CaptureSelection(
+                    sourceID: .window(window.windowID),
                     filter: SCContentFilter(desktopIndependentWindow: window),
                     width: pixelSize.width,
-                    height: pixelSize.height
+                    height: pixelSize.height,
+                    sourceWidth: max(1, Int(window.frame.width)),
+                    sourceHeight: max(1, Int(window.frame.height))
                 )
             }
         }
@@ -1079,9 +1120,12 @@ enum ScreenCaptureSourceResolver {
         )
 
         return ScreenArchiveRecorder.CaptureSelection(
+            sourceID: .display(display.displayID),
             filter: SCContentFilter(display: display, excludingWindows: []),
             width: pixelSize.width,
-            height: pixelSize.height
+            height: pixelSize.height,
+            sourceWidth: display.width,
+            sourceHeight: display.height
         )
     }
 
@@ -1093,20 +1137,8 @@ enum ScreenCaptureSourceResolver {
             return nil
         }
 
-        if windows.count == 1, let window = windows.first {
-            let pixelSize = ScreenArchiveRecorder.capturePixelSize(
-                width: max(1, Int(window.frame.width)),
-                height: max(1, Int(window.frame.height)),
-                frame: window.frame,
-                displays: displays,
-                minimumScaleFactor: 3,
-                maximumLongEdge: 4096
-            )
-            return ScreenArchiveRecorder.CaptureSelection(
-                filter: SCContentFilter(desktopIndependentWindow: window),
-                width: pixelSize.width,
-                height: pixelSize.height
-            )
+        if let window = largestWindow(in: windows) {
+            return windowSelection(window: window, displays: displays)
         }
 
         guard let display = display(containing: windows, displays: displays) else {
@@ -1125,9 +1157,40 @@ enum ScreenCaptureSourceResolver {
             displays: displays
         )
         return ScreenArchiveRecorder.CaptureSelection(
+            sourceID: .display(display.displayID),
             filter: SCContentFilter(display: display, including: includedWindows),
             width: pixelSize.width,
-            height: pixelSize.height
+            height: pixelSize.height,
+            sourceWidth: display.width,
+            sourceHeight: display.height
+        )
+    }
+
+    private static func largestWindow(in windows: [SCWindow]) -> SCWindow? {
+        windows.max { lhs, rhs in
+            lhs.frame.width * lhs.frame.height < rhs.frame.width * rhs.frame.height
+        }
+    }
+
+    private static func windowSelection(
+        window: SCWindow,
+        displays: [SCDisplay]
+    ) -> ScreenArchiveRecorder.CaptureSelection {
+        let pixelSize = ScreenArchiveRecorder.capturePixelSize(
+            width: max(1, Int(window.frame.width)),
+            height: max(1, Int(window.frame.height)),
+            frame: window.frame,
+            displays: displays,
+            minimumScaleFactor: 3,
+            maximumLongEdge: 4096
+        )
+        return ScreenArchiveRecorder.CaptureSelection(
+            sourceID: .window(window.windowID),
+            filter: SCContentFilter(desktopIndependentWindow: window),
+            width: pixelSize.width,
+            height: pixelSize.height,
+            sourceWidth: max(1, Int(window.frame.width)),
+            sourceHeight: max(1, Int(window.frame.height))
         )
     }
 

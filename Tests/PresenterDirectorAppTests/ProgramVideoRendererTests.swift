@@ -1,6 +1,7 @@
 @testable import PresenterDirector
 @testable import PresenterDirectorApp
 @preconcurrency import AVFoundation
+import CoreImage
 import CoreGraphics
 import Foundation
 import Testing
@@ -184,6 +185,212 @@ struct ProgramVideoRendererTests {
     #expect(duration < 1.25)
 }
 
+@Test func programVideoRendererAcceptsMillisecondTimelineDurations() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("lingyan-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .camera, duration: 2)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen, duration: 2)
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .screenWithCameraPictureInPicture(corner: .bottomRight),
+        durationMilliseconds: 1_001
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: RecordingProjectManifestFactory().makeManifest(project: project)
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/millisecond-duration.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264),
+        outputURL: outputURL
+    )
+
+    try await ProgramVideoRenderer.validatePlayableVideo(at: outputURL)
+    let asset = AVURLAsset(url: outputURL)
+    let duration = try await asset.load(.duration).seconds
+    #expect(duration > 0.85)
+    #expect(duration < 1.25)
+}
+
+@Test func programVideoRendererDoesNotTrimExportToShortestPausedRawTrack() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("lingyan-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .camera, duration: 3)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen, duration: 1)
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .screenWithCameraPictureInPicture(corner: .bottomRight),
+        durationMilliseconds: 3_000
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: RecordingProjectManifestFactory().makeManifest(project: project)
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/not-shortest-track.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264),
+        outputURL: outputURL
+    )
+
+    let asset = AVURLAsset(url: outputURL)
+    let duration = try await asset.load(.duration).seconds
+    #expect(duration > 2.65)
+    #expect(duration < 3.25)
+}
+
+@Test func programVideoRendererKeepsPreviousProgramOutputWhenSourceValidationFails() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("lingyan-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    let existingProgramURL = rootURL.appendingPathComponent("Exports/program.mp4")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .camera)
+    fileManager.createFile(atPath: screenURL.path, contents: Data())
+    try makeTestVideo(url: existingProgramURL, size: CGSize(width: 320, height: 180), color: .screen)
+    let existingSize = try fileManager.attributesOfItem(atPath: existingProgramURL.path)[.size] as? NSNumber
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .screenWithCameraPictureInPicture(corner: .bottomRight),
+        durationMilliseconds: 1_000
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: existingProgramURL,
+        manifest: RecordingProjectManifestFactory().makeManifest(project: project)
+    )
+
+    do {
+        _ = try await ProgramVideoRenderer().render(
+            session: session,
+            settings: RecordingExportSettings(resolution: .hd1080, frameRate: .fps30, quality: .high, codec: .h264)
+        )
+        Issue.record("render should fail before replacing existing program output")
+    } catch {
+        let sizeAfterFailure = try fileManager.attributesOfItem(atPath: existingProgramURL.path)[.size] as? NSNumber
+        #expect(sizeAfterFailure?.int64Value == existingSize?.int64Value)
+        try await ProgramVideoRenderer.validatePlayableVideo(at: existingProgramURL, fileManager: fileManager)
+    }
+}
+
+@Test func programVideoRendererPreservesCompleteWideWindowTrackWithoutAutoCroppingToContent() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("lingyan-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .camera)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 1920, height: 1080), color: .screenWithCenteredWindow)
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .screenOnly,
+        layout: .screenOnly,
+        durationMilliseconds: 1_000
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: RecordingProjectManifestFactory().makeManifest(project: project)
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/complete-wide-window-source.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(resolution: .hd1080, frameRate: .fps30, quality: .high, codec: .h264),
+        outputURL: outputURL
+    )
+
+    let image = try firstFrameImage(from: outputURL)
+    let leftLetterboxPixel = try #require(pixel(in: image, x: 120, y: 540))
+    let topChromePixel = try #require(pixel(in: image, x: 960, y: 205))
+    let windowBodyPixel = try #require(pixel(in: image, x: 960, y: 540))
+    let rightLetterboxPixel = try #require(pixel(in: image, x: 1800, y: 540))
+
+    #expect(leftLetterboxPixel.red < 8)
+    #expect(leftLetterboxPixel.green < 8)
+    #expect(leftLetterboxPixel.blue < 8)
+    #expect(topChromePixel.red > 220)
+    #expect(topChromePixel.green < 90)
+    #expect(topChromePixel.blue < 90)
+    #expect(windowBodyPixel.red > 210)
+    #expect(windowBodyPixel.green > 210)
+    #expect(windowBodyPixel.blue > 210)
+    #expect(rightLetterboxPixel.red < 8)
+    #expect(rightLetterboxPixel.green < 8)
+    #expect(rightLetterboxPixel.blue < 8)
+}
+
 @Test func programVideoRendererUsesManifestPictureInPictureGeometry() async throws {
     let fileManager = FileManager.default
     let rootURL = fileManager.temporaryDirectory
@@ -244,7 +451,7 @@ struct ProgramVideoRendererTests {
     #expect(backgroundPixel.blue > 180)
 }
 
-@Test func programVideoRendererFillsCanvasWithMainScreenLayer() async throws {
+@Test func programVideoRendererPreservesWholeMainScreenLayerWithoutCroppingWindowChrome() async throws {
     let fileManager = FileManager.default
     let rootURL = fileManager.temporaryDirectory
         .appendingPathComponent("lingyan-program-renderer-tests", isDirectory: true)
@@ -258,7 +465,7 @@ struct ProgramVideoRendererTests {
     let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
     let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
     try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .camera)
-    try makeTestVideo(url: screenURL, size: CGSize(width: 3200, height: 900), color: .screen)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 1280, height: 900), color: .screenWithTopChrome)
 
     let project = RecordingProjectFactory().makeProject(
         scenario: .trainingCourse,
@@ -278,7 +485,7 @@ struct ProgramVideoRendererTests {
         manifest: RecordingProjectManifestFactory().makeManifest(project: project)
     )
 
-    let outputURL = rootURL.appendingPathComponent("Exports/filled-main-screen.mp4")
+    let outputURL = rootURL.appendingPathComponent("Exports/fitted-main-screen.mp4")
     _ = try await ProgramVideoRenderer().render(
         session: session,
         settings: RecordingExportSettings(
@@ -294,11 +501,15 @@ struct ProgramVideoRendererTests {
     let image = try firstFrameImage(from: outputURL)
     let topPixel = try #require(pixel(in: image, x: 960, y: 40))
     let centerPixel = try #require(pixel(in: image, x: 960, y: 540))
-    let bottomPixel = try #require(pixel(in: image, x: 960, y: 1040))
+    let letterboxPixel = try #require(pixel(in: image, x: 40, y: 540))
 
-    #expect(topPixel.blue > 180)
+    #expect(topPixel.red > 220)
+    #expect(topPixel.green < 80)
+    #expect(topPixel.blue < 80)
     #expect(centerPixel.blue > 180)
-    #expect(bottomPixel.blue > 180)
+    #expect(letterboxPixel.red < 12)
+    #expect(letterboxPixel.green < 12)
+    #expect(letterboxPixel.blue < 12)
 }
 
 @Test func programVideoRendererAppliesCircularPictureInPictureMask() async throws {
@@ -668,6 +879,231 @@ struct ProgramVideoRendererTests {
     #expect(centerPixel.blue > 130)
 }
 
+@Test func subjectAwareBeautyOnlyChangesDetectedFaceAndNeckRegion() throws {
+    let detector = StaticBeautyFaceDetector(rects: [
+        CGRect(x: 220, y: 126, width: 200, height: 150)
+    ])
+    let effects = PresenterVideoEffects(
+        isSubjectAwareBeautyEnabled: true,
+        skinSmoothing: 0.55,
+        skinBrightening: 0.46,
+        skinWhitening: 0.28,
+        blemishReduction: 0.36,
+        complexion: 0.2,
+        beautyStyle: .bright
+    )
+    let input = CIImage.syntheticBeautyTestFrame(size: CGSize(width: 640, height: 360))
+
+    let output = SubjectAwarePresenterBeautyProcessor(detector: detector)
+        .applyPresenterEffects(to: input, effects: effects, targetRect: input.extent)
+
+    let inputImage = try cgImage(from: input)
+    let outputImage = try cgImage(from: output)
+    let faceBefore = try #require(pixel(in: inputImage, x: 320, y: 205))
+    let faceAfter = try #require(pixel(in: outputImage, x: 320, y: 205))
+    let backgroundBefore = try #require(pixel(in: inputImage, x: 72, y: 68))
+    let backgroundAfter = try #require(pixel(in: outputImage, x: 72, y: 68))
+    let neckBefore = try #require(pixel(in: inputImage, x: 320, y: 248))
+    let neckAfter = try #require(pixel(in: outputImage, x: 320, y: 248))
+
+    #expect(faceAfter.red > faceBefore.red + 10)
+    #expect(faceAfter.green > faceBefore.green + 8)
+    #expect(neckAfter.red > neckBefore.red + 6)
+    #expect(colorDistance(backgroundBefore, backgroundAfter) < 4)
+}
+
+@Test func subjectAwareBeautyUsesTaperedNeckMaskWithoutRectangularCorners() throws {
+    let detector = StaticBeautyFaceDetector(rects: [
+        CGRect(x: 220, y: 126, width: 200, height: 150)
+    ])
+    let effects = PresenterVideoEffects(
+        beauty: 0.8,
+        isSubjectAwareBeautyEnabled: true,
+        skinSmoothing: 0.7,
+        skinBrightening: 0.7,
+        skinWhitening: 0.5,
+        blemishReduction: 0.5,
+        complexion: 0.35,
+        beautyStyle: .cameraReady
+    )
+    let input = CIImage.syntheticBeautyTestFrame(size: CGSize(width: 640, height: 360))
+
+    let output = SubjectAwarePresenterBeautyProcessor(detector: detector)
+        .applyPresenterEffects(to: input, effects: effects, targetRect: input.extent)
+
+    let inputImage = try cgImage(from: input)
+    let outputImage = try cgImage(from: output)
+    let neckCenterBefore = try #require(pixel(in: inputImage, x: 320, y: 248))
+    let neckCenterAfter = try #require(pixel(in: outputImage, x: 320, y: 248))
+    let leftNeckCornerBefore = try #require(pixel(in: inputImage, x: 282, y: 274))
+    let leftNeckCornerAfter = try #require(pixel(in: outputImage, x: 282, y: 274))
+    let rightNeckCornerBefore = try #require(pixel(in: inputImage, x: 358, y: 274))
+    let rightNeckCornerAfter = try #require(pixel(in: outputImage, x: 358, y: 274))
+
+    #expect(neckCenterAfter.red > neckCenterBefore.red + 8)
+    #expect(colorDistance(leftNeckCornerBefore, leftNeckCornerAfter) < 9)
+    #expect(colorDistance(rightNeckCornerBefore, rightNeckCornerAfter) < 9)
+}
+
+@Test func subjectAwareBeautyDoesNotApplySyntheticFallbackWhenNoFaceIsDetected() throws {
+    let effects = PresenterVideoEffects(
+        isSubjectAwareBeautyEnabled: true,
+        skinSmoothing: 0.65,
+        skinBrightening: 0.5,
+        skinWhitening: 0.5,
+        blemishReduction: 0.5,
+        complexion: 0.4,
+        beautyStyle: .cameraReady
+    )
+    let input = CIImage.syntheticBeautyTestFrame(size: CGSize(width: 640, height: 360))
+
+    let output = SubjectAwarePresenterBeautyProcessor(detector: StaticBeautyFaceDetector(rects: []))
+        .applyPresenterEffects(to: input, effects: effects, targetRect: input.extent)
+
+    let inputImage = try cgImage(from: input)
+    let outputImage = try cgImage(from: output)
+    let faceBefore = try #require(pixel(in: inputImage, x: 320, y: 205))
+    let faceAfter = try #require(pixel(in: outputImage, x: 320, y: 205))
+    let backgroundBefore = try #require(pixel(in: inputImage, x: 72, y: 68))
+    let backgroundAfter = try #require(pixel(in: outputImage, x: 72, y: 68))
+    let lowerBodyBefore = try #require(pixel(in: inputImage, x: 320, y: 250))
+    let lowerBodyAfter = try #require(pixel(in: outputImage, x: 320, y: 250))
+
+    #expect(colorDistance(faceBefore, faceAfter) < 4)
+    #expect(colorDistance(backgroundBefore, backgroundAfter) < 4)
+    #expect(colorDistance(lowerBodyBefore, lowerBodyAfter) < 4)
+}
+
+@Test func programVideoRendererDoesNotApplySubjectAwareBeautyToScreenLayer() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("lingyan-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .cameraDim)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen)
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .screenWithCameraPictureInPicture(corner: .bottomRight),
+        durationMilliseconds: 1_000
+    )
+    let manifest = RecordingProjectManifestFactory().makeManifest(
+        project: project,
+        presenterVideoEffects: PresenterVideoEffects(
+            beauty: 0.8,
+            isSubjectAwareBeautyEnabled: true,
+            skinSmoothing: 0.7,
+            skinBrightening: 0.7,
+            skinWhitening: 0.7,
+            blemishReduction: 0.7,
+            complexion: 0.5,
+            beautyStyle: .cameraReady
+        )
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: manifest
+    )
+
+    let baselineURL = rootURL.appendingPathComponent("Exports/baseline.mp4")
+    let beautifiedURL = rootURL.appendingPathComponent("Exports/beautified.mp4")
+    let settings = RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264)
+    _ = try await ProgramVideoRenderer().render(
+        session: RecordingSessionRecord(
+            url: session.url,
+            manifestURL: session.manifestURL,
+            presenterCameraURL: session.presenterCameraURL,
+            slidesScreenURL: session.slidesScreenURL,
+            microphoneAudioURL: session.microphoneAudioURL,
+            programOutputURL: session.programOutputURL,
+            manifest: RecordingProjectManifestFactory().makeManifest(project: project)
+        ),
+        settings: settings,
+        outputURL: baselineURL
+    )
+    _ = try await ProgramVideoRenderer().render(session: session, settings: settings, outputURL: beautifiedURL)
+
+    let baselineImage = try firstFrameImage(from: baselineURL)
+    let beautifiedImage = try firstFrameImage(from: beautifiedURL)
+    let screenBaseline = try #require(pixel(in: baselineImage, x: 96, y: 96))
+    let screenBeautified = try #require(pixel(in: beautifiedImage, x: 96, y: 96))
+
+    #expect(colorDistance(screenBaseline, screenBeautified) < 12)
+}
+
+@Test func programVideoRendererExportsCameraOnlyWithSubjectAwareBeauty() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("lingyan-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .cameraDim)
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraOnly,
+        layout: .speakerFullBody,
+        durationMilliseconds: 1_000
+    )
+    let manifest = RecordingProjectManifestFactory().makeManifest(
+        project: project,
+        presenterVideoEffects: PresenterVideoEffects(
+            beauty: 0.6,
+            isSubjectAwareBeautyEnabled: true,
+            skinSmoothing: 0.7,
+            skinBrightening: 0.6,
+            skinWhitening: 0.5,
+            blemishReduction: 0.5,
+            complexion: 0.4,
+            beautyStyle: .cameraReady
+        )
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: rootURL.appendingPathComponent("Raw/slides-screen.mov"),
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: manifest
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/beauty-camera-only.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264),
+        outputURL: outputURL
+    )
+
+    let image = try firstFrameImage(from: outputURL)
+    #expect(image.width == 640)
+    #expect(image.height == 360)
+}
+
 @Test func manifestLayoutKeyframesSplitTimelineSegments() {
     let firstGeometry = ProgramPictureInPictureGeometry(
         centerX: 0.78,
@@ -781,13 +1217,27 @@ struct ProgramVideoRendererTests {
     #expect(size.height == 2980)
 }
 
-@Test func screenCaptureStreamOutputSizeUsesNewSourceSizeDuringRecordingSourceSwitch() {
+@Test func screenCaptureStreamOutputSizeUsesCurrentSourceForHighQualityCapture() {
     let switchedWindowSize = ScreenArchiveRecorder.streamOutputSize(
         selectionWidth: 1080,
         selectionHeight: 720
     )
 
     #expect(switchedWindowSize == ScreenArchiveRecorder.CapturePixelSize(width: 1080, height: 720))
+}
+
+@Test func screenCaptureAspectFitRectMaximizesSwitchedWindowInsideStableProgramCanvas() {
+    let rect = ScreenArchiveRecorder.aspectFitRect(
+        sourceSize: CGSize(width: 1080, height: 720),
+        targetSize: CGSize(width: 3840, height: 2160)
+    )
+
+    #expect(rect.width == 3240)
+    #expect(rect.height == 2160)
+    #expect(rect.minX == 300)
+    #expect(rect.minY == 0)
+    #expect(rect.maxX <= 3840)
+    #expect(rect.maxY <= 2160)
 }
 
 @Test func screenCaptureAspectFitRectFillsRecordingCanvasWithoutShifting() {
@@ -800,6 +1250,20 @@ struct ProgramVideoRendererTests {
     #expect(abs(rect.height - 1912) < 0.5)
     #expect(abs(rect.minX - 36) < 0.5)
     #expect(abs(rect.minY) < 0.5)
+}
+
+@Test func screenCaptureAspectFitRectMaximizesWindowInsideMonitorCanvas() {
+    let rect = ScreenArchiveRecorder.maxIntegralAspectFitRect(
+        sourceSize: CGSize(width: 1440, height: 900),
+        targetSize: CGSize(width: 1280, height: 720)
+    )
+
+    #expect(rect.width == 1152)
+    #expect(rect.height == 720)
+    #expect(rect.minX == 64)
+    #expect(rect.minY == 0)
+    #expect(rect.maxX <= 1280)
+    #expect(rect.maxY <= 720)
 }
 
 @Test func screenCaptureContentRectUsesRetinaScaleFactorBeforeRecordingNormalization() {
@@ -882,6 +1346,8 @@ private enum TestVideoColor {
     case cameraDim
     case cameraSplit
     case screen
+    case screenWithTopChrome
+    case screenWithCenteredWindow
 }
 
 private func makeTestVideo(url: URL, size: CGSize, color: TestVideoColor, duration: Int = 1) throws {
@@ -980,6 +1446,38 @@ private func makePixelBuffer(size: CGSize, color: TestVideoColor, frame: Int) ->
                 pointer[offset] = 210
                 pointer[offset + 1] = UInt8((x * 255) / max(1, width - 1))
                 pointer[offset + 2] = UInt8((y * 255) / max(1, height - 1))
+            case .screenWithTopChrome:
+                if y < 56 || y >= height - 56 {
+                    pointer[offset] = 24
+                    pointer[offset + 1] = 32
+                    pointer[offset + 2] = 240
+                } else {
+                    pointer[offset] = 210
+                    pointer[offset + 1] = UInt8((x * 255) / max(1, width - 1))
+                    pointer[offset + 2] = UInt8((y * 255) / max(1, height - 1))
+                }
+            case .screenWithCenteredWindow:
+                let windowWidth = width * 2 / 3
+                let windowHeight = height * 2 / 3
+                let windowMinX = (width - windowWidth) / 2
+                let windowMaxX = windowMinX + windowWidth
+                let windowMinY = (height - windowHeight) / 2
+                let windowMaxY = windowMinY + windowHeight
+                if x >= windowMinX, x < windowMaxX, y >= windowMinY, y < windowMaxY {
+                    if y < windowMinY + 56 {
+                        pointer[offset] = 24
+                        pointer[offset + 1] = 32
+                        pointer[offset + 2] = 240
+                    } else {
+                        pointer[offset] = 244
+                        pointer[offset + 1] = 244
+                        pointer[offset + 2] = 244
+                    }
+                } else {
+                    pointer[offset] = 0
+                    pointer[offset + 1] = 0
+                    pointer[offset + 2] = 0
+                }
             }
             pointer[offset + 3] = 255
         }
@@ -1100,6 +1598,59 @@ private func pixel(in image: CGImage, x: Int, y: Int) -> Pixel? {
         blue: data[offset + 2],
         alpha: data[offset + 3]
     )
+}
+
+private func colorDistance(_ lhs: Pixel, _ rhs: Pixel) -> Int {
+    abs(Int(lhs.red) - Int(rhs.red))
+        + abs(Int(lhs.green) - Int(rhs.green))
+        + abs(Int(lhs.blue) - Int(rhs.blue))
+}
+
+private func cgImage(from image: CIImage) throws -> CGImage {
+    let context = CIContext()
+    return try #require(context.createCGImage(image, from: image.extent))
+}
+
+private struct StaticBeautyFaceDetector: BeautyFaceDetecting {
+    let rects: [CGRect]
+
+    func faceObservations(in image: CIImage, targetRect: CGRect) -> [BeautyFaceObservation] {
+        rects.map { rect in
+            BeautyFaceObservation(
+                faceRect: rect,
+                contourPoints: [
+                    CGPoint(x: rect.minX + rect.width * 0.18, y: rect.minY + rect.height * 0.34),
+                    CGPoint(x: rect.minX + rect.width * 0.28, y: rect.minY + rect.height * 0.16),
+                    CGPoint(x: rect.midX, y: rect.minY + rect.height * 0.08),
+                    CGPoint(x: rect.maxX - rect.width * 0.28, y: rect.minY + rect.height * 0.16),
+                    CGPoint(x: rect.maxX - rect.width * 0.18, y: rect.minY + rect.height * 0.34),
+                    CGPoint(x: rect.maxX - rect.width * 0.22, y: rect.minY + rect.height * 0.70),
+                    CGPoint(x: rect.midX, y: rect.maxY - rect.height * 0.02),
+                    CGPoint(x: rect.minX + rect.width * 0.22, y: rect.minY + rect.height * 0.70)
+                ]
+            )
+        }
+    }
+}
+
+private extension CIImage {
+    static func syntheticBeautyTestFrame(size: CGSize) -> CIImage {
+        let extent = CGRect(origin: .zero, size: size)
+        let background = CIImage(color: CIColor(red: 0.08, green: 0.16, blue: 0.24, alpha: 1))
+            .cropped(to: extent)
+        let skin = CIImage(color: CIColor(red: 0.58, green: 0.38, blue: 0.29, alpha: 1))
+            .cropped(to: CGRect(x: 220, y: 126, width: 200, height: 150))
+        let neck = CIImage(color: CIColor(red: 0.50, green: 0.32, blue: 0.24, alpha: 1))
+            .cropped(to: CGRect(x: 275, y: 70, width: 90, height: 76))
+        let shirt = CIImage(color: CIColor(red: 0.08, green: 0.10, blue: 0.11, alpha: 1))
+            .cropped(to: CGRect(x: 220, y: 0, width: 200, height: 74))
+        let spot = CIImage(color: CIColor(red: 0.32, green: 0.08, blue: 0.08, alpha: 1))
+            .cropped(to: CGRect(x: 314, y: 198, width: 16, height: 16))
+
+        return shirt
+            .composited(over: neck.composited(over: spot.composited(over: skin.composited(over: background))))
+            .cropped(to: extent)
+    }
 }
 
 private func customPiPGeometry(in scene: ProgramScene) -> ProgramPictureInPictureGeometry? {

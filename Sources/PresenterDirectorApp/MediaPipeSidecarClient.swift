@@ -37,11 +37,15 @@ private struct MediaPipeSidecarInferResponse: Codable, Sendable {
     let ok: Bool
     let timestampMs: Int
     let hands: [MediaPipeHandPrediction]
+    let faces: [MediaPipeFacePrediction]?
+    let segmentation: MediaPipePortraitSegmentationMask?
 
     enum CodingKeys: String, CodingKey {
         case ok
         case timestampMs = "timestamp_ms"
         case hands
+        case faces
+        case segmentation
     }
 }
 
@@ -100,7 +104,12 @@ actor MediaPipeSidecarClient {
             guard response.ok else { return nil }
             return MediaPipeInferenceFrame(
                 timestampMilliseconds: response.timestampMs,
-                hands: response.hands
+                hands: response.hands,
+                portrait: MediaPipePortraitFrame(
+                    timestampMilliseconds: response.timestampMs,
+                    faces: response.faces ?? [],
+                    segmentation: response.segmentation
+                )
             )
         } catch {
             return nil

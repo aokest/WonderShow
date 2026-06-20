@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import CoreGraphics
 import CoreImage
 import Foundation
 import PresenterDirector
@@ -17,6 +18,7 @@ enum ProgramVideoRendererError: Error, LocalizedError {
     case missingExportSession
     case invalidProgramExport(String)
     case exportFailed(String)
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -30,6 +32,8 @@ enum ProgramVideoRendererError: Error, LocalizedError {
             return "合成视频不可预览：\(message)"
         case .exportFailed(let message):
             return "program 视频导出失败：\(message)"
+        case .cancelled:
+            return "视频合成已取消"
         }
     }
 }
@@ -104,7 +108,7 @@ struct ProgramVideoRenderer {
             preferredTrackID: kCMPersistentTrackID_Invalid
         )
 
-        let duration = await bestDuration(
+        let duration = await renderDuration(
             cameraAsset: cameraSourceTrack == nil ? nil : cameraAsset,
             screenAsset: screenSourceTrack == nil ? nil : screenAsset,
             timelineDurationMilliseconds: timeline.durationMilliseconds
@@ -125,14 +129,22 @@ struct ProgramVideoRenderer {
         } else {
             cameraNaturalSize
         }
-        let timeRange = CMTimeRange(start: .zero, duration: duration)
         if let cameraTrack, let cameraSourceTrack {
-            try cameraTrack.insertTimeRange(timeRange, of: cameraSourceTrack, at: .zero)
+            try await insertVideoTrack(
+                cameraSourceTrack,
+                from: cameraAsset,
+                into: cameraTrack,
+                duration: duration
+            )
         }
         if let screenTrack, let screenSourceTrack {
-            try screenTrack.insertTimeRange(timeRange, of: screenSourceTrack, at: .zero)
+            try await insertVideoTrack(
+                screenSourceTrack,
+                from: screenAsset,
+                into: screenTrack,
+                duration: duration
+            )
         }
-
         let renderSize = renderSize(
             settings: settings,
             primaryNaturalSize: primaryNaturalSize(
@@ -147,30 +159,49 @@ struct ProgramVideoRenderer {
         videoComposition.renderScale = 1
         videoComposition.customVideoCompositorClass = ProgramVideoCompositor.self
         videoComposition.instructions = try instructions(
-            for: timeline,
-            duration: duration,
-            cameraTrack: cameraTrack,
-            cameraNaturalSize: cameraNaturalSize,
-            screenTrack: screenTrack,
-            screenNaturalSize: screenNaturalSize,
-            renderSize: renderSize,
-            presenterVideoEffects: session.manifest.presenterVideoEffects
-        )
+	            for: timeline,
+	            duration: duration,
+	            cameraTrack: cameraTrack,
+	            cameraNaturalSize: cameraNaturalSize,
+	            screenTrack: screenTrack,
+	            screenNaturalSize: screenNaturalSize,
+	            screenContentCropRect: nil,
+	            renderSize: renderSize,
+	            presenterVideoEffects: session.manifest.presenterVideoEffects
+	        )
 
         let destinationURL = outputURL ?? session.programOutputURL
+        let temporaryOutputURL = temporaryExportURL(for: destinationURL)
+        if fileManager.fileExists(atPath: temporaryOutputURL.path) {
+            try fileManager.removeItem(at: temporaryOutputURL)
+        }
+        defer {
+            if fileManager.fileExists(atPath: temporaryOutputURL.path) {
+                try? fileManager.removeItem(at: temporaryOutputURL)
+            }
+        }
+
+        let cancellationState = ProgramVideoRenderCancellationState()
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try await export(
+                asset: composition,
+                videoComposition: videoComposition,
+                settings: settings,
+                renderSize: renderSize,
+                destinationURL: temporaryOutputURL,
+                timeRange: exportTimeRange,
+                cancellationState: cancellationState,
+                progress: progress
+            )
+        } onCancel: {
+            cancellationState.cancel()
+        }
+        try await Self.validatePlayableVideo(at: temporaryOutputURL, fileManager: fileManager)
         if fileManager.fileExists(atPath: destinationURL.path) {
             try fileManager.removeItem(at: destinationURL)
         }
-
-        try await export(
-            asset: composition,
-            videoComposition: videoComposition,
-            settings: settings,
-            renderSize: renderSize,
-            destinationURL: destinationURL,
-            timeRange: exportTimeRange,
-            progress: progress
-        )
+        try fileManager.moveItem(at: temporaryOutputURL, to: destinationURL)
         try await Self.validatePlayableVideo(at: destinationURL, fileManager: fileManager)
         progress?(
             ProgramVideoRenderProgress(
@@ -182,6 +213,12 @@ struct ProgramVideoRenderer {
             )
         )
         return destinationURL
+    }
+
+    private func temporaryExportURL(for destinationURL: URL) -> URL {
+        let directory = destinationURL.deletingLastPathComponent()
+        let baseName = destinationURL.deletingPathExtension().lastPathComponent
+        return directory.appendingPathComponent(".\(baseName)-\(UUID().uuidString).rendering.mp4")
     }
 
     private func exportTimeRange(_ selectedRange: TimelineExportRange?, within duration: CMTime) -> CMTimeRange {
@@ -325,11 +362,15 @@ struct ProgramVideoRenderer {
         )
     }
 
-    private func bestDuration(
+    private func renderDuration(
         cameraAsset: AVAsset?,
         screenAsset: AVAsset?,
         timelineDurationMilliseconds: Int
     ) async -> CMTime {
+        if timelineDurationMilliseconds > 0 {
+            return CMTime(value: CMTimeValue(timelineDurationMilliseconds), timescale: 1_000)
+        }
+
         let cameraDuration = if let cameraAsset {
             (try? await cameraAsset.load(.duration)) ?? .invalid
         } else {
@@ -347,13 +388,48 @@ struct ProgramVideoRenderer {
         if screenDuration.isValid, screenDuration.seconds > 0 {
             candidates.append(screenDuration)
         }
-        if timelineDurationMilliseconds > 0 {
-            candidates.append(CMTime(value: CMTimeValue(timelineDurationMilliseconds), timescale: 1_000))
-        }
-        if let shortestDuration = candidates.min(by: { $0.seconds < $1.seconds }) {
-            return shortestDuration
+        if let longestDuration = candidates.max(by: { $0.seconds < $1.seconds }) {
+            return longestDuration
         }
         return CMTime(seconds: 1, preferredTimescale: 600)
+    }
+
+    private func insertVideoTrack(
+        _ sourceTrack: AVAssetTrack,
+        from sourceAsset: AVAsset,
+        into compositionTrack: AVMutableCompositionTrack,
+        duration: CMTime
+    ) async throws {
+        let sourceDuration = (try? await sourceAsset.load(.duration)) ?? duration
+        let availableDuration = minValidDuration(sourceDuration, duration)
+        if availableDuration.seconds > 0 {
+            try compositionTrack.insertTimeRange(
+                CMTimeRange(start: .zero, duration: availableDuration),
+                of: sourceTrack,
+                at: .zero
+            )
+        }
+
+        if duration > availableDuration {
+            compositionTrack.insertEmptyTimeRange(
+                CMTimeRange(start: availableDuration, duration: duration - availableDuration)
+            )
+        }
+    }
+
+    private func minValidDuration(_ lhs: CMTime, _ rhs: CMTime) -> CMTime {
+        let lhsValid = lhs.isValid && lhs.seconds.isFinite && lhs.seconds > 0
+        let rhsValid = rhs.isValid && rhs.seconds.isFinite && rhs.seconds > 0
+        switch (lhsValid, rhsValid) {
+        case (true, true):
+            return lhs < rhs ? lhs : rhs
+        case (true, false):
+            return lhs
+        case (false, true):
+            return rhs
+        case (false, false):
+            return .zero
+        }
     }
 
     private func instructions(
@@ -363,19 +439,28 @@ struct ProgramVideoRenderer {
         cameraNaturalSize: CGSize,
         screenTrack: AVCompositionTrack?,
         screenNaturalSize: CGSize,
+        screenContentCropRect: CGRect?,
         renderSize: CGSize,
         presenterVideoEffects: PresenterVideoEffects
     ) throws -> [AVVideoCompositionInstructionProtocol] {
-        let totalMilliseconds = max(1, timeline.durationMilliseconds)
         var instructions: [AVVideoCompositionInstructionProtocol] = []
 
         for segment in timeline.segments {
-            let startSeconds = duration.seconds * Double(segment.startMilliseconds) / Double(totalMilliseconds)
-            let endSeconds = duration.seconds * Double(segment.endMilliseconds) / Double(totalMilliseconds)
-            let segmentRange = CMTimeRange(
-                start: CMTime(seconds: startSeconds, preferredTimescale: 600),
-                end: CMTime(seconds: endSeconds, preferredTimescale: 600)
+            let start = boundedTimelineTime(
+                milliseconds: segment.startMilliseconds,
+                duration: duration
             )
+            let end = boundedTimelineTime(
+                milliseconds: segment.endMilliseconds,
+                duration: duration
+            )
+            let segmentRange = CMTimeRange(
+                start: start,
+                end: end
+            )
+            guard segmentRange.duration.seconds > 0 else {
+                continue
+            }
 
             let instruction = try ProgramVideoCompositionInstruction(
                 timeRange: segmentRange,
@@ -385,6 +470,7 @@ struct ProgramVideoRenderer {
                     cameraNaturalSize: cameraNaturalSize,
                     screenTrack: screenTrack,
                     screenNaturalSize: screenNaturalSize,
+                    screenContentCropRect: screenContentCropRect,
                     presenterVideoEffects: presenterVideoEffects
                 )
             )
@@ -394,12 +480,21 @@ struct ProgramVideoRenderer {
         return instructions
     }
 
+    private func boundedTimelineTime(milliseconds: Int, duration: CMTime) -> CMTime {
+        guard milliseconds > 0 else {
+            return .zero
+        }
+        let time = CMTime(value: CMTimeValue(milliseconds), timescale: 1_000)
+        return time > duration ? duration : time
+    }
+
     private func renderLayers(
         for scene: ProgramScene,
         cameraTrack: AVCompositionTrack?,
         cameraNaturalSize: CGSize,
         screenTrack: AVCompositionTrack?,
         screenNaturalSize: CGSize,
+        screenContentCropRect: CGRect?,
         presenterVideoEffects: PresenterVideoEffects
     ) throws -> [ProgramVideoRenderLayer] {
         switch scene.view {
@@ -411,6 +506,7 @@ struct ProgramVideoRenderer {
                 ProgramVideoRenderLayer(
                     trackID: cameraTrack.trackID,
                     naturalSize: cameraNaturalSize,
+                    sourceCropRect: nil,
                     placement: .fullCanvas,
                     fillMode: .fit,
                     presenterVideoEffects: presenterVideoEffects
@@ -424,6 +520,7 @@ struct ProgramVideoRenderer {
                 ProgramVideoRenderLayer(
                     trackID: cameraTrack.trackID,
                     naturalSize: cameraNaturalSize,
+                    sourceCropRect: nil,
                     placement: .fullCanvas,
                     fillMode: .closeUp,
                     presenterVideoEffects: presenterVideoEffects
@@ -436,9 +533,10 @@ struct ProgramVideoRenderer {
             return [
                 ProgramVideoRenderLayer(
                     trackID: screenTrack.trackID,
-                    naturalSize: screenNaturalSize,
+                    naturalSize: screenContentCropRect?.size ?? screenNaturalSize,
+                    sourceCropRect: screenContentCropRect,
                     placement: .fullCanvas,
-                    fillMode: .fill,
+                    fillMode: .fit,
                     presenterVideoEffects: .default
                 )
             ]
@@ -458,15 +556,17 @@ struct ProgramVideoRenderer {
                 ProgramVideoRenderLayer(
                     trackID: cameraTrack.trackID,
                     naturalSize: cameraNaturalSize,
+                    sourceCropRect: nil,
                     placement: speakerLayer.placement,
                     fillMode: speakerLayer.speakerShot == .fullBody ? .fit : .fill,
                     presenterVideoEffects: presenterVideoEffects
                 ),
                 ProgramVideoRenderLayer(
                     trackID: screenTrack.trackID,
-                    naturalSize: screenNaturalSize,
+                    naturalSize: screenContentCropRect?.size ?? screenNaturalSize,
+                    sourceCropRect: screenContentCropRect,
                     placement: .fullCanvas,
-                    fillMode: .fill,
+                    fillMode: .fit,
                     presenterVideoEffects: .default
                 )
             ]
@@ -480,7 +580,8 @@ struct ProgramVideoRenderer {
             return [
                 ProgramVideoRenderLayer(
                     trackID: screenTrack.trackID,
-                    naturalSize: screenNaturalSize,
+                    naturalSize: screenContentCropRect?.size ?? screenNaturalSize,
+                    sourceCropRect: screenContentCropRect,
                     placement: scene.layers.first(where: { $0.source == .slidesScreen })?.placement ?? .pictureInPicture(corner: .topRight, size: .medium),
                     fillMode: .fit,
                     presenterVideoEffects: .default
@@ -488,6 +589,7 @@ struct ProgramVideoRenderer {
                 ProgramVideoRenderLayer(
                     trackID: cameraTrack.trackID,
                     naturalSize: cameraNaturalSize,
+                    sourceCropRect: nil,
                     placement: .fullCanvas,
                     fillMode: .fit,
                     presenterVideoEffects: presenterVideoEffects
@@ -504,15 +606,17 @@ struct ProgramVideoRenderer {
                 ProgramVideoRenderLayer(
                     trackID: cameraTrack.trackID,
                     naturalSize: cameraNaturalSize,
+                    sourceCropRect: nil,
                     placement: .rightHalf,
                     fillMode: .fill,
                     presenterVideoEffects: presenterVideoEffects
                 ),
                 ProgramVideoRenderLayer(
                     trackID: screenTrack.trackID,
-                    naturalSize: screenNaturalSize,
+                    naturalSize: screenContentCropRect?.size ?? screenNaturalSize,
+                    sourceCropRect: screenContentCropRect,
                     placement: .leftHalf,
-                    fillMode: .fill,
+                    fillMode: .fit,
                     presenterVideoEffects: .default
                 )
             ]
@@ -526,6 +630,7 @@ struct ProgramVideoRenderer {
         renderSize: CGSize,
         destinationURL: URL,
         timeRange: CMTimeRange,
+        cancellationState: ProgramVideoRenderCancellationState,
         progress: (@Sendable (ProgramVideoRenderProgress) -> Void)?
     ) async throws {
         let reader = try AVAssetReader(asset: asset)
@@ -607,6 +712,15 @@ struct ProgramVideoRenderer {
             let videoRetimer = SampleRetimer(frameRate: settings.frameRate.rawValue)
             exportBox.videoInput.requestMediaDataWhenReady(on: queue) {
                 while exportBox.videoInput.isReadyForMoreMediaData, videoFinishState.isActive {
+                    if cancellationState.isCancelled {
+                        videoFinishState.finish {
+                            exportBox.videoInput.markAsFinished()
+                            exportBox.reader.cancelReading()
+                            exportBox.writer.cancelWriting()
+                            group.leave()
+                        }
+                        break
+                    }
                     if let sampleBuffer = exportBox.videoOutput.copyNextSampleBuffer() {
                         let timedSampleBuffer = videoRetimer.retimed(sampleBuffer) ?? sampleBuffer
                         if !exportBox.videoInput.append(timedSampleBuffer) {
@@ -640,6 +754,15 @@ struct ProgramVideoRenderer {
                         return
                     }
                     while audioInput.isReadyForMoreMediaData, audioFinishState.isActive {
+                        if cancellationState.isCancelled {
+                            audioFinishState.finish {
+                                audioInput.markAsFinished()
+                                exportBox.reader.cancelReading()
+                                exportBox.writer.cancelWriting()
+                                group.leave()
+                            }
+                            break
+                        }
                         if let sampleBuffer = audioOutput.copyNextSampleBuffer() {
                             if !audioInput.append(sampleBuffer) {
                                 audioFinishState.finish {
@@ -661,10 +784,20 @@ struct ProgramVideoRenderer {
             }
 
             group.notify(queue: queue) {
+                if cancellationState.isCancelled {
+                    exportBox.reader.cancelReading()
+                    exportBox.writer.cancelWriting()
+                    continuation.resume(throwing: ProgramVideoRendererError.cancelled)
+                    return
+                }
                 if exportBox.reader.status == .failed || exportBox.reader.status == .cancelled {
                     exportBox.writer.cancelWriting()
-                    let message = exportBox.reader.error?.localizedDescription ?? "reader 状态异常"
-                    continuation.resume(throwing: ProgramVideoRendererError.exportFailed(message))
+                    if cancellationState.isCancelled {
+                        continuation.resume(throwing: ProgramVideoRendererError.cancelled)
+                    } else {
+                        let message = exportBox.reader.error?.localizedDescription ?? "reader 状态异常"
+                        continuation.resume(throwing: ProgramVideoRendererError.exportFailed(message))
+                    }
                     return
                 }
 
@@ -807,6 +940,23 @@ private final class ReaderWriterExportBox: @unchecked Sendable {
     }
 }
 
+private final class ProgramVideoRenderCancellationState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+}
+
 private final class ProgramVideoRenderProgressEmitter: @unchecked Sendable {
     private let durationSeconds: Double
     private let width: Int
@@ -885,9 +1035,135 @@ private enum ProgramVideoFillMode: Hashable, Sendable {
 private struct ProgramVideoRenderLayer: Hashable, Sendable {
     let trackID: CMPersistentTrackID
     let naturalSize: CGSize
+    let sourceCropRect: CGRect?
     let placement: ProgramLayerPlacement
     let fillMode: ProgramVideoFillMode
     let presenterVideoEffects: PresenterVideoEffects
+}
+
+private enum ProgramBlackMatteCropDetector {
+    static func contentRect(in image: CGImage) -> CGRect? {
+        let width = image.width
+        let height = image.height
+        guard width >= 320, height >= 240 else {
+            return nil
+        }
+        let sampleStep = max(2, min(width, height) / 240)
+        var minX = width
+        var minY = height
+        var maxX = -1
+        var maxY = -1
+        var contentSamples = 0
+
+        guard let bytes = rgbaBytes(from: image) else {
+            return nil
+        }
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+
+        for y in stride(from: 0, to: height, by: sampleStep) {
+            for x in stride(from: 0, to: width, by: sampleStep) {
+                let offset = y * bytesPerRow + x * bytesPerPixel
+                let red = Int(bytes[offset])
+                let green = Int(bytes[offset + 1])
+                let blue = Int(bytes[offset + 2])
+                if red + green + blue > 42 {
+                    minX = min(minX, x)
+                    minY = min(minY, y)
+                    maxX = max(maxX, x)
+                    maxY = max(maxY, y)
+                    contentSamples += 1
+                }
+            }
+        }
+
+        guard contentSamples > 16, maxX > minX, maxY > minY else {
+            return nil
+        }
+        let expansion = sampleStep * 2
+        let rect = CGRect(
+            x: max(0, minX - expansion),
+            y: max(0, minY - expansion),
+            width: min(width - 1, maxX + expansion) - max(0, minX - expansion) + 1,
+            height: min(height - 1, maxY + expansion) - max(0, minY - expansion) + 1
+        ).integral
+        let imageArea = CGFloat(width * height)
+        let rectArea = rect.width * rect.height
+        guard rectArea / imageArea >= 0.10, rectArea / imageArea <= 0.92 else {
+            return nil
+        }
+        guard nonBlackSampleRatio(
+            bytes: bytes,
+            imageWidth: width,
+            imageHeight: height,
+            rect: rect,
+            sampleStep: sampleStep
+        ) >= 0.18 else {
+            return nil
+        }
+        guard rect.minX > 8 || rect.minY > 8 || rect.maxX < CGFloat(width - 8) || rect.maxY < CGFloat(height - 8) else {
+            return nil
+        }
+        return rect
+    }
+
+    private static func nonBlackSampleRatio(
+        bytes: [UInt8],
+        imageWidth: Int,
+        imageHeight: Int,
+        rect: CGRect,
+        sampleStep: Int
+    ) -> CGFloat {
+        let minX = max(0, Int(rect.minX))
+        let maxX = min(imageWidth - 1, Int(rect.maxX))
+        let minY = max(0, Int(rect.minY))
+        let maxY = min(imageHeight - 1, Int(rect.maxY))
+        guard minX < maxX, minY < maxY else {
+            return 0
+        }
+        let bytesPerPixel = 4
+        let bytesPerRow = imageWidth * bytesPerPixel
+        var totalSamples = 0
+        var nonBlackSamples = 0
+        for y in stride(from: minY, through: maxY, by: sampleStep) {
+            for x in stride(from: minX, through: maxX, by: sampleStep) {
+                let offset = y * bytesPerRow + x * bytesPerPixel
+                let red = Int(bytes[offset])
+                let green = Int(bytes[offset + 1])
+                let blue = Int(bytes[offset + 2])
+                totalSamples += 1
+                if red + green + blue > 42 {
+                    nonBlackSamples += 1
+                }
+            }
+        }
+        guard totalSamples > 0 else {
+            return 0
+        }
+        return CGFloat(nonBlackSamples) / CGFloat(totalSamples)
+    }
+
+    private static func rgbaBytes(from image: CGImage) -> [UInt8]? {
+        let width = image.width
+        let height = image.height
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var bytes = [UInt8](repeating: 0, count: height * bytesPerRow)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: &bytes,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return bytes
+    }
 }
 
 private final class ProgramVideoCompositionInstruction: NSObject, AVVideoCompositionInstructionProtocol, @unchecked Sendable {
@@ -909,6 +1185,7 @@ private final class ProgramVideoCompositionInstruction: NSObject, AVVideoComposi
 
 private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
     private let context = CIContext()
+    private let presenterBeautyProcessor = SubjectAwarePresenterBeautyProcessor()
     private var renderSize = CGSize(width: 1920, height: 1080)
 
     var sourcePixelBufferAttributes: [String: any Sendable]? {
@@ -950,13 +1227,16 @@ private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unche
                 renderSize: renderSize,
                 fillMode: layer.fillMode
             )
-            let sourceImage = CIImage(cvPixelBuffer: sourceBuffer)
+            let sourceImage = Self.sourceImage(
+                from: sourceBuffer,
+                cropRect: layer.sourceCropRect
+            )
             let fittedImage = Self.scaledImage(
                 sourceImage,
                 scale: geometry.scale,
                 translation: geometry.translation
             )
-            let effectedImage = Self.applyPresenterEffects(
+            let effectedImage = presenterBeautyProcessor.applyPresenterEffects(
                 to: fittedImage,
                 effects: layer.presenterVideoEffects,
                 targetRect: geometry.rect
@@ -976,50 +1256,21 @@ private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unche
 
     func cancelAllPendingVideoCompositionRequests() {}
 
-    private static func applyPresenterEffects(
-        to image: CIImage,
-        effects: PresenterVideoEffects,
-        targetRect: CGRect
-    ) -> CIImage {
-        guard !effects.isDefault else {
+    private static func sourceImage(from sourceBuffer: CVPixelBuffer, cropRect: CGRect?) -> CIImage {
+        let image = CIImage(cvPixelBuffer: sourceBuffer)
+        guard let cropRect else {
             return image
         }
-
-        var output = image
-        if effects.isMirrored {
-            output = output.transformed(
-                by: CGAffineTransform(translationX: targetRect.midX, y: 0)
-                    .scaledBy(x: -1, y: 1)
-                    .translatedBy(x: -targetRect.midX, y: 0)
-            )
+        let safeRect = cropRect
+            .standardized
+            .intersection(image.extent)
+            .integral
+        guard safeRect.width > 1, safeRect.height > 1 else {
+            return image
         }
-
-        if effects.brightness != 0 || effects.contrast != 1 {
-            output = output.applyingFilter("CIColorControls", parameters: [
-                kCIInputBrightnessKey: effects.brightness,
-                kCIInputContrastKey: effects.contrast
-            ])
-        }
-
-        if effects.beauty > 0 {
-            let softened = output
-                .clampedToExtent()
-                .applyingFilter("CIGaussianBlur", parameters: [
-                    kCIInputRadiusKey: 1.2 + effects.beauty * 2.8
-                ])
-                .cropped(to: output.extent)
-            output = softened.applyingFilter("CIBlendWithAlphaMask", parameters: [
-                kCIInputBackgroundImageKey: output,
-                kCIInputMaskImageKey: CIImage(color: CIColor(
-                    red: effects.beauty * 0.35,
-                    green: effects.beauty * 0.35,
-                    blue: effects.beauty * 0.35,
-                    alpha: effects.beauty * 0.35
-                )).cropped(to: output.extent)
-            ])
-        }
-
-        return output
+        return image
+            .cropped(to: safeRect)
+            .transformed(by: CGAffineTransform(translationX: -safeRect.minX, y: -safeRect.minY))
     }
 
     private static func scaledImage(

@@ -8,6 +8,7 @@ import PresenterDirector
 final class ScreenPreviewService: ObservableObject {
     @Published private(set) var latestImage: CGImage?
     @Published private(set) var statusText = "待命"
+    @Published private(set) var latestSourceID: ScreenCaptureSourceID?
 
     private var previewTask: Task<Void, Never>?
     private var previewGeneration = 0
@@ -19,9 +20,11 @@ final class ScreenPreviewService: ObservableObject {
         previewGeneration += 1
         let generation = previewGeneration
         latestImage = nil
+        latestSourceID = nil
 
         guard CGPreflightScreenCaptureAccess() else {
             latestImage = nil
+            latestSourceID = nil
             statusText = "需要屏幕录制权限"
             stop()
             return
@@ -48,6 +51,7 @@ final class ScreenPreviewService: ObservableObject {
 
     func resetImage() {
         latestImage = nil
+        latestSourceID = nil
     }
 
     private func captureOnce(
@@ -79,6 +83,7 @@ final class ScreenPreviewService: ObservableObject {
                 return
             }
             latestImage = image
+            latestSourceID = selection.sourceID
             statusText = "画面已接入"
         } catch {
             guard generation == previewGeneration else {

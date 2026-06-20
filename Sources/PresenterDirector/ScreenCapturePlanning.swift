@@ -178,8 +178,10 @@ public struct ScreenCapturePlanner: Sendable {
         windows: [CaptureWindowCandidate],
         target: PresentationTarget
     ) -> CaptureWindowCandidate? {
-        windows
+        let filter = ScreenSharingWindowFilter()
+        return windows
             .filter { $0.frameWidth >= 640 && $0.frameHeight >= 360 }
+            .filter(filter.isShareable)
             .max { windowScore($0, target: target) < windowScore($1, target: target) }
     }
 

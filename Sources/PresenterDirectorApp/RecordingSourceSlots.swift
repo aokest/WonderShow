@@ -24,6 +24,14 @@ enum RecordingFeatureTier: String, CaseIterable, Codable, Hashable, Sendable {
         sourceSlotRange.contains(slot)
     }
 
+    var permitsPresenterColorEffects: Bool {
+        self != .free
+    }
+
+    var permitsSubjectAwareBeauty: Bool {
+        self == .svip
+    }
+
     static func load(from defaults: UserDefaults = .standard) -> RecordingFeatureTier {
         guard let rawValue = defaults.string(forKey: userDefaultsKey),
               let tier = RecordingFeatureTier(rawValue: rawValue) else {

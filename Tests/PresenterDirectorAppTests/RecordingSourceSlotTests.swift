@@ -232,6 +232,16 @@ import Testing
     #expect(RecordingFeatureTier.svip.permitsSourceSlot(9))
 }
 
+@Test func featureTiersGatePresenterVideoEffects() {
+    #expect(!RecordingFeatureTier.free.permitsPresenterColorEffects)
+    #expect(RecordingFeatureTier.vip.permitsPresenterColorEffects)
+    #expect(RecordingFeatureTier.svip.permitsPresenterColorEffects)
+
+    #expect(!RecordingFeatureTier.free.permitsSubjectAwareBeauty)
+    #expect(!RecordingFeatureTier.vip.permitsSubjectAwareBeauty)
+    #expect(RecordingFeatureTier.svip.permitsSubjectAwareBeauty)
+}
+
 private func makeWindowOption(
     id: UInt32,
     title: String,

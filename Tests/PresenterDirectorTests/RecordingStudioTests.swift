@@ -241,6 +241,86 @@ import Testing
     #expect(decoded.presenterVideoEffects == effects)
 }
 
+@Test func presenterVideoEffectsStoresSubjectAwareBeautyControls() throws {
+    let effects = PresenterVideoEffects(
+        isMirrored: true,
+        brightness: 0.2,
+        contrast: 1.15,
+        beauty: 0.35,
+        isSubjectAwareBeautyEnabled: true,
+        skinSmoothing: 0.42,
+        skinBrightening: 0.26,
+        skinWhitening: 0.31,
+        blemishReduction: 0.28,
+        complexion: 0.22,
+        beautyStyle: .cameraReady
+    )
+
+    let data = try JSONEncoder().encode(effects)
+    let decoded = try JSONDecoder().decode(PresenterVideoEffects.self, from: data)
+
+    #expect(decoded == effects)
+}
+
+@Test func presenterVideoEffectsStoresPortraitSegmentationAndAdvancedBeautyControls() throws {
+    let effects = PresenterVideoEffects(
+        isSubjectAwareBeautyEnabled: true,
+        advancedBeautyEnabled: true,
+        portraitSegmentationEnabled: true,
+        backgroundEffect: .replacement(colorHex: "#203040", strength: 0.72),
+        backgroundBlur: 0.45,
+        faceLandmarkBeautyEnabled: true,
+        faceSlimming: 0.24,
+        eyeEnlargement: 0.18
+    )
+
+    let data = try JSONEncoder().encode(effects)
+    let decoded = try JSONDecoder().decode(PresenterVideoEffects.self, from: data)
+
+    #expect(decoded.advancedBeautyEnabled)
+    #expect(decoded.portraitSegmentationEnabled)
+    #expect(decoded.backgroundEffect == .replacement(colorHex: "#203040", strength: 0.72))
+    #expect(decoded.backgroundBlur == 0.45)
+    #expect(decoded.faceLandmarkBeautyEnabled)
+    #expect(decoded.faceSlimming == 0.24)
+    #expect(decoded.eyeEnlargement == 0.18)
+}
+
+@Test func presenterVideoEffectsDecodesLegacyBeautyFieldsWithSubjectAwareDefaults() throws {
+    let legacyJSON = """
+    {
+      "isMirrored": true,
+      "brightness": 0.18,
+      "contrast": 1.12,
+      "beauty": 0.44
+    }
+    """
+
+    let decoded = try JSONDecoder().decode(
+        PresenterVideoEffects.self,
+        from: try #require(legacyJSON.data(using: .utf8))
+    )
+
+    #expect(decoded.isMirrored)
+    #expect(decoded.brightness == 0.18)
+    #expect(decoded.contrast == 1.12)
+    #expect(decoded.beauty == 0.44)
+    #expect(decoded.isSubjectAwareBeautyEnabled == false)
+    #expect(decoded.skinSmoothing == 0)
+    #expect(decoded.skinBrightening == 0)
+    #expect(decoded.skinWhitening == 0)
+    #expect(decoded.blemishReduction == 0)
+    #expect(decoded.complexion == 0)
+    #expect(decoded.beautyStyle == .natural)
+    #expect(decoded.advancedBeautyEnabled == false)
+    #expect(decoded.portraitSegmentationEnabled == false)
+    #expect(decoded.backgroundEffect == .none)
+    #expect(decoded.backgroundBlur == 0)
+    #expect(decoded.faceLandmarkBeautyEnabled == false)
+    #expect(decoded.faceSlimming == 0)
+    #expect(decoded.eyeEnlargement == 0)
+}
+
 @Test func recordingManifestDecodesOldProjectsWithDefaultPresenterVideoEffects() throws {
     let project = RecordingProjectFactory().makeProject(
         scenario: .trainingCourse,

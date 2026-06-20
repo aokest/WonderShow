@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 import cv2
+import numpy as np
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,34 @@ class GestureLabel:
     display: str
 
 
+@dataclass(frozen=True)
+class CaptureTags:
+    """Optional environment tags encoded into sample filenames."""
+
+    light: str = "normal"
+    distance: str = "near"
+
+    def filename_token(self) -> str:
+        """Returns a compact token for filenames."""
+
+        if self.light == "normal" and self.distance == "near":
+            return ""
+        return f"{self.light}_{self.distance}"
+
+
+@dataclass(frozen=True)
+class FrameQuality:
+    """Lightweight quality metrics shown during sample capture."""
+
+    brightness: float
+    contrast: float
+    blur: float
+    overexposed_ratio: float
+    underexposed_ratio: float
+    hand_box_ratio: float | None
+    flags: tuple[str, ...]
+
+
 LABELS = [
     GestureLabel("1", "剑指", "sword", "Sword"),
     GestureLabel("2", "枪指", "finger_gun", "Gun"),
@@ -36,6 +65,7 @@ LABELS = [
     GestureLabel("4", "揪取", "pinch", "Pinch"),
     GestureLabel("5", "抓握", "grab", "Grab"),
     GestureLabel("6", "开掌", "open_palm", "Open"),
+    GestureLabel("7", "未知", "unknown", "Unknown"),
 ]
 
 ALIASES = {
@@ -63,9 +93,18 @@ ALIASES = {
     "开掌": "open_palm",
     "open": "open_palm",
     "open_palm": "open_palm",
+    "7": "unknown",
+    "未知": "unknown",
+    "负样本": "unknown",
+    "unknown": "unknown",
+    "other": "unknown",
+    "negative": "unknown",
+    "none": "unknown",
 }
 
 LABEL_BY_CANONICAL = {label.canonical: label for label in LABELS}
+LIGHT_TAGS = {"normal", "low_light", "backlight"}
+DISTANCE_TAGS = {"near", "mid", "far"}
 
 
 def resolve_label(value: str) -> GestureLabel:
@@ -99,17 +138,39 @@ def counts_by_label(root: Path) -> dict[str, int]:
     return counts
 
 
-def next_sample_path(root: Path, label: GestureLabel, extension: str) -> Path:
+def parse_capture_tags(value: str | None) -> CaptureTags:
+    """Parses comma-separated light/distance tags."""
+
+    if not value:
+        return CaptureTags()
+    light = "normal"
+    distance = "near"
+    for raw_part in value.split(","):
+        part = raw_part.strip().lower().replace("-", "_")
+        if not part:
+            continue
+        if part in LIGHT_TAGS:
+            light = part
+        elif part in DISTANCE_TAGS:
+            distance = part
+        else:
+            raise ValueError(f"Unknown capture tag: {raw_part.strip()}")
+    return CaptureTags(light=light, distance=distance)
+
+
+def next_sample_path(root: Path, label: GestureLabel, extension: str, *, tags: CaptureTags | None = None) -> Path:
     """Returns the next non-conflicting sample path for a label."""
 
     directory = root / label.folder
-    pattern = re.compile(rf"^{re.escape(label.canonical)}_(\d+){re.escape(extension)}$")
+    token = tags.filename_token() if tags else ""
+    prefix = f"{label.canonical}_{token}" if token else label.canonical
+    pattern = re.compile(rf"^{re.escape(prefix)}_(\d+){re.escape(extension)}$")
     max_index = 0
     for path in directory.iterdir() if directory.exists() else []:
         match = pattern.match(path.name)
         if match:
             max_index = max(max_index, int(match.group(1)))
-    return directory / f"{label.canonical}_{max_index + 1:04d}{extension}"
+    return directory / f"{prefix}_{max_index + 1:04d}{extension}"
 
 
 def label_menu() -> str:
@@ -132,14 +193,37 @@ def print_counts(root: Path) -> None:
     print(f"[WonderShow] 当前样本数量: {summary}")
 
 
-def overlay_lines(label: GestureLabel, counts: dict[str, int]) -> list[str]:
+def quality_summary(metrics: FrameQuality | None) -> str:
+    """Builds an ASCII quality summary for OpenCV overlay."""
+
+    if metrics is None:
+        return "Quality: measuring"
+    flags = ",".join(metrics.flags) if metrics.flags else "ok"
+    hand = "n/a" if metrics.hand_box_ratio is None else f"{metrics.hand_box_ratio:.3f}"
+    return (
+        f"Quality: light={metrics.brightness:.0f} contrast={metrics.contrast:.0f} "
+        f"blur={metrics.blur:.0f} hand={hand} flags={flags}"
+    )
+
+
+def overlay_lines(
+    label: GestureLabel,
+    counts: dict[str, int],
+    *,
+    tags: CaptureTags | None = None,
+    quality: FrameQuality | None = None,
+    burst_count: int = 1,
+) -> list[str]:
     """Builds ASCII-only overlay lines for OpenCV's limited text renderer."""
 
+    tags = tags or CaptureTags()
     return [
         f"Gesture Sampler | Current: {label.display} ({label.canonical})",
         "Click this window, then use keyboard shortcuts:",
-        "Enter/Space=SAVE   1-6=switch gesture   C=camera   Q/Esc=quit",
+        "Enter/Space=SAVE   B=burst   1-7=switch gesture   C=camera   Q/Esc=quit",
         overlay_label_menu(),
+        f"Tags: light={tags.light} distance={tags.distance} burst={burst_count}",
+        quality_summary(quality),
         "Counts: " + " ".join(f"{item.display}:{counts[item.folder]}" for item in LABELS),
         "Tip: save one clear single-hand photo each time.",
     ]
@@ -213,21 +297,83 @@ def open_camera(index: int, width: int | None, height: int | None) -> cv2.VideoC
     return capture
 
 
-def draw_overlay(frame, label: GestureLabel, root: Path) -> None:
+def estimate_frame_quality(frame, hand_box: tuple[int, int, int, int] | None = None) -> FrameQuality:
+    """Estimates capture quality without running a hand detector."""
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    brightness = float(np.mean(gray))
+    contrast = float(np.std(gray))
+    blur = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    overexposed_ratio = float(np.mean(gray >= 245))
+    underexposed_ratio = float(np.mean(gray <= 25))
+    hand_box_ratio: float | None = None
+    if hand_box:
+        _, _, width, height = hand_box
+        frame_area = max(1, frame.shape[0] * frame.shape[1])
+        hand_box_ratio = float((width * height) / frame_area)
+
+    flags: list[str] = []
+    if brightness < 45 or underexposed_ratio > 0.35:
+        flags.append("low_light")
+    if brightness > 215 or overexposed_ratio > 0.18:
+        flags.append("overexposed")
+    if contrast < 18:
+        flags.append("low_contrast")
+    if blur < 40:
+        flags.append("blurry")
+    if hand_box_ratio is not None and hand_box_ratio < 0.018:
+        flags.append("hand_too_small")
+
+    return FrameQuality(
+        brightness=brightness,
+        contrast=contrast,
+        blur=blur,
+        overexposed_ratio=overexposed_ratio,
+        underexposed_ratio=underexposed_ratio,
+        hand_box_ratio=hand_box_ratio,
+        flags=tuple(flags),
+    )
+
+
+def center_hand_box(frame) -> tuple[int, int, int, int]:
+    """Returns a conservative central hand-size proxy for quality guidance."""
+
+    height, width = frame.shape[:2]
+    box_width = max(1, int(width * 0.18))
+    box_height = max(1, int(height * 0.24))
+    return ((width - box_width) // 2, (height - box_height) // 2, box_width, box_height)
+
+
+def draw_overlay(
+    frame,
+    label: GestureLabel,
+    root: Path,
+    *,
+    tags: CaptureTags | None = None,
+    quality: FrameQuality | None = None,
+    burst_count: int = 1,
+) -> None:
     """Draws capture instructions on the preview frame."""
 
     counts = counts_by_label(root)
-    lines = overlay_lines(label, counts)
+    lines = overlay_lines(label, counts, tags=tags, quality=quality, burst_count=burst_count)
     for offset, line in enumerate(lines):
         y = 28 + offset * 26
         cv2.putText(frame, line, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (0, 0, 0), 4, cv2.LINE_AA)
         cv2.putText(frame, line, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 255, 255), 1, cv2.LINE_AA)
 
 
-def save_frame(root: Path, label: GestureLabel, frame, extension: str) -> Path:
+def save_frame(
+    root: Path,
+    label: GestureLabel,
+    frame,
+    extension: str,
+    *,
+    tags: CaptureTags | None = None,
+) -> Path:
     """Writes the current camera frame to the label folder."""
 
-    path = next_sample_path(root, label, extension)
+    path = next_sample_path(root, label, extension, tags=tags)
     ok = cv2.imwrite(str(path), frame)
     if not ok:
         raise RuntimeError(f"Failed to save image: {path}")
@@ -254,6 +400,11 @@ def run_capture(args: argparse.Namespace) -> int:
 
     output_root = Path(args.output_root)
     ensure_sample_directories(output_root)
+    try:
+        tags = parse_capture_tags(args.tags)
+    except ValueError as exc:
+        print(f"[WonderShow] {exc}", file=sys.stderr)
+        return 1
 
     if args.list_cameras:
         return list_cameras(args.max_camera_index)
@@ -261,10 +412,13 @@ def run_capture(args: argparse.Namespace) -> int:
     current_label = select_initial_label(args.label)
     print_counts(output_root)
     print("[WonderShow] 采集窗口打开后，摆好动作，按 Enter 或空格保存当前帧。")
-    print("[WonderShow] 可在预览窗口按 1-6 切换类别，按 c 切换摄像头，按 q 或 Esc 退出。")
+    print("[WonderShow] 可在预览窗口按 1-7 切换类别，按 b 连拍，按 c 切换摄像头，按 q 或 Esc 退出。")
 
     if args.dry_run:
-        print(f"[WonderShow] dry-run: camera={args.camera} label={current_label.folder} output={output_root}")
+        print(
+            f"[WonderShow] dry-run: camera={args.camera} label={current_label.folder} "
+            f"tags={tags.light},{tags.distance} burst={args.burst_count} output={output_root}"
+        )
         return 0
 
     try:
@@ -300,7 +454,15 @@ def run_capture(args: argparse.Namespace) -> int:
                 return 1
 
             preview = frame.copy()
-            draw_overlay(preview, current_label, output_root)
+            quality = estimate_frame_quality(frame, center_hand_box(frame))
+            draw_overlay(
+                preview,
+                current_label,
+                output_root,
+                tags=tags,
+                quality=quality,
+                burst_count=args.burst_count,
+            )
             if last_saved_path and time.monotonic() - last_saved_at < 1.2:
                 text = f"Saved: {last_saved_path.name}"
                 cv2.putText(preview, text, (14, preview.shape[0] - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
@@ -311,10 +473,19 @@ def run_capture(args: argparse.Namespace) -> int:
             if key in (27, ord("q")):
                 break
             if key in (13, 10, 32):
-                last_saved_path = save_frame(output_root, current_label, frame, args.extension)
+                last_saved_path = save_frame(output_root, current_label, frame, args.extension, tags=tags)
                 last_saved_at = time.monotonic()
                 print(f"[WonderShow] 已保存 {current_label.folder}: {last_saved_path}")
-            elif ord("1") <= key <= ord("6"):
+            elif key == ord("b"):
+                for _ in range(max(1, args.burst_count)):
+                    ok, burst_frame = capture.read()
+                    if not ok or burst_frame is None:
+                        break
+                    last_saved_path = save_frame(output_root, current_label, burst_frame, args.extension, tags=tags)
+                    last_saved_at = time.monotonic()
+                    print(f"[WonderShow] 连拍保存 {current_label.folder}: {last_saved_path}")
+                    time.sleep(max(0.0, args.burst_interval_ms / 1_000))
+            elif ord("1") <= key <= ord("7"):
                 current_label = resolve_label(chr(key))
                 print(f"[WonderShow] 当前类别切换为: {current_label.folder}")
             elif key == ord("c"):
@@ -343,11 +514,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description="Capture labeled WonderShow gesture training samples")
     parser.add_argument("--camera", default="0", help="OpenCV camera index, or 'auto' to use the first available camera.")
-    parser.add_argument("--label", help="Initial gesture label: 1-6, 剑指, 枪指, 八字, 揪取, 抓握, 开掌, or aliases.")
+    parser.add_argument("--label", help="Initial gesture label: 1-7, 剑指, 枪指, 八字, 揪取, 抓握, 开掌, 未知, or aliases.")
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT), help="Root folder containing per-label sample directories.")
     parser.add_argument("--extension", default=".jpg", choices=sorted(IMAGE_SUFFIXES), help="Saved image extension.")
     parser.add_argument("--width", type=int, help="Optional camera capture width.")
     parser.add_argument("--height", type=int, help="Optional camera capture height.")
+    parser.add_argument("--tags", default="normal,near", help="Comma-separated capture tags: normal, low_light, backlight, near, mid, far.")
+    parser.add_argument("--burst-count", type=int, default=5, help="Number of frames saved when pressing B.")
+    parser.add_argument("--burst-interval-ms", type=int, default=120, help="Delay between burst samples.")
     parser.add_argument("--list-cameras", action="store_true", help="Probe camera indices and exit.")
     parser.add_argument("--max-camera-index", type=int, default=5, help="Highest camera index to probe with --list-cameras.")
     parser.add_argument("--dry-run", action="store_true", help="Create directories and print settings without opening the camera.")

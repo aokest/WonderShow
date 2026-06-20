@@ -1,5 +1,15 @@
 # 文档变更记录
 
+## 2026-06-20
+
+- 固化 `v1.0.0` 核心录制基线：活动窗口直接采集、切换录制源、监视器完整显示、预览合成和高清导出作为受保护主链路，后续功能不得轻易破坏这些行为。
+- 新增 `VERSION`、`BUILD_VERSION`、`scripts/stamp-version.sh`、`githooks/pre-commit` 与 `scripts/install-git-hooks.sh`：打包脚本从仓库版本文件读取版本号，提交前自动刷新 build 号并纳入提交。
+- 新增 `docs/CORE_RECORDING_CONTRACT.md`：记录录制/切源/导出的不可回退约束，明确后续涉及采集源、时间轴、合成渲染的改动必须保留完整窗口与切源回归测试。
+- 讲者智能美颜专项调研与实现收口：确认“方块脸/脖子块”的根因是矩形 ROI 或过宽颈部 mask，而不是单纯磨皮参数问题；第一阶段继续采用 Apple Vision + Core Image 的本地局部美颜链路，后续瘦脸、大眼、表情头像再升级到 landmarks/mesh warp 或成熟 Effects SDK。
+- 收紧 `SubjectAwarePresenterBeautyProcessor` 的颈部 mask：由软矩形改为随下颌向下渐缩的多段椭圆 mask，只保留颈部中心弱美化，避免颈部两侧角落被整块刷亮；新增 `subjectAwareBeautyUsesTaperedNeckMaskWithoutRectangularCorners` 回归测试。
+- 更新 `docs/modules/presenter-beauty/BEAUTY_FEATURE_BRIEF.md`，补充第一阶段方案边界、失败回退和第二阶段能力边界。
+- 启动 MediaPipe portrait pipeline：sidecar 下载并加载 `face_landmarker.task` 与 `selfie_multiclass_256x256.tflite`，`/infer` 返回 face landmarks/blendshapes 与 gray8 人像 mask；Swift 新增 portrait Codable 模型、背景虚化/颜色背景替换处理器、高级局部美颜处理器，并在摄像头预览链路缓存 MediaPipe portrait frame。当前完成预览/算法管线，导出逐帧 MediaPipe 推理和真实 mesh warp 仍为下一步。
+
 ## 2026-06-19
 
 - 从稳定基线 `v0.7.20260619-stable` 开出后续开发分支 `codex/source-slots-hotkeys-v0.8`，用户确认下一阶段按 1-5 顺序推进：`Command+1` 到 `Command+6` 录制中快捷切源、源选择器 1-6 源位绑定、讲者画面镜像/调亮/轻美颜、真实时间轴、菜单栏常驻与桌面 mini toolbar。动态手势增强、授权付费、多端点和多主题先进入后置待办，不混入当前分支。

@@ -4,9 +4,16 @@ import PresenterDirector
 import SwiftUI
 
 final class CaptureSessionBox: @unchecked Sendable {
+    static let previewFrameInterval: TimeInterval = 1 / 18
+
     let session = AVCaptureSession()
     let videoOutput = AVCaptureVideoDataOutput()
     let videoQueue = DispatchQueue(label: "com.lingyan.camera-frames")
+    let previewContext = CIContext()
+    var lastPreviewFramePublishedAt = Date.distantPast
+    var previewEffects = PresenterVideoEffects.default
+    var latestPortraitFrame: MediaPipePortraitFrame?
+    var latestPortraitSegmentation: MediaPipePortraitSegmentationMask?
 }
 
 private struct CameraGestureRuntimeSnapshot: Sendable {
@@ -118,6 +125,7 @@ final class CameraPreviewService: NSObject, ObservableObject {
     @Published private(set) var gestureEngineLabel = "Vision 增强版"
     @Published private(set) var gestureZoneLabel = "热区待进入"
     @Published private(set) var gestureModeLabel = "空闲"
+    @Published private(set) var latestPreviewImage: CGImage?
     @Published var gestureControlEnabled = false {
         didSet {
             gestureRuntimeState.update(gestureControlEnabled: gestureControlEnabled)
@@ -172,6 +180,13 @@ final class CameraPreviewService: NSObject, ObservableObject {
         sessionBox.session
     }
 
+    func updatePreviewEffects(_ effects: PresenterVideoEffects) {
+        let sessionBox = sessionBox
+        sessionBox.videoQueue.async {
+            sessionBox.previewEffects = effects
+        }
+    }
+
     override init() {
         super.init()
         loadPersonalizedLibrary()
@@ -221,6 +236,7 @@ final class CameraPreviewService: NSObject, ObservableObject {
     func stop() {
         resetGestureTracking()
         stopCameraArchiveRecording()
+        latestPreviewImage = nil
         let sessionBox = sessionBox
         sessionQueue.async {
             if sessionBox.session.isRunning {
@@ -498,8 +514,12 @@ final class CameraPreviewService: NSObject, ObservableObject {
         timestampMilliseconds: Int
     ) {
         let snapshot = gestureRuntimeState.snapshot()
-        guard snapshot.gestureControlEnabled else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let previewEffects = sessionBox.previewEffects
+        let needsPortraitInference = previewEffects.advancedBeautyEnabled
+            || previewEffects.portraitSegmentationEnabled
+            || previewEffects.faceLandmarkBeautyEnabled
+        guard snapshot.gestureControlEnabled || needsPortraitInference else { return }
 
         if snapshot.isMediaPipeAvailable {
             guard !snapshot.mediaPipeInferenceInFlight else { return }
@@ -518,6 +538,8 @@ final class CameraPreviewService: NSObject, ObservableObject {
             }
         }
 
+        guard snapshot.gestureControlEnabled else { return }
+
         do {
             let rawPoints = try Self.visionHandPoints(from: pixelBuffer)
             Task { @MainActor [weak self, rawPoints, timestampMilliseconds] in
@@ -530,6 +552,41 @@ final class CameraPreviewService: NSObject, ObservableObject {
             Task { @MainActor [weak self] in
                 self?.processVisionFailure()
             }
+        }
+    }
+
+    private nonisolated func publishPreviewFrameIfNeeded(_ sampleBuffer: CMSampleBuffer) {
+        let now = Date()
+        guard now.timeIntervalSince(sessionBox.lastPreviewFramePublishedAt) >= CaptureSessionBox.previewFrameInterval else {
+            return
+        }
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            return
+        }
+        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        let effects = sessionBox.previewEffects
+        let portraitFrame = sessionBox.latestPortraitFrame
+        let backgroundImage = PortraitBackgroundProcessor().apply(
+            to: image,
+            segmentation: sessionBox.latestPortraitSegmentation,
+            effects: effects
+        )
+        let advancedImage = AdvancedPortraitBeautyProcessor().apply(
+            to: backgroundImage,
+            portrait: portraitFrame ?? MediaPipePortraitFrame(timestampMilliseconds: 0),
+            effects: effects
+        )
+        let previewImage = SubjectAwarePresenterBeautyProcessor().applyPresenterEffects(
+            to: advancedImage,
+            effects: effects,
+            targetRect: advancedImage.extent
+        )
+        guard let cgImage = sessionBox.previewContext.createCGImage(previewImage, from: image.extent) else {
+            return
+        }
+        sessionBox.lastPreviewFramePublishedAt = now
+        Task { @MainActor [weak self, cgImage] in
+            self?.latestPreviewImage = cgImage
         }
     }
 
@@ -549,6 +606,7 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
         from connection: AVCaptureConnection
     ) {
         cameraArchiveRecorder.append(sampleBuffer)
+        publishPreviewFrameIfNeeded(sampleBuffer)
 
         let timestampMilliseconds = Int(Date().timeIntervalSince1970 * 1_000)
         processGestureFrameFromCaptureQueue(sampleBuffer, timestampMilliseconds: timestampMilliseconds)
@@ -579,7 +637,6 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
             )
             await MainActor.run {
                 self.setMediaPipeInferenceInFlight(false)
-                guard self.gestureControlEnabled else { return }
                 guard let frame else {
                     self.setMediaPipeAvailable(false)
                     self.gestureEngineLabel = GestureEngineBackend.visionLegacy.rawValue
@@ -588,6 +645,12 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
                 }
 
                 self.setMediaPipeAvailable(true)
+                self.sessionBox.videoQueue.async { [sessionBox = self.sessionBox, portrait = frame.portrait] in
+                    sessionBox.latestPortraitFrame = portrait
+                    let segmentation = portrait.segmentation
+                    sessionBox.latestPortraitSegmentation = segmentation
+                }
+                guard self.gestureControlEnabled else { return }
                 let gestureFrame = MediaPipeGestureAdapter.gestureCoordinateFrame(from: frame)
                 if gestureFrame.hands.isEmpty {
                     self.mediaPipeEmptyFrameStreak += 1

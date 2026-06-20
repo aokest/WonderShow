@@ -189,22 +189,124 @@ public struct RecordingExportSettings: Codable, Hashable, Sendable {
     }
 }
 
+public enum PresenterBeautyStyle: String, Codable, CaseIterable, Hashable, Sendable {
+    case natural
+    case clean
+    case bright
+    case cameraReady
+}
+
+public enum PresenterBackgroundEffect: Codable, Hashable, Sendable {
+    case none
+    case blur(strength: Double)
+    case replacement(colorHex: String, strength: Double)
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case strength
+        case colorHex
+    }
+
+    private enum EffectType: String, Codable {
+        case none
+        case blur
+        case replacement
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decodeIfPresent(EffectType.self, forKey: .type) ?? .none
+        switch type {
+        case .none:
+            self = .none
+        case .blur:
+            self = .blur(strength: Self.clamp01(try container.decodeIfPresent(Double.self, forKey: .strength) ?? 0))
+        case .replacement:
+            self = .replacement(
+                colorHex: try container.decodeIfPresent(String.self, forKey: .colorHex) ?? "#1E2430",
+                strength: Self.clamp01(try container.decodeIfPresent(Double.self, forKey: .strength) ?? 0)
+            )
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .none:
+            try container.encode(EffectType.none, forKey: .type)
+        case .blur(let strength):
+            try container.encode(EffectType.blur, forKey: .type)
+            try container.encode(Self.clamp01(strength), forKey: .strength)
+        case .replacement(let colorHex, let strength):
+            try container.encode(EffectType.replacement, forKey: .type)
+            try container.encode(colorHex, forKey: .colorHex)
+            try container.encode(Self.clamp01(strength), forKey: .strength)
+        }
+    }
+
+    private static func clamp01(_ value: Double) -> Double {
+        min(max(value, 0), 1)
+    }
+}
+
 public struct PresenterVideoEffects: Codable, Hashable, Sendable {
     public var isMirrored: Bool
     public var brightness: Double
     public var contrast: Double
     public var beauty: Double
+    public var isSubjectAwareBeautyEnabled: Bool
+    public var skinSmoothing: Double
+    public var skinBrightening: Double
+    public var skinWhitening: Double
+    public var blemishReduction: Double
+    public var complexion: Double
+    public var beautyStyle: PresenterBeautyStyle
+    public var advancedBeautyEnabled: Bool
+    public var portraitSegmentationEnabled: Bool
+    public var backgroundEffect: PresenterBackgroundEffect
+    public var backgroundBlur: Double
+    public var faceLandmarkBeautyEnabled: Bool
+    public var faceSlimming: Double
+    public var eyeEnlargement: Double
 
     public init(
         isMirrored: Bool = false,
         brightness: Double = 0,
         contrast: Double = 1,
-        beauty: Double = 0
+        beauty: Double = 0,
+        isSubjectAwareBeautyEnabled: Bool = false,
+        skinSmoothing: Double = 0,
+        skinBrightening: Double = 0,
+        skinWhitening: Double = 0,
+        blemishReduction: Double = 0,
+        complexion: Double = 0,
+        beautyStyle: PresenterBeautyStyle = .natural,
+        advancedBeautyEnabled: Bool = false,
+        portraitSegmentationEnabled: Bool = false,
+        backgroundEffect: PresenterBackgroundEffect = .none,
+        backgroundBlur: Double = 0,
+        faceLandmarkBeautyEnabled: Bool = false,
+        faceSlimming: Double = 0,
+        eyeEnlargement: Double = 0
     ) {
         self.isMirrored = isMirrored
         self.brightness = Self.clamp(brightness, lower: -0.5, upper: 0.5)
         self.contrast = Self.clamp(contrast, lower: 0.5, upper: 1.5)
         self.beauty = Self.clamp(beauty, lower: 0, upper: 1)
+        self.isSubjectAwareBeautyEnabled = isSubjectAwareBeautyEnabled
+        self.skinSmoothing = Self.clamp01(skinSmoothing)
+        self.skinBrightening = Self.clamp01(skinBrightening)
+        self.skinWhitening = Self.clamp01(skinWhitening)
+        self.blemishReduction = Self.clamp01(blemishReduction)
+        self.complexion = Self.clamp01(complexion)
+        self.beautyStyle = beautyStyle
+        self.advancedBeautyEnabled = advancedBeautyEnabled
+        self.portraitSegmentationEnabled = portraitSegmentationEnabled
+        self.backgroundEffect = backgroundEffect
+        self.backgroundBlur = Self.clamp01(backgroundBlur)
+        self.faceLandmarkBeautyEnabled = faceLandmarkBeautyEnabled
+        self.faceSlimming = Self.clamp01(faceSlimming)
+        self.eyeEnlargement = Self.clamp01(eyeEnlargement)
     }
 
     public static let `default` = PresenterVideoEffects()
@@ -213,8 +315,80 @@ public struct PresenterVideoEffects: Codable, Hashable, Sendable {
         self == .default
     }
 
+    public var hasSubjectAwareBeautyAdjustments: Bool {
+        isSubjectAwareBeautyEnabled && (
+            beauty > 0
+                || skinSmoothing > 0
+                || skinBrightening > 0
+                || skinWhitening > 0
+                || blemishReduction > 0
+                || complexion > 0
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case isMirrored
+        case brightness
+        case contrast
+        case beauty
+        case isSubjectAwareBeautyEnabled
+        case skinSmoothing
+        case skinBrightening
+        case skinWhitening
+        case blemishReduction
+        case complexion
+        case beautyStyle
+        case advancedBeautyEnabled
+        case portraitSegmentationEnabled
+        case backgroundEffect
+        case backgroundBlur
+        case faceLandmarkBeautyEnabled
+        case faceSlimming
+        case eyeEnlargement
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            isMirrored: try container.decodeIfPresent(Bool.self, forKey: .isMirrored) ?? false,
+            brightness: try container.decodeIfPresent(Double.self, forKey: .brightness) ?? 0,
+            contrast: try container.decodeIfPresent(Double.self, forKey: .contrast) ?? 1,
+            beauty: try container.decodeIfPresent(Double.self, forKey: .beauty) ?? 0,
+            isSubjectAwareBeautyEnabled: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .isSubjectAwareBeautyEnabled
+            ) ?? false,
+            skinSmoothing: try container.decodeIfPresent(Double.self, forKey: .skinSmoothing) ?? 0,
+            skinBrightening: try container.decodeIfPresent(Double.self, forKey: .skinBrightening) ?? 0,
+            skinWhitening: try container.decodeIfPresent(Double.self, forKey: .skinWhitening) ?? 0,
+            blemishReduction: try container.decodeIfPresent(Double.self, forKey: .blemishReduction) ?? 0,
+            complexion: try container.decodeIfPresent(Double.self, forKey: .complexion) ?? 0,
+            beautyStyle: try container.decodeIfPresent(PresenterBeautyStyle.self, forKey: .beautyStyle) ?? .natural,
+            advancedBeautyEnabled: try container.decodeIfPresent(Bool.self, forKey: .advancedBeautyEnabled) ?? false,
+            portraitSegmentationEnabled: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .portraitSegmentationEnabled
+            ) ?? false,
+            backgroundEffect: try container.decodeIfPresent(
+                PresenterBackgroundEffect.self,
+                forKey: .backgroundEffect
+            ) ?? .none,
+            backgroundBlur: try container.decodeIfPresent(Double.self, forKey: .backgroundBlur) ?? 0,
+            faceLandmarkBeautyEnabled: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .faceLandmarkBeautyEnabled
+            ) ?? false,
+            faceSlimming: try container.decodeIfPresent(Double.self, forKey: .faceSlimming) ?? 0,
+            eyeEnlargement: try container.decodeIfPresent(Double.self, forKey: .eyeEnlargement) ?? 0
+        )
+    }
+
     private static func clamp(_ value: Double, lower: Double, upper: Double) -> Double {
         min(max(value, lower), upper)
+    }
+
+    private static func clamp01(_ value: Double) -> Double {
+        clamp(value, lower: 0, upper: 1)
     }
 }
 

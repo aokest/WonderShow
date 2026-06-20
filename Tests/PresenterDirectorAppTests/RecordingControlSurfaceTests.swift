@@ -1,4 +1,5 @@
 @testable import PresenterDirectorApp
+@testable import PresenterDirector
 import AppKit
 import Testing
 
@@ -79,4 +80,42 @@ import Testing
             modifierFlags: [.command, .option, .shift]
         ) == nil
     )
+}
+
+@MainActor
+@Test func recordingControllerPersistsPresenterVideoEffectsUpdatesDuringActiveRecording() throws {
+    let controller = PresentationCommandController()
+    controller.toggleRecording(
+        scenario: .trainingCourse,
+        cameraName: "Built-in Camera",
+        mode: .cameraOnly,
+        layout: .speakerFullBody,
+        presenterVideoEffects: PresenterVideoEffects(brightness: 0.1, contrast: 1.05, beauty: 0.1)
+    )
+    let startedSession = try #require(controller.lastRecordingSession)
+
+    let updatedEffects = PresenterVideoEffects(
+        brightness: 0.28,
+        contrast: 1.24,
+        beauty: 0.34,
+        isSubjectAwareBeautyEnabled: true,
+        skinSmoothing: 0.4,
+        skinBrightening: 0.3,
+        skinWhitening: 0.2,
+        blemishReduction: 0.18,
+        complexion: 0.16,
+        beautyStyle: .bright
+    )
+    controller.updateLastRecordingPresenterVideoEffects(updatedEffects)
+
+    let updatedSession = try #require(controller.lastRecordingSession)
+    let manifestData = try Data(contentsOf: updatedSession.manifestURL)
+    let manifest = try JSONDecoder().decode(RecordingProjectManifest.self, from: manifestData)
+
+    #expect(updatedSession.url == startedSession.url)
+    #expect(updatedSession.manifest.presenterVideoEffects == updatedEffects)
+    #expect(manifest.presenterVideoEffects == updatedEffects)
+
+    controller.toggleRecording()
+    try? FileManager.default.removeItem(at: startedSession.url)
 }

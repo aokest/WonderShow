@@ -147,36 +147,65 @@ final class PresentationCommandController: ObservableObject {
         lastDeliveryDetail = url?.path ?? "未保留项目"
     }
 
-    func previewLastProgramExport(settings: RecordingExportSettings = .presentationDefault) {
+    @discardableResult
+    func previewLastProgramExport(
+        settings: RecordingExportSettings = .presentationDefault,
+        onProgress: (@MainActor (ProgramVideoRenderProgress) -> Void)? = nil,
+        completion: (@MainActor (Result<ProgramVideoExportResult, Error>) -> Void)? = nil
+    ) -> Task<Void, Never>? {
         guard let session = lastRecordingSession else {
             reportRecordingIssue("尚未创建录制项目")
-            return
+            completion?(.failure(PresentationCommandControllerError.noRecordingSession))
+            return nil
         }
         lastActionDescription = "正在打开预览"
         lastDeliveryBackend = "录制工程"
         lastDeliveryDetail = "准备合成视频预览"
         guard validateRawTracksForRendering(session: session) else {
-            return
+            completion?(.failure(PresentationCommandControllerError.rawTrackValidationFailed))
+            return nil
         }
 
         lastActionDescription = "正在生成预览"
         lastDeliveryBackend = "录制工程"
         lastDeliveryDetail = "正在从原始轨合成预览视频"
 
-        Task { @MainActor in
+        let progressCache = ProgramVideoExportProgressCache()
+        let task = Task { @MainActor in
             do {
                 let outputURL = try await ProgramVideoRenderer().render(
                     session: session,
-                    settings: settings
+                    settings: settings,
+                    progress: { progress in
+                        progressCache.store(progress)
+                        Task { @MainActor in
+                            onProgress?(progress)
+                        }
+                    }
                 )
                 guard self.lastRecordingSession?.url == session.url else {
                     return
                 }
-                openProgramPreview(outputURL)
+                let fileSize = fileSize(at: outputURL)
+                let finalProgress = progressCache.load()
+                completion?(.success(ProgramVideoExportResult(
+                    url: outputURL,
+                    width: finalProgress?.width ?? settings.exportWidthFallback,
+                    height: finalProgress?.height ?? settings.exportHeightFallback,
+                    fileSize: fileSize,
+                    settings: settings
+                )))
             } catch {
-                reportRecordingIssue("预览生成失败：\(error.localizedDescription)")
+                if Task.isCancelled || Self.isProgramRenderCancellation(error) {
+                    reportRecordingIssue("预览合成已取消")
+                    completion?(.failure(ProgramVideoRendererError.cancelled))
+                } else {
+                    reportRecordingIssue("预览生成失败：\(error.localizedDescription)")
+                    completion?(.failure(error))
+                }
             }
         }
+        return task
     }
 
     func updateLastRecordingPictureInPictureGeometry(_ geometry: ProgramPictureInPictureGeometry?) {
@@ -266,7 +295,7 @@ final class PresentationCommandController: ObservableObject {
     }
     #endif
 
-    private func openProgramPreview(_ url: URL) {
+    func presentProgramPreview(_ url: URL) {
         programPreviewRequest = ProgramPreviewRequest(url: url)
         lastActionDescription = "合成视频预览已打开"
         lastDeliveryBackend = "录制工程"
@@ -323,20 +352,21 @@ final class PresentationCommandController: ObservableObject {
         }
     }
 
+    @discardableResult
     func exportProgramVideo(
         settings: RecordingExportSettings = .presentationDefault,
         selectedRange: TimelineExportRange? = nil,
         onProgress: (@MainActor (ProgramVideoRenderProgress) -> Void)? = nil,
         completion: (@MainActor (Result<ProgramVideoExportResult, Error>) -> Void)? = nil
-    ) {
+    ) -> Task<Void, Never>? {
         guard let session = lastRecordingSession else {
             reportRecordingIssue("尚未创建录制项目")
             completion?(.failure(PresentationCommandControllerError.noRecordingSession))
-            return
+            return nil
         }
         guard validateRawTracksForRendering(session: session) else {
             completion?(.failure(PresentationCommandControllerError.rawTrackValidationFailed))
-            return
+            return nil
         }
 
         let panel = NSSavePanel()
@@ -347,7 +377,7 @@ final class PresentationCommandController: ObservableObject {
 
         guard panel.runModal() == .OK, let url = panel.url else {
             completion?(.failure(PresentationCommandControllerError.exportCancelled))
-            return
+            return nil
         }
 
         lastActionDescription = "合成视频导出中"
@@ -355,7 +385,7 @@ final class PresentationCommandController: ObservableObject {
         lastDeliveryDetail = "\(settings.userFacingSummary) → \(url.path)"
         let progressCache = ProgramVideoExportProgressCache()
 
-        Task { @MainActor in
+        let task = Task { @MainActor in
             do {
                 let outputURL = try await ProgramVideoRenderer().render(
                     session: session,
@@ -388,15 +418,28 @@ final class PresentationCommandController: ObservableObject {
                     )
                 )
             } catch {
-                reportRecordingIssue("导出视频失败：\(error.localizedDescription)")
-                completion?(.failure(error))
+                if Task.isCancelled || Self.isProgramRenderCancellation(error) {
+                    reportRecordingIssue("导出视频已取消")
+                    completion?(.failure(ProgramVideoRendererError.cancelled))
+                } else {
+                    reportRecordingIssue("导出视频失败：\(error.localizedDescription)")
+                    completion?(.failure(error))
+                }
             }
         }
+        return task
     }
 
     private func fileSize(at url: URL) -> Int64 {
         let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber
         return size?.int64Value ?? 0
+    }
+
+    private static func isProgramRenderCancellation(_ error: any Error) -> Bool {
+        if case ProgramVideoRendererError.cancelled = error {
+            return true
+        }
+        return false
     }
 
     private func validateRawTracksForRendering(session: RecordingSessionRecord) -> Bool {

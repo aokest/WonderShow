@@ -131,6 +131,7 @@ private enum ProgramCanvasResolution: String, CaseIterable, Hashable {
 
 private struct ExportProgressPresentation: Identifiable, Equatable {
     let id = "export-progress"
+    var title: String
     var fraction: Double
     var width: Int
     var height: Int
@@ -193,6 +194,7 @@ struct DashboardView: View {
     @State private var exportDraftSettings = RecordingExportSettings.presentationDefault
     @State private var showsExportSettings = false
     @State private var exportProgress: ExportProgressPresentation?
+    @State private var activeProgramRenderTask: Task<Void, Never>?
     @State private var exportOutcome: ExportOutcomePresentation?
     @State private var sourceSlotConflict: SourceSlotConflictPresentation?
     @State private var recordingCountdownTask: Task<Void, Never>?
@@ -207,6 +209,7 @@ struct DashboardView: View {
     @State private var audioInputDevices: [AudioInputDeviceOption] = MicrophoneArchiveRecorder.availableInputDevices()
     @State private var selectedAudioInputDeviceID = AudioInputDeviceOption.systemDefault.id
     @State private var latestScreenPreviewImage: CGImage?
+    @State private var latestScreenPreviewSourceID: ScreenCaptureSourceID?
     @State private var screenPreviewGeneration = 0
     @State private var pipOffset = CGSize(width: 18, height: -18)
     @State private var pipScale: CGFloat = 1
@@ -215,9 +218,25 @@ struct DashboardView: View {
     @State private var presenterBrightness: CGFloat = 0
     @State private var presenterContrast: CGFloat = 1
     @State private var presenterBeauty: CGFloat = 0
+    @State private var presenterSmartBeautyEnabled = false
+    @State private var presenterBeautyStyle: PresenterBeautyStyle = .natural
+    @State private var presenterSkinSmoothing: CGFloat = 0
+    @State private var presenterSkinBrightening: CGFloat = 0
+    @State private var presenterSkinWhitening: CGFloat = 0
+    @State private var presenterBlemishReduction: CGFloat = 0
+    @State private var presenterComplexion: CGFloat = 0
+    @State private var presenterAdvancedBeautyEnabled = false
+    @State private var presenterPortraitSegmentationEnabled = false
+    @State private var presenterBackgroundBlur: CGFloat = 0
+    @State private var presenterBackgroundReplacementEnabled = false
+    @State private var presenterBackgroundReplacementStrength: CGFloat = 0
+    @State private var presenterFaceLandmarkBeautyEnabled = false
+    @State private var presenterFaceSlimming: CGFloat = 0
+    @State private var presenterEyeEnlargement: CGFloat = 0
+    @State private var presenterBeautyControlsExpanded = false
     @State private var monitorCanvasSize = CGSize(width: 1280, height: 720)
     @State private var programCanvasAspect: ProgramCanvasAspect = .widescreen
-    @State private var programCanvasResolution: ProgramCanvasResolution = .hd
+    @State private var programCanvasResolution: ProgramCanvasResolution = .uhd
     @State private var recordingStartedAt: Date?
     @State private var recordingPiPKeyframes: [RecordingPiPKeyframe] = []
     @State private var recordingLayoutKeyframes: [RecordingLayoutKeyframe] = []
@@ -279,6 +298,10 @@ struct DashboardView: View {
             codec: .h264,
             customPixelSize: programCanvasAspect.pixelSize(for: programCanvasResolution)
         )
+    }
+
+    private var effectivePresenterVideoEffects: PresenterVideoEffects {
+        currentPresenterVideoEffects(permittedBy: recordingFeatureTier)
     }
 
     private var exportResolutionBinding: Binding<RecordingExportResolution> {
@@ -350,7 +373,11 @@ struct DashboardView: View {
             exportSettingsSheet
         }
         .sheet(item: $exportProgress) { progress in
-            ExportProgressSheet(copy: copy, progress: progress)
+            ExportProgressSheet(
+                copy: copy,
+                progress: progress,
+                cancel: cancelActiveProgramRender
+            )
         }
         .alert(item: $exportOutcome) { outcome in
             if let url = outcome.url {
@@ -427,6 +454,7 @@ struct DashboardView: View {
             commandController.refreshAccessibilityStatus()
             updateGestureHandler()
             installScreenArchivePreviewHandler()
+            camera.updatePreviewEffects(effectivePresenterVideoEffects)
             camera.start()
             refreshAudioInputDevices()
             restartScreenPreviewIfNeeded()
@@ -441,6 +469,12 @@ struct DashboardView: View {
         }
         .onChange(of: recordingFeatureTier) {
             persistRecordingFeatureTier()
+            if !recordingFeatureTier.permitsSubjectAwareBeauty {
+                presenterSmartBeautyEnabled = false
+                presenterAdvancedBeautyEnabled = false
+                presenterPortraitSegmentationEnabled = false
+                presenterBeautyControlsExpanded = false
+            }
             syncRecordingControlCenter()
         }
         .onChange(of: layout) {
@@ -462,20 +496,22 @@ struct DashboardView: View {
                         startScreenArchiveRecording(
                             to: session.slidesScreenURL,
                             target: target,
-                            sourcePreference: screenSourcePreference
+                            sourcePreference: screenSourcePreference,
+                            recordingPixelSize: screenArchiveRecordingPixelSize
                         )
                     }
                     startMicrophoneArchiveRecording(to: session.microphoneAudioURL)
                 }
             } else {
                 if shouldRenderStoppedRecording {
+                    updatePresenterVideoEffectsForLastRecording()
                     finalizeRecordingTimelineForLastRecording()
                 }
                 stopRecordingAndRenderProgram(
                     shouldRender: shouldRenderStoppedRecording,
                     discardSession: discardStoppedRecording
                 )
-                resetRecordingStateAfterStop()
+                resetRecordingStateAfterStop(preserveTimeline: shouldRenderStoppedRecording)
             }
             syncRecordingControlCenter()
         }
@@ -494,17 +530,17 @@ struct DashboardView: View {
         .onChange(of: pipShape) {
             recordCurrentPiPKeyframeIfNeeded(force: true)
         }
-        .onChange(of: presenterMirrorEnabled) {
-            updatePresenterVideoEffectsForLastRecording()
+        .onChange(of: presenterSmartBeautyEnabled) {
+            handleSmartBeautyToggleChange()
         }
-        .onChange(of: presenterBrightness) {
-            updatePresenterVideoEffectsForLastRecording()
+        .onChange(of: presenterAdvancedBeautyEnabled) {
+            handleAdvancedBeautyToggleChange()
         }
-        .onChange(of: presenterContrast) {
-            updatePresenterVideoEffectsForLastRecording()
+        .onChange(of: presenterBackgroundReplacementEnabled) {
+            handleBackgroundReplacementToggleChange()
         }
-        .onChange(of: presenterBeauty) {
-            updatePresenterVideoEffectsForLastRecording()
+        .onChange(of: effectivePresenterVideoEffects) {
+            handlePresenterVideoEffectsChange()
         }
         .onReceive(recordingClock) { _ in
             guard commandController.isRecording, recordingControlState == .recording else {
@@ -512,16 +548,46 @@ struct DashboardView: View {
             }
             elapsedSeconds = Int(currentActiveRecordingDuration().rounded(.down))
         }
-        .onDisappear {
-            removeRecordingHotKeyMonitor()
-            recordingCountdownTask?.cancel()
-            screenSourceThumbnailTask?.cancel()
-            recordingCountdownPresenter.hide()
-            screenArchiveRecorder.onPreviewImage = nil
-            screenPreview.stop()
-            stopRecordingAndRenderProgram(shouldRender: false)
-            camera.stop()
+        .onDisappear(perform: handleDashboardDisappear)
+    }
+
+    private func handleDashboardDisappear() {
+        cancelActiveProgramRender()
+        removeRecordingHotKeyMonitor()
+        recordingCountdownTask?.cancel()
+        screenSourceThumbnailTask?.cancel()
+        recordingCountdownPresenter.hide()
+        screenArchiveRecorder.onPreviewImage = nil
+        screenPreview.stop()
+        stopRecordingAndRenderProgram(shouldRender: false)
+        camera.stop()
+    }
+
+    private func handleSmartBeautyToggleChange() {
+        if presenterSmartBeautyEnabled {
+            seedSubjectAwareBeautyDefaultsIfNeeded()
         }
+    }
+
+    private func handleAdvancedBeautyToggleChange() {
+        if presenterAdvancedBeautyEnabled {
+            presenterSmartBeautyEnabled = true
+            presenterFaceLandmarkBeautyEnabled = true
+        }
+    }
+
+    private func handleBackgroundReplacementToggleChange() {
+        if presenterBackgroundReplacementEnabled {
+            presenterPortraitSegmentationEnabled = true
+            if presenterBackgroundReplacementStrength == 0 {
+                presenterBackgroundReplacementStrength = 0.72
+            }
+        }
+    }
+
+    private func handlePresenterVideoEffectsChange() {
+        camera.updatePreviewEffects(effectivePresenterVideoEffects)
+        updatePresenterVideoEffectsForLastRecording()
     }
 
     /// 将当前手势和缩放回调绑定到选中的演示目标，避免目标切换时投递错位。
@@ -617,7 +683,7 @@ struct DashboardView: View {
                 mode: mode,
                 layout: layout,
                 pictureInPictureGeometry: currentPictureInPictureGeometry,
-                presenterVideoEffects: currentPresenterVideoEffects
+                presenterVideoEffects: effectivePresenterVideoEffects
             )
             if !commandController.isRecording {
                 recordingControlState = .idle
@@ -644,6 +710,7 @@ struct DashboardView: View {
         accumulatedRecordingDuration = 0
         recordingActiveStartedAt = now
         latestScreenPreviewImage = nil
+        latestScreenPreviewSourceID = nil
         recordingStartedAt = now
         recordingPiPKeyframes = initialPiPKeyframes()
         recordingLayoutKeyframes = initialLayoutKeyframes()
@@ -707,7 +774,7 @@ struct DashboardView: View {
             mode: mode,
             layout: layout,
             pictureInPictureGeometry: currentPictureInPictureGeometry,
-            presenterVideoEffects: currentPresenterVideoEffects
+            presenterVideoEffects: effectivePresenterVideoEffects
         )
     }
 
@@ -726,15 +793,22 @@ struct DashboardView: View {
         return accumulatedRecordingDuration
     }
 
-    private func resetRecordingStateAfterStop() {
+    private func resetRecordingStateAfterStop(preserveTimeline: Bool = false) {
         recordingControlState = .idle
         recordingCountdownTask = nil
         recordingCountdownPresenter.hide()
-        elapsedSeconds = 0
+        if !preserveTimeline {
+            elapsedSeconds = 0
+        }
         accumulatedRecordingDuration = 0
         recordingActiveStartedAt = nil
         recordingStartedAt = nil
-        recordingLayoutKeyframes = []
+        if !preserveTimeline {
+            recordingPiPKeyframes = []
+            recordingLayoutKeyframes = []
+            timelinePlayheadMilliseconds = 0
+            selectedTimelineRange = nil
+        }
         lastPiPKeyframeDate = nil
         shouldRenderStoppedRecording = true
         discardStoppedRecording = false
@@ -818,14 +892,16 @@ struct DashboardView: View {
     private func startScreenArchiveRecording(
         to outputURL: URL,
         target: PresentationTarget,
-        sourcePreference: ScreenCaptureSourcePreference
+        sourcePreference: ScreenCaptureSourcePreference,
+        recordingPixelSize: ScreenArchiveRecorder.CapturePixelSize
     ) {
         Task {
             do {
                 try await screenArchiveRecorder.startRecording(
                     to: outputURL,
                     target: target,
-                    sourcePreference: sourcePreference
+                    sourcePreference: sourcePreference,
+                    recordingPixelSize: recordingPixelSize
                 )
             } catch {
                 await MainActor.run {
@@ -833,6 +909,14 @@ struct DashboardView: View {
                 }
             }
         }
+    }
+
+    private var screenArchiveRecordingPixelSize: ScreenArchiveRecorder.CapturePixelSize {
+        let pixelSize = programCanvasAspect.pixelSize(for: programCanvasResolution)
+        return ScreenArchiveRecorder.CapturePixelSize(
+            width: pixelSize.width,
+            height: pixelSize.height
+        )
     }
 
     private func stopScreenArchiveRecording() {
@@ -868,6 +952,7 @@ struct DashboardView: View {
             stopMicrophoneArchiveRecording()
             return
         }
+        let renderSettings = programCanvasExportSettings
 
         Task {
             await camera.stopCameraArchiveRecording()
@@ -892,7 +977,10 @@ struct DashboardView: View {
                 let renderSession = await MainActor.run {
                     commandController.lastRecordingSession ?? session
                 }
-                let outputURL = try await ProgramVideoRenderer().render(session: renderSession)
+                let outputURL = try await ProgramVideoRenderer().render(
+                    session: renderSession,
+                    settings: renderSettings
+                )
                 await MainActor.run {
                     commandController.reportRecordingProgress("program 视频已导出：\(outputURL.path)")
                 }
@@ -1061,6 +1149,7 @@ struct DashboardView: View {
                 recordingTimelineStrip
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
+            .zIndex(3)
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 8) {
@@ -1073,12 +1162,18 @@ struct DashboardView: View {
                 .padding(.bottom, 12)
             }
             .frame(width: 300)
+            .zIndex(0)
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var previewWorkspace: some View {
+        monitorSurface
+        .zIndex(12)
+    }
+
+    private var monitorSurface: some View {
         ZStack(alignment: .bottomLeading) {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(ConsolePalette.previewBase)
@@ -1088,33 +1183,33 @@ struct DashboardView: View {
                 )
                 .shadow(color: .black.opacity(0.75), radius: 24, x: 0, y: 12)
 
-            ZStack {
-                ProgramMonitorView(
-                    copy: copy,
-                    layout: layout,
-                    canvasAspectRatio: programCanvasAspect.aspectRatio,
-                    screenImage: monitorScreenImage,
-                    cameraSession: camera.session,
-                    cameraStatus: camera.status,
-                    cameraStatusDetail: cameraStatusDetail,
-                    screenSourceLabel: monitorScreenStatusLabel,
-                    isRecording: commandController.isRecording,
-                    pipOffset: $pipOffset,
-                    pipScale: $pipScale,
-                    pipShape: pipShape,
-                    presenterVideoEffects: currentPresenterVideoEffects,
-                    canvasSizeChanged: { size in
-                        monitorCanvasSize = size
-                    },
-                    pipInteractionEnded: {
-                        recordCurrentPiPKeyframeIfNeeded(force: true)
-                    },
-                    pipCornerChanged: { corner in
-                        updatePiPCorner(corner)
-                    },
-                    reconnect: { camera.start() }
-                )
-            }
+            ProgramMonitorView(
+                copy: copy,
+                layout: layout,
+                canvasAspectRatio: programCanvasAspect.aspectRatio,
+                screenImage: monitorScreenImage,
+                screenSourceID: monitorScreenSourceID,
+                cameraPreviewImage: camera.latestPreviewImage,
+                cameraSession: camera.session,
+                cameraStatus: camera.status,
+                cameraStatusDetail: cameraStatusDetail,
+                screenSourceLabel: monitorScreenStatusLabel,
+                isRecording: commandController.isRecording,
+                pipOffset: $pipOffset,
+                pipScale: $pipScale,
+                pipShape: pipShape,
+                presenterVideoEffects: effectivePresenterVideoEffects,
+                canvasSizeChanged: { size in
+                    monitorCanvasSize = size
+                },
+                pipInteractionEnded: {
+                    recordCurrentPiPKeyframeIfNeeded(force: true)
+                },
+                pipCornerChanged: { corner in
+                    updatePiPCorner(corner)
+                },
+                reconnect: { camera.start() }
+            )
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
@@ -1134,11 +1229,24 @@ struct DashboardView: View {
             ProgramCanvasControls(
                 copy: copy,
                 aspect: $programCanvasAspect,
-                resolution: $programCanvasResolution
+                resolution: $programCanvasResolution,
+                presenterBeautyControlsExpanded: $presenterBeautyControlsExpanded,
+                presenterSmartBeautyEnabled: $presenterSmartBeautyEnabled,
+                presenterBeauty: $presenterBeauty,
+                presenterBeautyStyle: $presenterBeautyStyle,
+                presenterSkinSmoothing: $presenterSkinSmoothing,
+                presenterSkinBrightening: $presenterSkinBrightening,
+                presenterSkinWhitening: $presenterSkinWhitening,
+                presenterBlemishReduction: $presenterBlemishReduction,
+                presenterComplexion: $presenterComplexion,
+                onBeautyEditingEnded: updatePresenterVideoEffectsForLastRecording,
+                onBeautyEnabled: seedSubjectAwareBeautyDefaultsIfNeeded,
+                isSubjectAwareBeautyPermitted: recordingFeatureTier.permitsSubjectAwareBeauty
             )
-            .padding(.trailing, 16)
-            .padding(.bottom, 16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .frame(width: 48, height: 156)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+            .padding(.trailing, 12)
+            .zIndex(20)
         }
         .aspectRatio(16 / 9, contentMode: .fit)
     }
@@ -1280,7 +1388,7 @@ struct DashboardView: View {
 
                         Button(copy.previewProgram) {
                             saveCurrentPiPTimelineForLastRecording()
-                            commandController.previewLastProgramExport(settings: programCanvasExportSettings)
+                            previewProgramExport()
                         }
                         .buttonStyle(ConsoleGradientButtonStyle(variant: .outline, expands: true))
                         .disabled(commandController.lastRecordingSession == nil)
@@ -1577,6 +1685,8 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 ConsoleFieldLabel(copy.text("presenterVideoEffects"))
+                FeatureTierBadge(text: copy.text("sourceTierVIP"))
+                FeatureTierBadge(text: copy.text("sourceTierSVIP"), isProminent: true)
                 Spacer()
                 Toggle("", isOn: $presenterMirrorEnabled)
                     .labelsHidden()
@@ -1595,18 +1705,146 @@ struct DashboardView: View {
                     return percent > 0 ? "+\(percent)%" : "\(percent)%"
                 }
             )
+            .disabled(!recordingFeatureTier.permitsPresenterColorEffects)
+            .opacity(recordingFeatureTier.permitsPresenterColorEffects ? 1 : 0.42)
             presenterEffectSlider(
                 label: copy.text("presenterContrast"),
                 value: $presenterContrast,
                 range: 0.75...1.35,
                 format: { value in "\(Int((value * 100).rounded()))%" }
             )
+            .disabled(!recordingFeatureTier.permitsPresenterColorEffects)
+            .opacity(recordingFeatureTier.permitsPresenterColorEffects ? 1 : 0.42)
             presenterEffectSlider(
-                label: copy.text("presenterBeauty"),
+                label: copy.text("presenterNaturalBeauty"),
                 value: $presenterBeauty,
                 range: 0...0.8,
                 format: { value in "\(Int((value * 100).rounded()))%" }
             )
+            .disabled(!recordingFeatureTier.permitsPresenterColorEffects)
+            .opacity(recordingFeatureTier.permitsPresenterColorEffects ? 1 : 0.42)
+            HStack(spacing: 8) {
+                Text(copy.text("presenterSmartBeauty"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ConsolePalette.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                FeatureTierBadge(text: copy.text("sourceTierSVIP"), isProminent: true)
+                Spacer()
+                Toggle("", isOn: $presenterSmartBeautyEnabled)
+                    .labelsHidden()
+                    .toggleStyle(ConsoleSwitchToggleStyle())
+                    .onChange(of: presenterSmartBeautyEnabled) { _, enabled in
+                        if enabled {
+                            seedSubjectAwareBeautyDefaultsIfNeeded()
+                        }
+                        updatePresenterVideoEffectsForLastRecording()
+                    }
+            }
+            .disabled(!recordingFeatureTier.permitsSubjectAwareBeauty)
+            .opacity(recordingFeatureTier.permitsSubjectAwareBeauty ? 1 : 0.42)
+            .help(copy.text("presenterBeautyHelp"))
+
+            if presenterSmartBeautyEnabled && recordingFeatureTier.permitsSubjectAwareBeauty {
+                HStack(spacing: 8) {
+                    Text(copy.runtimeText("高级美颜"))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ConsolePalette.textSecondary)
+                    Spacer()
+                    Toggle("", isOn: $presenterAdvancedBeautyEnabled)
+                        .labelsHidden()
+                        .toggleStyle(ConsoleSwitchToggleStyle())
+                }
+                HStack(spacing: 8) {
+                    Text(copy.runtimeText("背景分割"))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ConsolePalette.textSecondary)
+                    Spacer()
+                    Toggle("", isOn: $presenterPortraitSegmentationEnabled)
+                        .labelsHidden()
+                        .toggleStyle(ConsoleSwitchToggleStyle())
+                }
+                MenuControlRow(label: copy.text("presenterBeautyStyle")) {
+                    Menu {
+                        ForEach(PresenterBeautyStyle.allCases, id: \.self) { style in
+                            Button(style.localizedLabel(copy)) {
+                                presenterBeautyStyle = style
+                                updatePresenterVideoEffectsForLastRecording()
+                            }
+                        }
+                    } label: {
+                        MenuFieldLabel(text: presenterBeautyStyle.localizedLabel(copy))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .buttonStyle(.plain)
+                }
+
+                presenterEffectSlider(
+                    label: copy.text("presenterSkinSmoothing"),
+                    value: $presenterSkinSmoothing,
+                    range: 0...1,
+                    format: { value in "\(Int((value * 100).rounded()))%" }
+                )
+                presenterEffectSlider(
+                    label: copy.text("presenterSkinBrightening"),
+                    value: $presenterSkinBrightening,
+                    range: 0...1,
+                    format: { value in "\(Int((value * 100).rounded()))%" }
+                )
+                presenterEffectSlider(
+                    label: copy.text("presenterSkinWhitening"),
+                    value: $presenterSkinWhitening,
+                    range: 0...1,
+                    format: { value in "\(Int((value * 100).rounded()))%" }
+                )
+                presenterEffectSlider(
+                    label: copy.text("presenterComplexion"),
+                    value: $presenterComplexion,
+                    range: 0...1,
+                    format: { value in "\(Int((value * 100).rounded()))%" }
+                )
+                presenterEffectSlider(
+                    label: copy.runtimeText("背景虚化"),
+                    value: $presenterBackgroundBlur,
+                    range: 0...1,
+                    format: { value in "\(Int((value * 100).rounded()))%" }
+                )
+                HStack(spacing: 8) {
+                    Text(copy.runtimeText("换背景"))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ConsolePalette.textSecondary)
+                    Spacer()
+                    Toggle("", isOn: $presenterBackgroundReplacementEnabled)
+                        .labelsHidden()
+                        .toggleStyle(ConsoleSwitchToggleStyle())
+                }
+                if presenterBackgroundReplacementEnabled {
+                    presenterEffectSlider(
+                        label: copy.runtimeText("替换强度"),
+                        value: $presenterBackgroundReplacementStrength,
+                        range: 0...1,
+                        format: { value in "\(Int((value * 100).rounded()))%" }
+                    )
+                }
+                presenterEffectSlider(
+                    label: copy.runtimeText("瘦脸"),
+                    value: $presenterFaceSlimming,
+                    range: 0...0.6,
+                    format: { value in "\(Int((value * 100).rounded()))%" }
+                )
+                presenterEffectSlider(
+                    label: copy.runtimeText("大眼"),
+                    value: $presenterEyeEnlargement,
+                    range: 0...0.5,
+                    format: { value in "\(Int((value * 100).rounded()))%" }
+                )
+                presenterEffectSlider(
+                    label: copy.text("presenterBlemishReduction"),
+                    value: $presenterBlemishReduction,
+                    range: 0...1,
+                    format: { value in "\(Int((value * 100).rounded()))%" }
+                )
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 8)
@@ -1844,6 +2082,12 @@ struct DashboardView: View {
             : screenPreview.latestImage
     }
 
+    private var monitorScreenSourceID: ScreenCaptureSourceID? {
+        commandController.isRecording
+            ? (latestScreenPreviewSourceID ?? screenPreview.latestSourceID)
+            : screenPreview.latestSourceID
+    }
+
     private var monitorScreenStatusLabel: String {
         guard monitorScreenImage == nil else {
             return screenSourcePreference.localizedLabel(copy)
@@ -1860,6 +2104,7 @@ struct DashboardView: View {
         recordCurrentLayoutKeyframeIfNeeded(force: true)
         if mode == .cameraOnly {
             latestScreenPreviewImage = nil
+            latestScreenPreviewSourceID = nil
             screenPreview.resetImage()
         }
         restartScreenPreviewIfNeeded()
@@ -1992,11 +2237,13 @@ struct DashboardView: View {
 
     private func exportProgramVideo(settings: RecordingExportSettings) {
         updatePresenterVideoEffectsForLastRecording()
-        commandController.exportProgramVideo(
+        activeProgramRenderTask?.cancel()
+        activeProgramRenderTask = commandController.exportProgramVideo(
             settings: settings,
             selectedRange: selectedTimelineRange,
             onProgress: { progress in
                 exportProgress = ExportProgressPresentation(
+                    title: copy.runtimeText("正在导出视频"),
                     fraction: progress.fraction,
                     width: progress.width,
                     height: progress.height,
@@ -2008,8 +2255,8 @@ struct DashboardView: View {
             completion: { result in
                 switch result {
                 case .success(let exportResult):
-                    exportProgress = nil
-                    exportOutcome = ExportOutcomePresentation(
+                    activeProgramRenderTask = nil
+                    presentExportOutcomeAfterProgressDismissal(ExportOutcomePresentation(
                         title: copy.runtimeText("导出完成"),
                         message: [
                             "\(exportResult.width)x\(exportResult.height)",
@@ -2017,20 +2264,91 @@ struct DashboardView: View {
                             compactPath(exportResult.url)
                         ].joined(separator: "\n"),
                         url: exportResult.url
-                    )
+                    ))
                 case .failure(let error):
-                    exportProgress = nil
+                    activeProgramRenderTask = nil
                     if case PresentationCommandControllerError.exportCancelled = error {
+                        exportProgress = nil
                         return
                     }
-                    exportOutcome = ExportOutcomePresentation(
+                    if case ProgramVideoRendererError.cancelled = error {
+                        exportProgress = nil
+                        return
+                    }
+                    presentExportOutcomeAfterProgressDismissal(ExportOutcomePresentation(
                         title: copy.runtimeText("导出失败"),
                         message: error.localizedDescription,
                         url: nil
-                    )
+                    ))
                 }
             }
         )
+    }
+
+    private func previewProgramExport() {
+        updatePresenterVideoEffectsForLastRecording()
+        activeProgramRenderTask?.cancel()
+        let previewSettings = RecordingExportSettings(
+            resolution: .hd1080,
+            frameRate: .fps30,
+            quality: .standard,
+            codec: .h264,
+            customPixelSize: nil
+        )
+        activeProgramRenderTask = commandController.previewLastProgramExport(
+            settings: previewSettings,
+            onProgress: { progress in
+                exportProgress = ExportProgressPresentation(
+                    title: copy.runtimeText("正在生成预览"),
+                    fraction: progress.fraction,
+                    width: progress.width,
+                    height: progress.height,
+                    fileSize: progress.writtenBytes,
+                    outputURL: progress.outputURL,
+                    settings: previewSettings
+                )
+            },
+            completion: { result in
+                activeProgramRenderTask = nil
+                switch result {
+                case .success(let previewResult):
+                    presentProgramPreviewAfterProgressDismissal(previewResult.url)
+                case .failure(let error):
+                    if case ProgramVideoRendererError.cancelled = error {
+                        exportProgress = nil
+                        return
+                    }
+                    presentExportOutcomeAfterProgressDismissal(ExportOutcomePresentation(
+                        title: copy.runtimeText("预览合成失败"),
+                        message: error.localizedDescription,
+                        url: nil
+                    ))
+                    return
+                }
+            }
+        )
+    }
+
+    private func presentProgramPreviewAfterProgressDismissal(_ url: URL) {
+        exportProgress = nil
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            commandController.presentProgramPreview(url)
+        }
+    }
+
+    private func presentExportOutcomeAfterProgressDismissal(_ outcome: ExportOutcomePresentation) {
+        exportProgress = nil
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            exportOutcome = outcome
+        }
+    }
+
+    private func cancelActiveProgramRender() {
+        activeProgramRenderTask?.cancel()
+        activeProgramRenderTask = nil
+        exportProgress = nil
     }
 
     private func applySelectedScreenWindows() {
@@ -2088,7 +2406,7 @@ struct DashboardView: View {
         guard commandController.lastRecordingSession != nil else {
             return
         }
-        commandController.updateLastRecordingPresenterVideoEffects(currentPresenterVideoEffects)
+        commandController.updateLastRecordingPresenterVideoEffects(effectivePresenterVideoEffects)
     }
 
     private func saveCurrentPiPTimelineForLastRecording() {
@@ -2236,6 +2554,7 @@ struct DashboardView: View {
         let selectedSourcePreference = screenSourcePreference
         let selectedSourceLabel = screenSourcePreference.localizedLabel(copy)
         latestScreenPreviewImage = nil
+        latestScreenPreviewSourceID = nil
         screenPreview.stop()
         screenPreview.resetImage()
         Task {
@@ -2257,17 +2576,20 @@ struct DashboardView: View {
 
     private func installScreenArchivePreviewHandler() {
         let generation = screenPreviewGeneration
-        screenArchiveRecorder.onPreviewImage = { image in
+        screenArchiveRecorder.onPreviewImage = { image, sourceID in
             guard generation == screenPreviewGeneration else { return }
             latestScreenPreviewImage = image
+            latestScreenPreviewSourceID = sourceID
         }
     }
 
     private func restartScreenPreviewIfNeeded() {
         if !commandController.isRecording {
             latestScreenPreviewImage = nil
+            latestScreenPreviewSourceID = nil
         }
         guard currentProgramUsesScreen else {
+            latestScreenPreviewSourceID = nil
             screenPreview.stop()
             screenPreview.resetImage()
             return
@@ -2299,7 +2621,7 @@ struct DashboardView: View {
             return "0 \(copy.trackUnit)"
         }
         let expectedURLs = rawTrackURLs(for: session)
-        let rawCount = expectedURLs.filter { FileManager.default.fileExists(atPath: $0.path) }.count
+        let rawCount = expectedURLs.filter { isNonEmptyFile(at: $0) }.count
         return "\(rawCount) / \(expectedURLs.count) \(copy.trackUnit)"
     }
 
@@ -2307,7 +2629,7 @@ struct DashboardView: View {
         guard let session = commandController.lastRecordingSession else {
             return copy.previewUnavailable
         }
-        return FileManager.default.fileExists(atPath: session.programOutputURL.path)
+        return isNonEmptyFile(at: session.programOutputURL)
             ? compactPath(session.programOutputURL)
             : copy.previewUnavailable
     }
@@ -2389,13 +2711,60 @@ struct DashboardView: View {
         }
     }
 
-    private var currentPresenterVideoEffects: PresenterVideoEffects {
-        PresenterVideoEffects(
+    private func currentPresenterVideoEffects(permittedBy tier: RecordingFeatureTier) -> PresenterVideoEffects {
+        let permitsSubjectAwareBeauty = tier.permitsSubjectAwareBeauty
+        let backgroundEffect: PresenterBackgroundEffect
+        if permitsSubjectAwareBeauty, presenterBackgroundReplacementEnabled {
+            backgroundEffect = .replacement(
+                colorHex: "#203040",
+                strength: Double(presenterBackgroundReplacementStrength)
+            )
+        } else if permitsSubjectAwareBeauty, presenterBackgroundBlur > 0 {
+            backgroundEffect = .blur(strength: Double(presenterBackgroundBlur))
+        } else {
+            backgroundEffect = .none
+        }
+
+        return PresenterVideoEffects(
             isMirrored: presenterMirrorEnabled,
-            brightness: Double(presenterBrightness),
-            contrast: Double(presenterContrast),
-            beauty: Double(presenterBeauty)
+            brightness: tier.permitsPresenterColorEffects ? Double(presenterBrightness) : 0,
+            contrast: tier.permitsPresenterColorEffects ? Double(presenterContrast) : 1,
+            beauty: tier.permitsPresenterColorEffects ? Double(presenterBeauty) : 0,
+            isSubjectAwareBeautyEnabled: permitsSubjectAwareBeauty && presenterSmartBeautyEnabled,
+            skinSmoothing: permitsSubjectAwareBeauty ? Double(presenterSkinSmoothing) : 0,
+            skinBrightening: permitsSubjectAwareBeauty ? Double(presenterSkinBrightening) : 0,
+            skinWhitening: permitsSubjectAwareBeauty ? Double(presenterSkinWhitening) : 0,
+            blemishReduction: permitsSubjectAwareBeauty ? Double(presenterBlemishReduction) : 0,
+            complexion: permitsSubjectAwareBeauty ? Double(presenterComplexion) : 0,
+            beautyStyle: presenterBeautyStyle,
+            advancedBeautyEnabled: permitsSubjectAwareBeauty && presenterAdvancedBeautyEnabled,
+            portraitSegmentationEnabled: permitsSubjectAwareBeauty && presenterPortraitSegmentationEnabled,
+            backgroundEffect: backgroundEffect,
+            backgroundBlur: permitsSubjectAwareBeauty ? Double(presenterBackgroundBlur) : 0,
+            faceLandmarkBeautyEnabled: permitsSubjectAwareBeauty && presenterFaceLandmarkBeautyEnabled,
+            faceSlimming: permitsSubjectAwareBeauty ? Double(presenterFaceSlimming) : 0,
+            eyeEnlargement: permitsSubjectAwareBeauty ? Double(presenterEyeEnlargement) : 0
         )
+    }
+
+    private func seedSubjectAwareBeautyDefaultsIfNeeded() {
+        guard recordingFeatureTier.permitsSubjectAwareBeauty else {
+            return
+        }
+        guard presenterBeauty == 0,
+              presenterSkinSmoothing == 0,
+              presenterSkinBrightening == 0,
+              presenterSkinWhitening == 0,
+              presenterBlemishReduction == 0,
+              presenterComplexion == 0 else {
+            return
+        }
+        presenterBeauty = 0.18
+        presenterSkinSmoothing = 0.20
+        presenterSkinBrightening = 0.12
+        presenterSkinWhitening = 0.08
+        presenterBlemishReduction = 0.10
+        presenterComplexion = 0.08
     }
 
     private var currentProgramShowsCameraOverlay: Bool {
@@ -2665,10 +3034,19 @@ struct DashboardView: View {
                FileManager.default.fileExists(atPath: url.path) {
                 states[asset.relativePath] = .writing
             } else {
-                states[asset.relativePath] = FileManager.default.fileExists(atPath: url.path) ? .ready : .missing
+                states[asset.relativePath] = isNonEmptyFile(at: url) ? .ready : .missing
             }
         }
         return states
+    }
+
+    private func isNonEmptyFile(at url: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return false
+        }
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?
+            .int64Value ?? 0
+        return size > 0
     }
 
     private func fileStatus(for url: URL) -> String {
@@ -4331,66 +4709,197 @@ private struct ProgramCanvasControls: View {
     let copy: AppCopy
     @Binding var aspect: ProgramCanvasAspect
     @Binding var resolution: ProgramCanvasResolution
+    @Binding var presenterBeautyControlsExpanded: Bool
+    @Binding var presenterSmartBeautyEnabled: Bool
+    @Binding var presenterBeauty: CGFloat
+    @Binding var presenterBeautyStyle: PresenterBeautyStyle
+    @Binding var presenterSkinSmoothing: CGFloat
+    @Binding var presenterSkinBrightening: CGFloat
+    @Binding var presenterSkinWhitening: CGFloat
+    @Binding var presenterBlemishReduction: CGFloat
+    @Binding var presenterComplexion: CGFloat
+    let onBeautyEditingEnded: () -> Void
+    let onBeautyEnabled: () -> Void
+    let isSubjectAwareBeautyPermitted: Bool
+    @State private var expandedPopover: CanvasControlPopover?
 
     var body: some View {
-        HStack(spacing: 8) {
-            Menu {
-                ForEach(ProgramCanvasAspect.allCases, id: \.self) { option in
-                    Button(option.label) {
-                        aspect = option
-                    }
+        controlRail
+            .overlay(alignment: .trailing) {
+                if let expandedPopover {
+                    popoverContent(for: expandedPopover)
+                        .offset(x: -62)
+                        .zIndex(2)
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
                 }
-            } label: {
-                canvasControlLabel(
-                    title: copy.runtimeText("画布"),
-                    icon: "aspectratio",
-                    text: aspect.label
-                )
             }
-            .menuStyle(.borderlessButton)
-            .buttonStyle(.plain)
-            .help(copy.runtimeText("切换监视器和默认导出的画面比例"))
+            .frame(width: 48, height: 156)
+        .zIndex(20)
+    }
 
-            Menu {
-                ForEach(ProgramCanvasResolution.allCases, id: \.self) { option in
-                    Button(option.label) {
-                        resolution = option
-                    }
+    private var controlRail: some View {
+        VStack(spacing: 8) {
+            CanvasControlRailButton(
+                title: copy.text("presenterSmartBeauty"),
+                shortTitle: copy.runtimeText("美颜"),
+                icon: "sparkles",
+                isActive: presenterSmartBeautyEnabled,
+                isEnabled: isSubjectAwareBeautyPermitted,
+                help: copy.text("presenterBeautyHelp")
+            ) {
+                guard isSubjectAwareBeautyPermitted else { return }
+                let willExpand = expandedPopover != .beauty
+                togglePopover(.beauty)
+                if willExpand && presenterSmartBeautyEnabled {
+                    onBeautyEnabled()
                 }
-            } label: {
-                canvasControlLabel(
-                    title: copy.runtimeText("清晰度"),
-                    icon: "rectangle.compress.vertical",
-                    text: resolution.label
-                )
             }
-            .menuStyle(.borderlessButton)
-            .buttonStyle(.plain)
-            .help(copy.runtimeText("切换预览和默认导出的输出分辨率"))
+
+            CanvasControlRailButton(
+                title: copy.runtimeText("画布"),
+                shortTitle: copy.runtimeText("画布"),
+                icon: "aspectratio",
+                isActive: expandedPopover == .aspect,
+                isEnabled: true,
+                help: copy.runtimeText("切换监视器和默认导出的画面比例")
+            ) {
+                togglePopover(.aspect)
+            }
+
+            CanvasControlRailButton(
+                title: copy.runtimeText("清晰度"),
+                shortTitle: copy.runtimeText("清晰"),
+                icon: "rectangle.compress.vertical",
+                isActive: expandedPopover == .resolution,
+                isEnabled: true,
+                help: copy.runtimeText("切换预览和默认导出的输出分辨率")
+            ) {
+                togglePopover(.resolution)
+            }
+        }
+        .padding(6)
+        .background(Color.black.opacity(0.56))
+        .background(.ultraThinMaterial.opacity(0.34))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(ConsolePalette.goldBright.opacity(0.96), lineWidth: 1.2)
+        )
+        .shadow(color: .black.opacity(0.82), radius: 16, x: 0, y: 7)
+    }
+
+    private func togglePopover(_ popover: CanvasControlPopover) {
+        if expandedPopover == popover {
+            expandedPopover = nil
+            if popover == .beauty {
+                presenterBeautyControlsExpanded = false
+            }
+        } else {
+            expandedPopover = popover
+            presenterBeautyControlsExpanded = popover == .beauty
         }
     }
 
-    private func canvasControlLabel(title: String, icon: String, text: String) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(ConsolePalette.goldBright)
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(ConsolePalette.textPrimary)
-            Text(text)
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundStyle(ConsolePalette.goldBright)
-            Image(systemName: "chevron.down")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(ConsolePalette.textPrimary.opacity(0.86))
+    @ViewBuilder
+    private func popoverContent(for popover: CanvasControlPopover) -> some View {
+        switch popover {
+        case .beauty:
+            presenterBeautyPanel
+        case .aspect:
+            CanvasOptionPanel(
+                title: copy.runtimeText("画布"),
+                options: ProgramCanvasAspect.allCases.map { CanvasOption(id: $0.rawValue, label: $0.label) },
+                selectedID: aspect.rawValue
+            ) { id in
+                if let next = ProgramCanvasAspect(rawValue: id) {
+                    aspect = next
+                }
+                expandedPopover = nil
+            }
+        case .resolution:
+            CanvasOptionPanel(
+                title: copy.runtimeText("清晰度"),
+                options: ProgramCanvasResolution.allCases.map { CanvasOption(id: $0.rawValue, label: $0.label) },
+                selectedID: resolution.rawValue
+            ) { id in
+                if let next = ProgramCanvasResolution(rawValue: id) {
+                    resolution = next
+                }
+                expandedPopover = nil
+            }
         }
-        .padding(.horizontal, 12)
-        .frame(height: 34)
+    }
+
+    private var presenterBeautyPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Toggle("", isOn: $presenterSmartBeautyEnabled)
+                    .labelsHidden()
+                    .toggleStyle(ConsoleSwitchToggleStyle())
+                    .onChange(of: presenterSmartBeautyEnabled) { _, enabled in
+                        if enabled {
+                            onBeautyEnabled()
+                        }
+                        onBeautyEditingEnded()
+                    }
+                Text(copy.text("presenterSmartBeauty"))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(ConsolePalette.textPrimary)
+                Spacer()
+                Menu {
+                    ForEach(PresenterBeautyStyle.allCases, id: \.self) { style in
+                        Button(style.localizedLabel(copy)) {
+                            presenterBeautyStyle = style
+                            onBeautyEditingEnded()
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(presenterBeautyStyle.localizedLabel(copy))
+                            .font(.system(size: 11, weight: .bold))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                    .foregroundStyle(ConsolePalette.goldBright)
+                    .padding(.horizontal, 9)
+                    .frame(height: 25)
+                    .background(ConsolePalette.overlay.opacity(0.58))
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(ConsolePalette.innerBorder, lineWidth: 1)
+                    )
+                }
+                .menuStyle(.borderlessButton)
+                .buttonStyle(.plain)
+                Button {
+                    closePopover()
+                } label: {
+                    CanvasControlIcon(name: "xmark")
+                        .frame(width: 24, height: 24)
+                        .background(ConsolePalette.overlay.opacity(0.58))
+                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(ConsolePalette.innerBorder, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help(copy.runtimeText("关闭智能美颜面板"))
+            }
+            beautyPanelSlider(label: copy.text("presenterNaturalBeauty"), value: $presenterBeauty, range: 0...1)
+            beautyPanelSlider(label: copy.text("presenterSkinSmoothing"), value: $presenterSkinSmoothing, range: 0...1)
+            beautyPanelSlider(label: copy.text("presenterSkinBrightening"), value: $presenterSkinBrightening, range: 0...1)
+            beautyPanelSlider(label: copy.text("presenterSkinWhitening"), value: $presenterSkinWhitening, range: 0...1)
+            beautyPanelSlider(label: copy.text("presenterBlemishReduction"), value: $presenterBlemishReduction, range: 0...1)
+            beautyPanelSlider(label: copy.text("presenterComplexion"), value: $presenterComplexion, range: 0...1)
+        }
+        .padding(12)
+        .frame(width: 292)
         .background(
             LinearGradient(
                 colors: [
-                    Color.black.opacity(0.92),
+                    Color.black.opacity(0.94),
                     ConsolePalette.surface.opacity(0.98)
                 ],
                 startPoint: .top,
@@ -4400,9 +4909,271 @@ private struct ProgramCanvasControls: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(ConsolePalette.goldBright.opacity(0.92), lineWidth: 1.2)
+                .stroke(ConsolePalette.goldBright.opacity(0.78), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.86), radius: 14, x: 0, y: 6)
+        .shadow(color: .black.opacity(0.78), radius: 16, x: 0, y: 8)
+    }
+
+    private func beautyPanelSlider(
+        label: String,
+        value: Binding<CGFloat>,
+        range: ClosedRange<CGFloat>
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(ConsolePalette.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .frame(width: 52, alignment: .leading)
+            ConsoleValueSlider(value: value, range: range) {
+                onBeautyEditingEnded()
+            }
+            Text("\(Int((value.wrappedValue * 100).rounded()))%")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(ConsolePalette.textTertiary)
+                .frame(width: 36, alignment: .trailing)
+        }
+    }
+
+    private func closePopover() {
+        expandedPopover = nil
+        presenterBeautyControlsExpanded = false
+    }
+
+}
+
+private enum CanvasControlPopover: Hashable {
+    case beauty
+    case aspect
+    case resolution
+}
+
+private struct CanvasOption: Identifiable {
+    let id: String
+    let label: String
+}
+
+private struct CanvasOptionPanel: View {
+    let title: String
+    let options: [CanvasOption]
+    let selectedID: String
+    let select: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ConsolePalette.textPrimary)
+            ForEach(options) { option in
+                optionButton(option)
+            }
+        }
+        .padding(12)
+        .frame(width: 168)
+        .background(panelBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(ConsolePalette.goldBright.opacity(0.78), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.78), radius: 16, x: 0, y: 8)
+    }
+
+    private func optionButton(_ option: CanvasOption) -> some View {
+        let isSelected = selectedID == option.id
+        return Button {
+            select(option.id)
+        } label: {
+            HStack(spacing: 8) {
+                Text(option.label)
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(isSelected ? ConsolePalette.previewBase : ConsolePalette.goldBright)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if isSelected {
+                    CanvasControlIcon(name: "checkmark")
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(isSelected ? ConsolePalette.goldBright : ConsolePalette.overlay.opacity(0.58))
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(ConsolePalette.goldBright.opacity(isSelected ? 0.9 : 0.42), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var panelBackground: some View {
+        LinearGradient(
+            colors: [
+                Color.black.opacity(0.94),
+                ConsolePalette.surface.opacity(0.98)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+}
+
+private struct CanvasControlRailButton: View {
+    let title: String
+    let shortTitle: String
+    let icon: String
+    let isActive: Bool
+    let isEnabled: Bool
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                CanvasControlIcon(name: icon)
+                Text(shortTitle)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(ConsolePalette.goldBright)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .frame(width: 36, height: 42)
+            .background(buttonBackground)
+            .background(.ultraThinMaterial.opacity(0.42))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(ConsolePalette.goldBright.opacity(isActive ? 0.86 : 0.44), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.46)
+        .help("\(title) · \(help)")
+    }
+
+    private var buttonBackground: some View {
+        LinearGradient(
+            colors: [
+                Color.black.opacity(isActive ? 0.82 : 0.58),
+                ConsolePalette.surface.opacity(isActive ? 0.92 : 0.62)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+}
+
+private struct CanvasControlIcon: View {
+    let name: String
+    private let gold = Color(red: 255 / 255, green: 214 / 255, blue: 101 / 255)
+
+    var body: some View {
+        Canvas { context, size in
+            let stroke = StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)
+            let rect = CGRect(x: 3.5, y: 4.5, width: size.width - 7, height: size.height - 9)
+            var path = Path()
+            switch name {
+            case "sparkles":
+                drawSparkles(in: &context, size: size)
+            case "aspectratio":
+                path.addRoundedRect(in: rect, cornerSize: CGSize(width: 1.5, height: 1.5))
+                context.stroke(path, with: .color(gold), style: stroke)
+                var diagonal = Path()
+                diagonal.move(to: CGPoint(x: 6, y: 12.5))
+                diagonal.addLine(to: CGPoint(x: 12.5, y: 6))
+                diagonal.move(to: CGPoint(x: 6, y: 10))
+                diagonal.addLine(to: CGPoint(x: 6, y: 12.5))
+                diagonal.addLine(to: CGPoint(x: 8.5, y: 12.5))
+                diagonal.move(to: CGPoint(x: 10, y: 6))
+                diagonal.addLine(to: CGPoint(x: 12.5, y: 6))
+                diagonal.addLine(to: CGPoint(x: 12.5, y: 8.5))
+                context.stroke(diagonal, with: .color(gold), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+            case "rectangle.compress.vertical":
+                path.addRoundedRect(in: rect, cornerSize: CGSize(width: 1.5, height: 1.5))
+                context.stroke(path, with: .color(gold), style: stroke)
+                var lines = Path()
+                lines.move(to: CGPoint(x: 6.2, y: 7.2))
+                lines.addLine(to: CGPoint(x: 11.8, y: 7.2))
+                lines.move(to: CGPoint(x: 6.2, y: 9))
+                lines.addLine(to: CGPoint(x: 11.8, y: 9))
+                lines.move(to: CGPoint(x: 6.2, y: 10.8))
+                lines.addLine(to: CGPoint(x: 11.8, y: 10.8))
+                context.stroke(lines, with: .color(gold), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+            case "checkmark":
+                path.move(to: CGPoint(x: 4.5, y: 9.2))
+                path.addLine(to: CGPoint(x: 7.6, y: 12.2))
+                path.addLine(to: CGPoint(x: 13.7, y: 5.6))
+                context.stroke(path, with: .color(gold), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            case "xmark":
+                path.move(to: CGPoint(x: 5.5, y: 5.5))
+                path.addLine(to: CGPoint(x: 12.5, y: 12.5))
+                path.move(to: CGPoint(x: 12.5, y: 5.5))
+                path.addLine(to: CGPoint(x: 5.5, y: 12.5))
+                context.stroke(path, with: .color(gold), style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
+            default:
+                path.addEllipse(in: CGRect(x: 5, y: 5, width: 8, height: 8))
+                context.stroke(path, with: .color(gold), style: stroke)
+            }
+        }
+        .frame(width: 18, height: 18)
+    }
+
+    private func drawSparkles(in context: inout GraphicsContext, size: CGSize) {
+        let stroke = StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
+        var large = Path()
+        large.move(to: CGPoint(x: 8.5, y: 3.5))
+        large.addLine(to: CGPoint(x: 8.5, y: 12.5))
+        large.move(to: CGPoint(x: 4, y: 8))
+        large.addLine(to: CGPoint(x: 13, y: 8))
+        large.move(to: CGPoint(x: 5.4, y: 4.9))
+        large.addLine(to: CGPoint(x: 11.6, y: 11.1))
+        large.move(to: CGPoint(x: 11.6, y: 4.9))
+        large.addLine(to: CGPoint(x: 5.4, y: 11.1))
+        context.stroke(large, with: .color(gold), style: stroke)
+
+        var small = Path()
+        small.move(to: CGPoint(x: 14.2, y: 12.2))
+        small.addLine(to: CGPoint(x: 14.2, y: 15.2))
+        small.move(to: CGPoint(x: 12.7, y: 13.7))
+        small.addLine(to: CGPoint(x: 15.7, y: 13.7))
+        context.stroke(small, with: .color(gold), style: StrokeStyle(lineWidth: 1.1, lineCap: .round))
+    }
+}
+
+private struct CanvasControlChevron: View {
+    private let gold = Color(red: 255 / 255, green: 214 / 255, blue: 101 / 255)
+
+    var body: some View {
+        Canvas { context, _ in
+            var path = Path()
+            path.move(to: CGPoint(x: 1.5, y: 2.5))
+            path.addLine(to: CGPoint(x: 5, y: 6))
+            path.addLine(to: CGPoint(x: 8.5, y: 2.5))
+            context.stroke(path, with: .color(gold), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+        }
+        .frame(width: 10, height: 8)
+    }
+}
+
+private struct FeatureTierBadge: View {
+    let text: String
+    var isProminent = false
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(isProminent ? ConsolePalette.previewBase : ConsolePalette.goldBright)
+            .padding(.horizontal, 5)
+            .frame(height: 16)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(isProminent ? ConsolePalette.goldBright : Color.black.opacity(0.42))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(ConsolePalette.goldBright.opacity(0.72), lineWidth: 0.8)
+            )
     }
 }
 
@@ -4469,6 +5240,8 @@ private struct ProgramMonitorView: View {
     let layout: RecordingLayout
     let canvasAspectRatio: CGFloat
     let screenImage: CGImage?
+    let screenSourceID: ScreenCaptureSourceID?
+    let cameraPreviewImage: CGImage?
     let cameraSession: AVCaptureSession
     let cameraStatus: CameraStatus
     let cameraStatusDetail: String
@@ -4569,11 +5342,11 @@ private struct ProgramMonitorView: View {
         ZStack {
             switch layout {
             case .screenOnly:
-                screenLayer(fillMode: .fill)
+                screenLayer(fillMode: .fit)
             case .speakerCloseUp, .speakerFullBody:
                 cameraLayer
             case .screenWithCameraPictureInPicture:
-                screenLayer(fillMode: .fill)
+                screenLayer(fillMode: .fit)
                 pipCameraLayer
                     .position(pipPosition(in: size))
                     .gesture(pipDrag(in: size))
@@ -4584,7 +5357,7 @@ private struct ProgramMonitorView: View {
                     .gesture(pipDrag(in: size))
             case .sideBySide:
                 HStack(spacing: 0) {
-                    screenLayer(fillMode: .fill)
+                    screenLayer(fillMode: .fit)
                     cameraLayer
                 }
             }
@@ -4596,11 +5369,11 @@ private struct ProgramMonitorView: View {
         GeometryReader { proxy in
             ZStack {
                 if let screenImage {
-                    Image(decorative: screenImage, scale: 1)
-                        .resizable()
-                        .aspectRatio(contentMode: fillMode)
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .clipped()
+                    screenImageView(
+                        screenImage,
+                        preservesWholeSource: fillMode == .fit || screenSourceID?.isWindow == true,
+                        in: proxy.size
+                    )
                 } else {
                     ProgramCanvasPlaceholder(
                         copy: copy,
@@ -4616,11 +5389,31 @@ private struct ProgramMonitorView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    @ViewBuilder
+    private func screenImageView(_ image: CGImage, preservesWholeSource: Bool, in size: CGSize) -> some View {
+        let sourceSize = CGSize(width: image.width, height: image.height)
+        if preservesWholeSource {
+            let rect = ScreenArchiveRecorder.maxIntegralAspectFitRect(
+                sourceSize: sourceSize,
+                targetSize: size
+            )
+            Image(decorative: image, scale: 1)
+                .resizable()
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+        } else {
+            Image(decorative: image, scale: 1)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: size.width, height: size.height)
+                .clipped()
+        }
+    }
+
     private var cameraLayer: some View {
         ZStack {
             if cameraStatus == .running {
-                CameraPreviewView(session: cameraSession)
-                    .modifier(PresenterVideoPreviewEffectModifier(effects: presenterVideoEffects))
+                presenterCameraPreview
             } else {
                 cameraPlaceholder
             }
@@ -4632,8 +5425,7 @@ private struct ProgramMonitorView: View {
     private var pipCameraLayer: some View {
         pipChrome {
             if cameraStatus == .running {
-                CameraPreviewView(session: cameraSession)
-                    .modifier(PresenterVideoPreviewEffectModifier(effects: presenterVideoEffects))
+                presenterCameraPreview
             } else {
                 cameraPlaceholder
             }
@@ -4654,6 +5446,19 @@ private struct ProgramMonitorView: View {
                     target: screenSourceLabel
                 )
             }
+        }
+    }
+
+    @ViewBuilder
+    private var presenterCameraPreview: some View {
+        if let cameraPreviewImage {
+            Image(decorative: cameraPreviewImage, scale: 1)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .clipped()
+        } else {
+            CameraPreviewView(session: cameraSession)
+                .modifier(PresenterVideoPreviewEffectModifier(effects: presenterVideoEffects))
         }
     }
 
@@ -4835,7 +5640,17 @@ private struct PresenterVideoPreviewEffectModifier: ViewModifier {
             .scaleEffect(x: effects.isMirrored ? -1 : 1, y: 1, anchor: .center)
             .brightness(effects.brightness)
             .contrast(effects.contrast)
-            .blur(radius: effects.beauty * 1.4)
+            .brightness(effects.hasSubjectAwareBeautyAdjustments ? previewBeautyBrightness : 0)
+            .saturation(effects.hasSubjectAwareBeautyAdjustments ? previewBeautySaturation : 1)
+            .blur(radius: effects.hasSubjectAwareBeautyAdjustments ? 0 : effects.beauty * 1.4)
+    }
+
+    private var previewBeautyBrightness: Double {
+        min(0.18, effects.skinBrightening * 0.09 + effects.skinWhitening * 0.04 + effects.beauty * 0.05)
+    }
+
+    private var previewBeautySaturation: Double {
+        min(1.12, 1 + effects.complexion * 0.08)
     }
 }
 
@@ -4980,6 +5795,7 @@ private struct RecordingCountdownOverlay: View {
 private struct ExportProgressSheet: View {
     let copy: AppCopy
     let progress: ExportProgressPresentation
+    let cancel: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -4987,7 +5803,7 @@ private struct ExportProgressSheet: View {
                 ProgressView()
                     .controlSize(.small)
                     .tint(ConsolePalette.goldBright)
-                Text(copy.runtimeText("正在导出视频"))
+                Text(progress.title)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(ConsolePalette.textPrimary)
                 Spacer()
@@ -5012,6 +5828,14 @@ private struct ExportProgressSheet: View {
             Text(copy.runtimeText("导出期间请不要关闭灵演。"))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(ConsolePalette.textTertiary)
+
+            HStack {
+                Spacer()
+                Button(copy.runtimeText("取消")) {
+                    cancel()
+                }
+                .buttonStyle(ConsoleGradientButtonStyle(variant: .outline, expands: false, compact: true))
+            }
         }
         .padding(20)
         .frame(width: 430)
@@ -5226,6 +6050,21 @@ private extension PiPShape {
             return copy.text("pipShapeSquare")
         case .circle:
             return copy.text("pipShapeCircle")
+        }
+    }
+}
+
+private extension PresenterBeautyStyle {
+    func localizedLabel(_ copy: AppCopy) -> String {
+        switch self {
+        case .natural:
+            return copy.text("presenterBeautyNatural")
+        case .clean:
+            return copy.text("presenterBeautyClean")
+        case .bright:
+            return copy.text("presenterBeautyBright")
+        case .cameraReady:
+            return copy.text("presenterBeautyCameraReady")
         }
     }
 }

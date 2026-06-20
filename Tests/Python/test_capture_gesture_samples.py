@@ -25,12 +25,13 @@ class CaptureGestureSamplesTests(unittest.TestCase):
         self.assertEqual(module.resolve_label("指枪").canonical, "finger_gun")
         self.assertEqual(module.resolve_label("finger_gun").folder, "枪指")
         self.assertEqual(module.resolve_label("grab").folder, "抓握")
+        self.assertEqual(module.resolve_label("unknown").folder, "未知")
 
     def test_resolve_label_rejects_unknown_values(self):
         module = load_module()
 
         with self.assertRaises(ValueError):
-            module.resolve_label("unknown")
+            module.resolve_label("not-a-gesture")
 
     def test_parse_camera_value_accepts_auto_and_indices(self):
         module = load_module()
@@ -54,6 +55,7 @@ class CaptureGestureSamplesTests(unittest.TestCase):
             self.assertTrue((root / "揪取").is_dir())
             self.assertTrue((root / "抓握").is_dir())
             self.assertTrue((root / "开掌").is_dir())
+            self.assertTrue((root / "未知").is_dir())
 
     def test_next_sample_path_uses_canonical_numbering_without_overwriting(self):
         module = load_module()
@@ -87,11 +89,48 @@ class CaptureGestureSamplesTests(unittest.TestCase):
         module = load_module()
 
         label = module.resolve_label("剑指")
-        lines = module.overlay_lines(label, {"剑指": 1, "枪指": 2, "八字": 3, "揪取": 4, "抓握": 5, "开掌": 6})
+        lines = module.overlay_lines(label, {"剑指": 1, "枪指": 2, "八字": 3, "揪取": 4, "抓握": 5, "开掌": 6, "未知": 0})
 
         self.assertTrue(lines)
         for line in lines:
             line.encode("ascii")
+
+    def test_parse_capture_tags_accepts_known_light_and_distance_values(self):
+        module = load_module()
+
+        tags = module.parse_capture_tags("low_light, far")
+
+        self.assertEqual(tags.light, "low_light")
+        self.assertEqual(tags.distance, "far")
+
+        with self.assertRaises(ValueError):
+            module.parse_capture_tags("moonlight")
+
+    def test_quality_metrics_flags_dark_blurry_and_small_hand_frames(self):
+        module = load_module()
+
+        import numpy as np
+
+        frame = np.full((80, 120, 3), 18, dtype=np.uint8)
+        metrics = module.estimate_frame_quality(frame, hand_box=(50, 30, 8, 8))
+
+        self.assertLess(metrics.brightness, 30)
+        self.assertIn("low_light", metrics.flags)
+        self.assertIn("blurry", metrics.flags)
+        self.assertIn("hand_too_small", metrics.flags)
+
+    def test_next_sample_path_includes_optional_capture_tags(self):
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            label = module.resolve_label("剑指")
+            tags = module.CaptureTags(light="low_light", distance="far")
+            module.ensure_sample_directories(root)
+
+            path = module.next_sample_path(root, label, ".jpg", tags=tags)
+
+            self.assertEqual(path.name, "sword_low_light_far_0001.jpg")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+import Foundation
+
 /// Represents a single normalized landmark returned by MediaPipe.
 /// - Parameters:
 ///   - x: Normalized horizontal position in the `0...1` range.
@@ -125,6 +127,134 @@ public struct MediaPipeHandPrediction: Hashable, Sendable, Codable {
     }
 }
 
+public struct MediaPipePortraitBoundingBox: Hashable, Sendable, Codable {
+    public let x: Double
+    public let y: Double
+    public let width: Double
+    public let height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+
+public struct MediaPipeFaceBlendshape: Hashable, Sendable, Codable {
+    public let name: String
+    public let score: Double
+
+    public init(name: String, score: Double) {
+        self.name = name
+        self.score = score
+    }
+}
+
+public struct MediaPipeFacePrediction: Hashable, Sendable, Codable {
+    public let confidence: Double
+    public let boundingBox: MediaPipePortraitBoundingBox
+    public let landmarks: [MediaPipeNormalizedLandmark]
+    public let blendshapes: [MediaPipeFaceBlendshape]
+
+    enum CodingKeys: String, CodingKey {
+        case confidence
+        case boundingBox = "bounding_box"
+        case landmarks
+        case blendshapes
+    }
+
+    public init(
+        confidence: Double,
+        boundingBox: MediaPipePortraitBoundingBox,
+        landmarks: [MediaPipeNormalizedLandmark],
+        blendshapes: [MediaPipeFaceBlendshape] = []
+    ) {
+        self.confidence = confidence
+        self.boundingBox = boundingBox
+        self.landmarks = landmarks
+        self.blendshapes = blendshapes
+    }
+}
+
+public struct MediaPipePortraitSegmentationMask: Hashable, Sendable, Codable {
+    public let width: Int
+    public let height: Int
+    public let format: String
+    public let maskData: Data
+
+    enum CodingKeys: String, CodingKey {
+        case width
+        case height
+        case format
+        case maskBase64 = "mask_base64"
+    }
+
+    public init(width: Int, height: Int, format: String = "gray8", maskData: Data) {
+        self.width = width
+        self.height = height
+        self.format = format
+        self.maskData = maskData
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let maskBase64 = try container.decode(String.self, forKey: .maskBase64)
+        guard let maskData = Data(base64Encoded: maskBase64) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .maskBase64,
+                in: container,
+                debugDescription: "Segmentation mask is not valid base64."
+            )
+        }
+        self.init(
+            width: try container.decode(Int.self, forKey: .width),
+            height: try container.decode(Int.self, forKey: .height),
+            format: try container.decodeIfPresent(String.self, forKey: .format) ?? "gray8",
+            maskData: maskData
+        )
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(width, forKey: .width)
+        try container.encode(height, forKey: .height)
+        try container.encode(format, forKey: .format)
+        try container.encode(maskData.base64EncodedString(), forKey: .maskBase64)
+    }
+}
+
+public struct MediaPipePortraitFrame: Hashable, Sendable, Codable {
+    public let timestampMilliseconds: Int
+    public let faces: [MediaPipeFacePrediction]
+    public let segmentation: MediaPipePortraitSegmentationMask?
+
+    enum CodingKeys: String, CodingKey {
+        case timestampMilliseconds = "timestamp_ms"
+        case faces
+        case segmentation
+    }
+
+    public init(
+        timestampMilliseconds: Int,
+        faces: [MediaPipeFacePrediction] = [],
+        segmentation: MediaPipePortraitSegmentationMask? = nil
+    ) {
+        self.timestampMilliseconds = timestampMilliseconds
+        self.faces = faces
+        self.segmentation = segmentation
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            timestampMilliseconds: try container.decode(Int.self, forKey: .timestampMilliseconds),
+            faces: try container.decodeIfPresent([MediaPipeFacePrediction].self, forKey: .faces) ?? [],
+            segmentation: try container.decodeIfPresent(MediaPipePortraitSegmentationMask.self, forKey: .segmentation)
+        )
+    }
+}
+
 /// Represents an inference frame returned by the MediaPipe sidecar.
 /// - Parameters:
 ///   - timestampMilliseconds: Echoed frame timestamp.
@@ -132,15 +262,47 @@ public struct MediaPipeHandPrediction: Hashable, Sendable, Codable {
 public struct MediaPipeInferenceFrame: Hashable, Sendable, Codable {
     public let timestampMilliseconds: Int
     public let hands: [MediaPipeHandPrediction]
+    public let portrait: MediaPipePortraitFrame
 
     enum CodingKeys: String, CodingKey {
         case timestampMilliseconds = "timestamp_ms"
         case hands
+        case faces
+        case segmentation
     }
 
-    public init(timestampMilliseconds: Int, hands: [MediaPipeHandPrediction]) {
+    public init(
+        timestampMilliseconds: Int,
+        hands: [MediaPipeHandPrediction],
+        portrait: MediaPipePortraitFrame? = nil
+    ) {
         self.timestampMilliseconds = timestampMilliseconds
         self.hands = hands
+        self.portrait = portrait ?? MediaPipePortraitFrame(timestampMilliseconds: timestampMilliseconds)
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let timestampMilliseconds = try container.decode(Int.self, forKey: .timestampMilliseconds)
+        let faces = try container.decodeIfPresent([MediaPipeFacePrediction].self, forKey: .faces) ?? []
+        let segmentation = try container.decodeIfPresent(MediaPipePortraitSegmentationMask.self, forKey: .segmentation)
+        self.init(
+            timestampMilliseconds: timestampMilliseconds,
+            hands: try container.decodeIfPresent([MediaPipeHandPrediction].self, forKey: .hands) ?? [],
+            portrait: MediaPipePortraitFrame(
+                timestampMilliseconds: timestampMilliseconds,
+                faces: faces,
+                segmentation: segmentation
+            )
+        )
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(timestampMilliseconds, forKey: .timestampMilliseconds)
+        try container.encode(hands, forKey: .hands)
+        try container.encode(portrait.faces, forKey: .faces)
+        try container.encodeIfPresent(portrait.segmentation, forKey: .segmentation)
     }
 }
 
