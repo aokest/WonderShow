@@ -3911,7 +3911,7 @@ private struct AboutPopoverCard: View {
             }
         }
         .padding(16)
-        .frame(width: 236)
+        .frame(width: 262)
         .background(ConsolePalette.overlay)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
@@ -3943,7 +3943,7 @@ private struct AboutSupportQRCodeTile: View {
                         )
                 }
             }
-            .frame(width: 72, height: 72)
+            .frame(width: 94, height: 94)
             .background(Color.white)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
@@ -3955,7 +3955,7 @@ private struct AboutSupportQRCodeTile: View {
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundStyle(ConsolePalette.textTertiary)
         }
-        .frame(width: 82)
+        .frame(width: 104)
     }
 }
 
