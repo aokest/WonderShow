@@ -15,6 +15,8 @@ See [docs/HANDOFF-2026-06-18.md](docs/HANDOFF-2026-06-18.md) for the latest hand
 
 See [docs/recording-studio-roadmap.md](docs/recording-studio-roadmap.md) for the future recording editor, timeline zoom, picture-in-picture, and export roadmap.
 
+See [docs/OPEN_SOURCE_RELEASE_PLAN.md](docs/OPEN_SOURCE_RELEASE_PLAN.md) for the WonderShow Core open-source release plan and commercial boundary.
+
 ## Repository Remote
 
 - This project uses a NAS-hosted Gitea remote by default, not GitHub.
@@ -23,7 +25,7 @@ See [docs/recording-studio-roadmap.md](docs/recording-studio-roadmap.md) for the
 
 ## Current Status
 
-This repository currently contains the tested `v0.7.20260619 (202606190305)` macOS recording-studio baseline:
+This repository currently contains the tested `v1.0.0` macOS recording-studio baseline and a separate `WonderShow Core` open-source release kit:
 
 - gesture intent to presentation command mapping;
 - app compatibility strategy for Office, WPS, generic keyboard control, and HTML decks;
@@ -36,9 +38,21 @@ This repository currently contains the tested `v0.7.20260619 (202606190305)` mac
 - sample-level microphone recording with continuous program audio export;
 - preview composition and video export through the real renderer;
 - export settings for resolution, frame rate, quality, and codec;
-- multi-camera capability modeling, with Pocket 3 as one verified UVC input.
+- multi-camera capability modeling, with Pocket 3 as one verified UVC input;
+- `open-source/wondershow-core`, a public Swift package for project schemas, MediaPipe sidecar protocol, plugin APIs, examples, and tests.
 
-The current baseline has passed `rtk swift test --disable-sandbox` with 120 tests and `rtk bash scripts/build-app.sh` release packaging. Treat this version as the stable recording baseline before adding timeline editing, presenter video enhancement, menu-bar/mini-toolbar controls, licensing, multi-endpoint support, themes, and `Command+1` through `Command+6` fast source switching with user-defined source slots.
+The current baseline has passed `swift test --disable-sandbox` with 194 tests and `scripts/build-app.sh` release packaging in the v1.0.0 line. Treat this version as the protected stable recording baseline before adding timeline editing, presenter video enhancement, menu-bar/mini-toolbar controls, licensing, multi-endpoint support, themes, and source-slot fast switching changes.
+
+## Open Source Release Kit
+
+The planned public package is `WonderShow Core`, not the full commercial macOS app.
+
+```bash
+swift test --package-path open-source/wondershow-core
+./scripts/package-open-source-kit.sh
+```
+
+The generated archive is written to `releases/wondershow-core-<version>-<build>.zip`. The zip is a release artifact and is intentionally not tracked by Git.
 
 ## Development
 

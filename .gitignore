@@ -1,5 +1,6 @@
 .DS_Store
 /.build
+**/.build/
 /Packages
 xcuserdata/
 DerivedData/
@@ -13,3 +14,4 @@ sidecar/models/*.task
 .dbg/*.ndjson
 sidecar/__pycache__/
 *.pyc
+releases/*.zip

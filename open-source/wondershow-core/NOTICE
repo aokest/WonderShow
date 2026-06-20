@@ -1,0 +1,5 @@
+WonderShow Core
+Copyright 2026 WonderShow contributors
+
+WonderShow Core is the public ecosystem package for WonderShow. It does not include the commercial WonderShow macOS application, proprietary capture and rendering implementation, paid feature gates, signing assets, or distribution credentials.
+
