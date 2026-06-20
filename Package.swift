@@ -4,19 +4,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "PresenterDirector",
+    name: "WonderShow",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
-            name: "PresenterDirector",
-            targets: ["PresenterDirector"]
+            name: "WonderShow",
+            targets: ["WonderShow"]
         ),
         .executable(
-            name: "PresenterDirectorApp",
-            targets: ["PresenterDirectorApp"]
+            name: "WonderShowApp",
+            targets: ["WonderShowApp"]
         ),
         .executable(
             name: "screen-capture-diagnostic",
@@ -27,24 +27,24 @@ let package = Package(
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
-            name: "PresenterDirector"
+            name: "WonderShow"
         ),
         .executableTarget(
-            name: "PresenterDirectorApp",
-            dependencies: ["PresenterDirector"],
+            name: "WonderShowApp",
+            dependencies: ["WonderShow"],
             resources: [.process("Resources")]
         ),
         .executableTarget(
             name: "ScreenCaptureDiagnostic",
-            dependencies: ["PresenterDirector"]
+            dependencies: ["WonderShow"]
         ),
         .testTarget(
-            name: "PresenterDirectorTests",
-            dependencies: ["PresenterDirector"]
+            name: "WonderShowTests",
+            dependencies: ["WonderShow"]
         ),
         .testTarget(
-            name: "PresenterDirectorAppTests",
-            dependencies: ["PresenterDirectorApp"]
+            name: "WonderShowAppTests",
+            dependencies: ["WonderShowApp"]
         ),
     ],
     swiftLanguageModes: [.v6]

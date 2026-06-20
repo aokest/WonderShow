@@ -1,6 +1,6 @@
 # Recording Studio Roadmap
 
-This roadmap extends LingYan / WonderShow from a live presentation director into a polished recording studio.
+This roadmap extends WonderShow from a live presentation director into a polished recording studio.
 
 ## Current Usability
 
@@ -10,7 +10,7 @@ The current app can be tried as a recording studio baseline:
 - AVFoundation camera discovery is enabled.
 - The live preview can display a connected camera feed, including Pocket 3 when present.
 - Presentation target, recording mode, layout, audio input, and gesture strategy controls are present.
-- Core recording project planning is implemented in `PresenterDirector`: it can model presenter-camera and PPT/screen raw tracks, a program output, and timeline scenes for stage presentation and training-course recording.
+- Core recording project planning is implemented in `WonderShow`: it can model presenter-camera and PPT/screen raw tracks, a program output, and timeline scenes for stage presentation and training-course recording.
 - The current record button creates a `.wondershow` project folder under `~/Movies/灵演/` with `Raw/`, `Exports/`, and `project.json`.
 - Presenter camera, selected screen/window, and selected microphone tracks can be recorded to raw media.
 - Screen/window source picking supports list and thumbnail views and filters out background/no-window items.
@@ -43,7 +43,7 @@ The following features are not implemented yet:
 
 ## Product Scope Expansion
 
-LingYan / WonderShow should be designed as a recording and presentation studio, not only as a gesture remote.
+WonderShow should be designed as a recording and presentation studio, not only as a gesture remote.
 
 Core use cases:
 
@@ -87,7 +87,7 @@ This means the recording engine should be source-agnostic: it should not assume 
 
 ## Screen Studio-Inspired Capabilities
 
-LingYan should eventually include the strongest ideas from modern polished screen recorders while adapting them to presentation, multi-camera tracking, and gesture control.
+WonderShow should eventually include the strongest ideas from modern polished screen recorders while adapting them to presentation, multi-camera tracking, and gesture control.
 
 ### Timeline Tracks
 
@@ -166,7 +166,7 @@ The recording system should be built as a non-destructive editor:
 flowchart LR
     Capture["Capture Session"] --> RawMedia["Raw media files"]
     Capture --> Metadata["Event metadata"]
-    RawMedia --> Project["LingYan project"]
+    RawMedia --> Project["WonderShow project"]
     Metadata --> Project
     Project --> Timeline["Timeline editor"]
     Timeline --> Renderer["Renderer"]

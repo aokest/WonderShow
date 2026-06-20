@@ -28,19 +28,19 @@
 
 ## 当前代码切入点
 
-- `Sources/PresenterDirector/Recording.swift`
+- `Sources/WonderShow/Recording.swift`
   - `PresenterVideoEffects` 是讲者画面效果的 manifest 数据模型。
   - 旧项目缺字段时必须保持默认无效果，不能破坏历史项目导入。
-- `Sources/PresenterDirectorApp/DashboardView.swift`
+- `Sources/WonderShowApp/DashboardView.swift`
   - `presenterMirrorEnabled`、`presenterBrightness`、`presenterContrast`、`presenterBeauty` 是当前 UI 状态。
   - `currentPresenterVideoEffects` 把 UI 状态写成 `PresenterVideoEffects`。
   - `PresenterVideoPreviewEffectModifier` 负责实时预览里的基础效果。
-- `Sources/PresenterDirectorApp/ProgramVideoRenderer.swift`
+- `Sources/WonderShowApp/ProgramVideoRenderer.swift`
   - `ProgramVideoCompositor.applyPresenterEffects(...)` 负责导出 program 视频时应用讲者画面效果。
   - 这里必须和预览共享同一套效果语义，避免“预览好看、导出不一致”。
 - 现有测试可参考：
-  - `Tests/PresenterDirectorAppTests/ProgramVideoRendererTests.swift`
-  - `Tests/PresenterDirectorTests/RecordingStudioTests.swift`
+  - `Tests/WonderShowAppTests/ProgramVideoRendererTests.swift`
+  - `Tests/WonderShowTests/RecordingStudioTests.swift`
 
 ## 第一阶段目标
 
@@ -220,16 +220,16 @@ release zip: releases/lingyan-0.7.20260619-202606190305-macos.zip
 - 预览可降频检测并复用 landmarks，导出走高质量处理。
 
 重点代码切入点：
-- Sources/PresenterDirector/Recording.swift
+- Sources/WonderShow/Recording.swift
   - 扩展 PresenterVideoEffects，所有新增字段必须有默认值，旧 manifest 兼容。
-- Sources/PresenterDirectorApp/DashboardView.swift
+- Sources/WonderShowApp/DashboardView.swift
   - 扩展“讲者画面”区域 UI：智能美颜开关、总强度、高级滑杆。
   - PresenterVideoPreviewEffectModifier 或新的共享预览处理器需要体现同一套效果语义。
-- Sources/PresenterDirectorApp/ProgramVideoRenderer.swift
+- Sources/WonderShowApp/ProgramVideoRenderer.swift
   - ProgramVideoCompositor.applyPresenterEffects(...) 是导出 program 视频应用讲者效果的位置。
   - 把当前全画面 beauty 改为主体/脸部感知处理，不能影响屏幕层。
-- Tests/PresenterDirectorAppTests/ProgramVideoRendererTests.swift
-- Tests/PresenterDirectorTests/RecordingStudioTests.swift
+- Tests/WonderShowAppTests/ProgramVideoRendererTests.swift
+- Tests/WonderShowTests/RecordingStudioTests.swift
 
 开发原则：
 - 已稳定功能先写回归测试再改，小步提交。

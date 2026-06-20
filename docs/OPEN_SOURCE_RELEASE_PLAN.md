@@ -53,7 +53,7 @@ Open-source repository should include:
 
 Do not publish:
 
-- `Sources/PresenterDirectorApp`
+- `Sources/WonderShowApp`
 - capture/preview/export implementation;
 - app assets that are part of the paid product identity;
 - signing, notarization, update, payment, licensing, or telemetry files;

@@ -10,7 +10,7 @@
 
 ### 1. Core 单元测试
 
-- `PresenterDirector` 命令映射
+- `WonderShow` 命令映射
 - 手势模板与轨迹匹配
 - 手势解锁/冷却状态机
 - 热区判断与开掌停留识别
@@ -49,7 +49,7 @@
 
 ```bash
 rtk swift test --disable-sandbox
-rtk swift run --disable-sandbox PresenterDirectorApp
+rtk swift run --disable-sandbox WonderShowApp
 rtk bash scripts/build-app.sh
 ```
 

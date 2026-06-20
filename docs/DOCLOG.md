@@ -49,7 +49,7 @@
 - 目的：支撑导演台 UI 重构与手势稳态控制改造
 - 新增 `docs/modules/mediapipe-sidecar/*` 模块文档
 - 新增 `sidecar/` 本地 MediaPipe 推理服务骨架与安装脚本
-- 新增 `Sources/PresenterDirector/MediaPipeGesture.swift` 作为 MediaPipe 数据结构与适配层
+- 新增 `Sources/WonderShow/MediaPipeGesture.swift` 作为 MediaPipe 数据结构与适配层
 - 更新 `scripts/setup-mediapipe-sidecar.sh`，自动下载官方 `gesture_recognizer.task`
 - 更新 `CameraPreviewService`，sidecar 在线时优先使用 MediaPipe 实时推理
 - 更新 `CameraPreviewService`，个人校准模板未命中时自动回退到实时识别，并支持清空旧校准
@@ -86,14 +86,14 @@
   - 验证：必补 14 条单元测试覆盖 4 个真实问题（上一页不敏感、缩放反向、快速缩放不识别、缩放时翻页比缩放快）
   - 回滚：保留 `gesture.engine.version = "v0.6" | "v0.7"` 开关，v0.6.0 路径不动
   - 状态：待用户对决策点（§12）的 5 个问题回复后再进入代码实现阶段
-- 更新 `Sources/PresenterDirector/MediaPipeHandGeometry.swift`、`GestureStateMachine.swift`、`Gesture.swift`、`MediaPipeGesture.swift`、`CameraPreviewService.swift` 与 `DashboardView.swift`：开始落地 v0.7 结构性重构实现
+- 更新 `Sources/WonderShow/MediaPipeHandGeometry.swift`、`GestureStateMachine.swift`、`Gesture.swift`、`MediaPipeGesture.swift`、`CameraPreviewService.swift` 与 `DashboardView.swift`：开始落地 v0.7 结构性重构实现
   - 新增 `MediaPipeHandGeometry`：用 21 点 landmarks 推导 `palmSize`、`palmCenter`、`剑指`、`指枪`、严格 `L` 形
   - 新增 `GestureRecognitionStateMachine` 与 `GestureModeCoordinator`：为翻页/缩放提供 enter/exit/dwell/grace/cooldown 状态机与模式互斥
   - 重写 `ContinuousZoomTracker`：改为 dwell + hysteresis + grace，并增加反向抖动保护，解决“放大时偶发缩小”
   - 重写 `StreamingGestureRecognizer`：按单手窗口对称评估左右挥，解决“上一页不敏感”
   - `CameraPreviewService` 先仲裁模式再进入手势链路，确保双手缩放进入后绝对禁止翻页识别
   - `DashboardView` 吸收 Figma 暖金深色舞台风格，收窄右侧控制列并更新剑指提示
-- 更新 `Tests/PresenterDirectorTests/MediaPipeHandGeometryTests.swift` 与 `GestureRecognitionTests.swift`
+- 更新 `Tests/WonderShowTests/MediaPipeHandGeometryTests.swift` 与 `GestureRecognitionTests.swift`
   - 新增 v0.7 核心测试：缩放模式优先、缩放方向不反、快速缩放可识别、左右挥对称
   - 同步修正旧断言：不再允许 `unknown` 手型直接触发翻页
 - 更新 `docs/modules/gesture-control/*`、`docs/modules/mediapipe-sidecar/*`、`docs/ARCH.md`、`docs/TEST_STRATEGY.md`
@@ -107,7 +107,7 @@
   - 统一全链路缩放边界：将 30%-300% (0.30 - 3.0) 的边界约束同步到 ContinuousZoomTracker 默认值、PresentationCommandController 和 HTML Demo
   - 修复 `DashboardView.swift` 中的 `PictureInPictureCorner` 编译错误
 
-- 更新 `Sources/PresenterDirectorApp/DashboardView.swift`：根据 Figma 设计稿完整重构导演台界面，采用全新“暖黑金”设计系统，移除旧版原生/冷色卡片布局，实现了定制化胶囊状态栏、带有浮层和内发光的预览面板、可折叠的控制卡片列表以及深色金属质感的按钮/Toggle 控件。
+- 更新 `Sources/WonderShowApp/DashboardView.swift`：根据 Figma 设计稿完整重构导演台界面，采用全新“暖黑金”设计系统，移除旧版原生/冷色卡片布局，实现了定制化胶囊状态栏、带有浮层和内发光的预览面板、可折叠的控制卡片列表以及深色金属质感的按钮/Toggle 控件。
 - 更新 `docs/modules/dashboard/DESIGN.md`：同步修改视觉方向与布局原则。
 \n- 修复左上角 `AppIcon` 无法加载显示的 Bug，统一使用 `NSImage(named:)` 与 `NSApplication.shared.applicationIconImage` 兜底机制读取图标。\n- 修复语言切换功能，在原本仅有简体中文（`zhHans`）的基础上新增支持繁体中文（`zhHant`）和英文（`en`），并接入到右上角的语言切换菜单中。
 - [2026-06-16] 修复了 DashboardView 的语言切换 Bug（重构 UI 后枚举未正确映射到 AppLanguage），并更新单元测试通过
@@ -123,7 +123,7 @@
 
 - 新增录制工程核心模型：`RecordingProjectFactory` 将正式演讲录制和培训录屏对齐为同一套“讲者摄像头原始轨 + PPT/屏幕原始轨 + program 时间轴”的能力，默认区分正式演讲的讲者全身/讲者特写/讲者画中画/PPT 全屏，以及培训录屏的特写画中画/纯 PPT 视图。
 - 新增 `RecordingProjectManifest` 与 `RecordingMediaAsset`，支持 JSON 往返，并固化首版相对媒体路径：`Raw/presenter-camera.mov`、`Raw/slides-screen.mov`、`Exports/program.mp4`。
-- 新增 `Tests/PresenterDirectorTests/RecordingStudioTests.swift`，覆盖录制工程、时间轴视角、纯 PPT 场景不混入讲者图层、manifest 路径和 JSON 序列化。
+- 新增 `Tests/WonderShowTests/RecordingStudioTests.swift`，覆盖录制工程、时间轴视角、纯 PPT 场景不混入讲者图层、manifest 路径和 JSON 序列化。
 - 新增 App 层 `RecordingSessionService`，现有录制按钮开始时会在 `~/Movies/灵演/` 创建 `.wondershow` 工程目录、`Raw/`、`Exports/` 和 `project.json`。
 - 新增 `CameraArchiveRecorder`、`ScreenArchiveRecorder` 与 `ProgramVideoRenderer`：录制开始后写讲者摄像头 raw track，尝试通过 ScreenCaptureKit 写 PPT/屏幕 raw track，停止后按录制工程时间轴导出首版固定模板 `Exports/program.mp4`；本轮未改 Dashboard UI，屏幕权限或素材缺失时会保留工程并通过现有诊断文案提示。
 - 更新 Dashboard 录制相关 UI：在不改变整体框架的前提下新增“项目”卡片，展示保存位置、原始轨道、合成输出和自动导播模板，并提供打开项目、在 Finder 中显示、预览合成视频入口；快速启动区补充彩排“不保存文件”的语义说明。
