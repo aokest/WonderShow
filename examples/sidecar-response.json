@@ -1,0 +1,30 @@
+{
+  "frame_id": "frame-42",
+  "timestamp_ms": 1337,
+  "hands": [],
+  "faces": [
+    {
+      "confidence": 0.98,
+      "bounding_box": {
+        "x": 0.32,
+        "y": 0.18,
+        "width": 0.22,
+        "height": 0.34
+      },
+      "landmarks": [
+        {
+          "x": 0.41,
+          "y": 0.32,
+          "z": 0.02,
+          "visibility": 0.92
+        }
+      ]
+    }
+  ],
+  "portrait": {
+    "mask_width": 2,
+    "mask_height": 2,
+    "mask_base64_float32_le": "AAAA"
+  }
+}
+

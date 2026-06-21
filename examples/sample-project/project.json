@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "id": "demo-presentation",
+    "title": "WonderShow Demo Presentation",
+    "scenario": "stagePresentation",
+    "sourceSlots": [
+      {
+        "id": "slides",
+        "label": "Slides",
+        "role": "slidesScreen",
+        "inputKind": "window"
+      },
+      {
+        "id": "presenter",
+        "label": "Presenter",
+        "role": "presenterCamera",
+        "inputKind": "camera"
+      }
+    ],
+    "timeline": {
+      "durationMilliseconds": 60000,
+      "segments": [
+        {
+          "startMilliseconds": 0,
+          "endMilliseconds": 60000,
+          "scene": {
+            "view": "slidesWithSpeakerPictureInPicture",
+            "layers": [
+              {
+                "sourceSlotId": "slides",
+                "placement": {
+                  "kind": "fullCanvas"
+                },
+                "opacity": 1
+              },
+              {
+                "sourceSlotId": "presenter",
+                "placement": {
+                  "kind": "pictureInPicture",
+                  "corner": "bottomRight",
+                  "size": "medium"
+                },
+                "opacity": 1
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "exportSettings": {
+      "resolution": "hd1080p",
+      "frameRate": "fps30",
+      "quality": "high",
+      "codec": "h264"
+    },
+    "presenterEffects": {
+      "enabled": false,
+      "beauty": {
+        "enabled": false,
+        "style": "natural",
+        "skinSmoothing": 0,
+        "complexion": 0,
+        "faceSlimming": 0,
+        "eyeScale": 0
+      },
+      "background": {
+        "effect": "none",
+        "strength": 0
+      },
+      "faceReplacement": {
+        "enabled": false,
+        "emoji": null,
+        "scale": 1
+      }
+    }
+  },
+  "mediaAssets": [
+    {
+      "id": "presenter-video",
+      "role": "presenterCamera",
+      "relativePath": "Raw/presenter-camera.mov",
+      "mediaType": "video"
+    },
+    {
+      "id": "slides-video",
+      "role": "slidesScreen",
+      "relativePath": "Raw/slides-screen.mov",
+      "mediaType": "video"
+    }
+  ]
+}
+
