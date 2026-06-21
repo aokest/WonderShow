@@ -27,9 +27,28 @@ enum WonderShowLocalSecurity {
     }()
 
     static func applyTokenEnvironment(to process: Process) {
-        var environment = ProcessInfo.processInfo.environment
+        process.environment = sidecarEnvironment()
+    }
+
+    static func sidecarEnvironment(
+        from hostEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        let allowedKeys = [
+            "PATH",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "SYSTEMROOT",
+            "TMPDIR",
+        ]
+        var environment: [String: String] = [:]
+        for key in allowedKeys {
+            if let value = hostEnvironment[key] {
+                environment[key] = value
+            }
+        }
         environment["WONDERSHOW_LOCAL_TOKEN"] = sharedToken
-        process.environment = environment
+        return environment
     }
 
     static func isAuthorized(_ token: String?) -> Bool {

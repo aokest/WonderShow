@@ -63,6 +63,8 @@ cat <<'EOF'
 1. 执行：
 
    source .venv-mediapipe/bin/activate
-   python sidecar/server.py
+   WONDERSHOW_LOCAL_TOKEN="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')" python sidecar/server.py
+
+   App 自动启动 sidecar 时会自行生成一次性 token；手动调试也必须提供 token。
 
 EOF

@@ -29,6 +29,98 @@ import Testing
     #expect(rejected)
 }
 
+@Test func manifestValidatorRejectsUnsafeMediaAssetRelativePaths() throws {
+    let unsafePaths = [
+        "../Raw/presenter-camera.mov",
+        "Raw/../../secrets.txt",
+        "/Users/example/secrets.txt",
+        "~/Library/Keychains/login.keychain-db",
+        "Raw\\..\\secrets.txt",
+        "",
+    ]
+
+    for unsafePath in unsafePaths {
+        var manifest = sampleManifest()
+        manifest.mediaAssets[0].relativePath = unsafePath
+
+        var rejected = false
+        do {
+            try WonderShowManifestValidator.validate(manifest)
+        } catch let error as WonderShowManifestValidationError {
+            if case .unsafeMediaAssetPath(let assetId, _) = error {
+                rejected = assetId == "presenter-video"
+            }
+        }
+
+        #expect(rejected)
+    }
+}
+
+@Test func manifestValidatorRejectsOutOfRangePresenterEffectValues() throws {
+    var manifest = sampleManifest()
+    manifest.project.presenterEffects = WonderShowPresenterVideoEffects(
+        enabled: true,
+        beauty: WonderShowBeautySettings(
+            enabled: true,
+            style: .natural,
+            skinSmoothing: 1.2,
+            complexion: 0.2,
+            faceSlimming: 0.3,
+            eyeScale: 0.1
+        ),
+        background: WonderShowBackgroundSettings(effect: .blur, strength: 0.3),
+        faceReplacement: WonderShowFaceReplacementSettings(enabled: true, emoji: "🙂", scale: 1.2)
+    )
+
+    var rejected = false
+    do {
+        try WonderShowManifestValidator.validate(manifest)
+    } catch let error as WonderShowManifestValidationError {
+        if case .invalidEffectParameter(let name, _) = error {
+            rejected = name == "skinSmoothing"
+        }
+    }
+
+    #expect(rejected)
+}
+
+@Test func manifestValidatorRejectsInvalidFaceReplacementScale() throws {
+    var manifest = sampleManifest()
+    manifest.project.presenterEffects = WonderShowPresenterVideoEffects(
+        enabled: true,
+        beauty: .disabled,
+        background: .none,
+        faceReplacement: WonderShowFaceReplacementSettings(enabled: true, emoji: "🙂", scale: 10)
+    )
+
+    var rejected = false
+    do {
+        try WonderShowManifestValidator.validate(manifest)
+    } catch let error as WonderShowManifestValidationError {
+        if case .invalidEffectParameter(let name, _) = error {
+            rejected = name == "faceReplacement.scale"
+        }
+    }
+
+    #expect(rejected)
+}
+
+@Test func mediaAssetPathSecurityResolvesOnlyInsideProjectRoot() throws {
+    let root = URL(fileURLWithPath: "/tmp/WonderShow Project", isDirectory: true)
+    let safe = try WonderShowMediaPathSecurity.resolvedMediaURL(
+        relativePath: "Raw/presenter-camera.mov",
+        projectRoot: root
+    )
+    #expect(safe.path.hasSuffix("/tmp/WonderShow Project/Raw/presenter-camera.mov"))
+
+    #expect(throws: WonderShowMediaPathSecurityError.self) {
+        _ = try WonderShowMediaPathSecurity.resolvedMediaURL(
+            relativePath: "../outside.mov",
+            projectRoot: root
+        )
+    }
+}
+
 @Test func presenterEffectsStoreEmojiScaleSeparatelyFromEnablement() throws {
     let effects = WonderShowPresenterVideoEffects(
         enabled: true,
@@ -97,4 +189,3 @@ private func sampleManifest() -> WonderShowProjectManifest {
         ]
     )
 }
-

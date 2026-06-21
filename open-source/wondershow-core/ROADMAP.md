@@ -5,11 +5,15 @@
 - Project manifest schema.
 - MediaPipe sidecar request and response types.
 - Plugin metadata and extension protocols.
+- Manifest path and presenter-effect validation.
+- Local sidecar token and payload-bound security constants.
+- Plugin environment allowlisting and export destination containment helpers.
 - Example project and plugin skeleton.
 
 ## 0.2 Compatibility Tooling
 
 - Manifest validator CLI.
+- Optional manifest digest/signature fields and verification helpers.
 - Schema migration helpers.
 - More sample projects.
 - Sidecar conformance tests.
@@ -23,4 +27,3 @@
 ## Commercial App Track
 
 The commercial WonderShow app will continue separately with signed builds, reliable recording, preview/export parity, performance work, and paid creator workflows.
-

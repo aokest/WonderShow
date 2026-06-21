@@ -52,3 +52,55 @@ import Testing
     #expect(request.settings.resolution == .uhd4k)
 }
 
+@Test func pluginContextOnlyExposesExplicitlyAllowedEnvironmentValues() {
+    let hostEnvironment = [
+        "PATH": "/usr/bin:/bin",
+        "WONDERSHOW_PLUGIN_MODE": "sandbox",
+        "SECRET_API_KEY": "should-not-leak",
+        "TOKEN": "should-not-leak",
+    ]
+
+    let context = WonderShowPluginContext(
+        hostAppVersion: "1.0.0",
+        projectDirectory: nil,
+        environment: hostEnvironment,
+        allowedEnvironmentKeys: ["WONDERSHOW_PLUGIN_MODE"]
+    )
+
+    #expect(context.environment == ["WONDERSHOW_PLUGIN_MODE": "sandbox"])
+    #expect(context.environment["SECRET_API_KEY"] == nil)
+    #expect(context.environment["TOKEN"] == nil)
+}
+
+@Test func pluginContextDefaultsToEmptyEnvironment() {
+    let context = WonderShowPluginContext(hostAppVersion: "1.0.0")
+
+    #expect(context.environment.isEmpty)
+}
+
+@Test func exportDestinationSecurityRejectsEscapingPaths() throws {
+    let root = URL(fileURLWithPath: "/tmp/wondershow-project", isDirectory: true)
+    let safe = try WonderShowPluginPathSecurity.authorizedDestinationURL(
+        URL(fileURLWithPath: "/tmp/wondershow-project/Exports/program.mp4"),
+        allowedDirectory: root
+    )
+    #expect(safe.path.hasSuffix("/tmp/wondershow-project/Exports/program.mp4"))
+
+    #expect(throws: WonderShowPluginPathSecurityError.self) {
+        _ = try WonderShowPluginPathSecurity.authorizedDestinationURL(
+            URL(fileURLWithPath: "/tmp/other/program.mp4"),
+            allowedDirectory: root
+        )
+    }
+}
+
+@Test func exportDestinationSecurityRejectsDirectoryDestination() throws {
+    let root = URL(fileURLWithPath: "/tmp/wondershow-project", isDirectory: true)
+
+    #expect(throws: WonderShowPluginPathSecurityError.self) {
+        _ = try WonderShowPluginPathSecurity.authorizedDestinationURL(
+            URL(fileURLWithPath: "/tmp/wondershow-project/Exports", isDirectory: true),
+            allowedDirectory: root
+        )
+    }
+}

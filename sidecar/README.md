@@ -83,13 +83,14 @@ cd "<repo-root>"
 ```bash
 cd "<repo-root>"
 source .venv-mediapipe/bin/activate
-WONDERSHOW_LOCAL_TOKEN=dev-local-token-please-change python sidecar/server.py
+export WONDERSHOW_LOCAL_TOKEN="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
+python sidecar/server.py
 ```
 
 ## 健康检查
 
 ```bash
-curl -H "X-WonderShow-Local-Token: dev-local-token-please-change" \
+curl -H "X-WonderShow-Local-Token: ${WONDERSHOW_LOCAL_TOKEN}" \
   http://127.0.0.1:18777/health
 ```
 

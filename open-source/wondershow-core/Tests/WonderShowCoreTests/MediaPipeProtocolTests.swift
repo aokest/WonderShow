@@ -52,5 +52,58 @@ import Testing
     #expect(WonderShowMediaPipeProtocol.defaultPort == 18_777)
     #expect(WonderShowMediaPipeProtocol.localTokenHeader == "X-WonderShow-Local-Token")
     #expect(WonderShowMediaPipeProtocol.inferPath == "/infer")
+    #expect(WonderShowMediaPipeProtocol.loopbackHost == "127.0.0.1")
+    #expect(WonderShowMediaPipeProtocol.minimumTokenBytes == 16)
+    #expect(WonderShowMediaPipeProtocol.maximumJPEGBytes == 6 * 1_024 * 1_024)
 }
 
+@Test func mediaPipeSecurityAcceptsStrongTokensAndRejectsWeakTokens() {
+    let strongToken = String(repeating: "a", count: 32)
+
+    #expect(WonderShowMediaPipeSecurity.isPlausibleLocalToken(strongToken))
+    #expect(!WonderShowMediaPipeSecurity.isPlausibleLocalToken("short"))
+    #expect(!WonderShowMediaPipeSecurity.isPlausibleLocalToken(""))
+}
+
+@Test func mediaPipeSecurityRejectsOversizedJPEGPayloads() {
+    let safeRequest = WonderShowMediaPipeInferRequest(
+        frameId: "frame-safe",
+        timestampMilliseconds: 100,
+        imageBase64JPEG: Data(repeating: 1, count: 128).base64EncodedString(),
+        tasks: [.handLandmarks]
+    )
+    #expect(throws: Never.self) {
+        try WonderShowMediaPipeSecurity.validate(safeRequest)
+    }
+
+    let oversizedRequest = WonderShowMediaPipeInferRequest(
+        frameId: "frame-large",
+        timestampMilliseconds: 100,
+        imageBase64JPEG: Data(
+            repeating: 1,
+            count: WonderShowMediaPipeProtocol.maximumJPEGBytes + 1
+        ).base64EncodedString(),
+        tasks: [.handLandmarks]
+    )
+    #expect(throws: WonderShowMediaPipeSecurityError.self) {
+        try WonderShowMediaPipeSecurity.validate(oversizedRequest)
+    }
+}
+
+@Test func mediaPipeSecurityRejectsOversizedPortraitMasks() {
+    let response = WonderShowMediaPipeInferResponse(
+        frameId: "frame-mask",
+        timestampMilliseconds: 100,
+        hands: [],
+        faces: [],
+        portrait: WonderShowMediaPipePortraitPrediction(
+            maskWidth: 4096,
+            maskHeight: 4096,
+            maskBase64Float32LE: "AAAA"
+        )
+    )
+
+    #expect(throws: WonderShowMediaPipeSecurityError.self) {
+        try WonderShowMediaPipeSecurity.validate(response)
+    }
+}

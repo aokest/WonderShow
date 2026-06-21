@@ -30,6 +30,18 @@ WonderShow Core is released under Apache-2.0. See `LICENSE` and `NOTICE`.
 swift test
 ```
 
+## Security Defaults
+
+WonderShow Core is a contract package, but it includes guardrails that host apps should use before trusting imported projects or plugins:
+
+- `WonderShowManifestValidator.validate(_:)` rejects unsafe media paths and invalid effect ranges.
+- `WonderShowMediaPathSecurity.resolvedMediaURL(relativePath:projectRoot:)` resolves project media without path traversal.
+- `WonderShowMediaPipeSecurity` documents local-only token, payload, landmark, and mask bounds for sidecar implementations.
+- `WonderShowPluginContext` exposes no environment variables unless the host allowlists specific keys.
+- `WonderShowPluginPathSecurity.authorizedDestinationURL(_:allowedDirectory:)` keeps export plugins inside a host-approved directory.
+
+See `SECURITY.md` before implementing a sidecar, importer, exporter, or plugin host.
+
 ## Package Layout
 
 ```text
@@ -48,4 +60,3 @@ examples/
 The open package is intentionally useful on its own: it lets developers inspect project files, generate manifests, validate integrations, build local sidecars, and prototype plugins.
 
 The paid WonderShow app remains the recommended path for creators who need a signed macOS app, stable recording, complete preview/export behavior, polished controls, advanced rendering, and support. See `COMMERCIAL.md` and `PACKAGE_BOUNDARY.md` for the full boundary.
-

@@ -389,6 +389,8 @@ public enum WonderShowManifestValidationError: Error, Equatable, Sendable {
     case missingSourceSlot(String)
     case invalidOpacity(index: Int)
     case invalidNormalizedFrame(index: Int)
+    case unsafeMediaAssetPath(assetId: String, relativePath: String)
+    case invalidEffectParameter(name: String, value: Double)
 }
 
 public enum WonderShowManifestValidator {
@@ -405,6 +407,17 @@ public enum WonderShowManifestValidator {
         guard !manifest.project.timeline.segments.isEmpty else {
             throw WonderShowManifestValidationError.emptyTimeline
         }
+
+        for asset in manifest.mediaAssets {
+            guard WonderShowMediaPathSecurity.isSafeRelativeMediaPath(asset.relativePath) else {
+                throw WonderShowManifestValidationError.unsafeMediaAssetPath(
+                    assetId: asset.id,
+                    relativePath: asset.relativePath
+                )
+            }
+        }
+
+        try validatePresenterEffects(manifest.project.presenterEffects)
 
         let sourceSlotIds = Set(manifest.project.sourceSlots.map(\.id))
         for (segmentIndex, segment) in manifest.project.timeline.segments.enumerated() {
@@ -427,6 +440,67 @@ public enum WonderShowManifestValidator {
             }
         }
     }
+
+    private static func validatePresenterEffects(_ effects: WonderShowPresenterVideoEffects) throws {
+        let beauty = effects.beauty
+        try validateUnitInterval(beauty.skinSmoothing, name: "skinSmoothing")
+        try validateUnitInterval(beauty.complexion, name: "complexion")
+        try validateUnitInterval(beauty.faceSlimming, name: "faceSlimming")
+        try validateUnitInterval(beauty.eyeScale, name: "eyeScale")
+        try validateUnitInterval(effects.background.strength, name: "background.strength")
+
+        let faceScale = effects.faceReplacement.scale
+        guard faceScale >= 0.25, faceScale <= 4 else {
+            throw WonderShowManifestValidationError.invalidEffectParameter(
+                name: "faceReplacement.scale",
+                value: faceScale
+            )
+        }
+    }
+
+    private static func validateUnitInterval(_ value: Double, name: String) throws {
+        guard value >= 0, value <= 1 else {
+            throw WonderShowManifestValidationError.invalidEffectParameter(name: name, value: value)
+        }
+    }
+}
+
+public enum WonderShowMediaPathSecurityError: Error, Equatable, Sendable {
+    case unsafeRelativePath(String)
+}
+
+public enum WonderShowMediaPathSecurity {
+    public static func isSafeRelativeMediaPath(_ relativePath: String) -> Bool {
+        let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return false
+        }
+        guard !trimmed.hasPrefix("/") && !trimmed.hasPrefix("~") else {
+            return false
+        }
+        guard !trimmed.contains("\\") else {
+            return false
+        }
+
+        let components = trimmed.split(separator: "/", omittingEmptySubsequences: false)
+        guard !components.contains(where: { $0 == "." || $0 == ".." || $0.isEmpty }) else {
+            return false
+        }
+        return true
+    }
+
+    public static func resolvedMediaURL(relativePath: String, projectRoot: URL) throws -> URL {
+        guard isSafeRelativeMediaPath(relativePath) else {
+            throw WonderShowMediaPathSecurityError.unsafeRelativePath(relativePath)
+        }
+
+        let root = projectRoot.standardizedFileURL.resolvingSymlinksInPath()
+        let resolved = root.appendingPathComponent(relativePath).standardizedFileURL.resolvingSymlinksInPath()
+        guard resolved.isContained(in: root) else {
+            throw WonderShowMediaPathSecurityError.unsafeRelativePath(relativePath)
+        }
+        return resolved
+    }
 }
 
 private extension WonderShowNormalizedRect {
@@ -440,3 +514,10 @@ private extension WonderShowNormalizedRect {
     }
 }
 
+private extension URL {
+    func isContained(in directory: URL) -> Bool {
+        let path = standardizedFileURL.path
+        let directoryPath = directory.standardizedFileURL.path
+        return path == directoryPath || path.hasPrefix(directoryPath + "/")
+    }
+}

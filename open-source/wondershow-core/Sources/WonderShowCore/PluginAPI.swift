@@ -68,10 +68,15 @@ public struct WonderShowPluginContext: Sendable {
     public var projectDirectory: URL?
     public var environment: [String: String]
 
-    public init(hostAppVersion: String, projectDirectory: URL? = nil, environment: [String: String] = [:]) {
+    public init(
+        hostAppVersion: String,
+        projectDirectory: URL? = nil,
+        environment: [String: String] = [:],
+        allowedEnvironmentKeys: Set<String> = []
+    ) {
         self.hostAppVersion = hostAppVersion
         self.projectDirectory = projectDirectory
-        self.environment = environment
+        self.environment = environment.filter { allowedEnvironmentKeys.contains($0.key) }
     }
 }
 
@@ -162,3 +167,33 @@ public struct WonderShowExportResult: Codable, Equatable, Sendable {
     }
 }
 
+public enum WonderShowPluginPathSecurityError: Error, Equatable, Sendable {
+    case destinationEscapesAllowedDirectory(URL)
+    case destinationIsDirectory(URL)
+}
+
+public enum WonderShowPluginPathSecurity {
+    public static func authorizedDestinationURL(
+        _ destinationURL: URL,
+        allowedDirectory: URL
+    ) throws -> URL {
+        let allowedRoot = allowedDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        let destination = destinationURL.standardizedFileURL.resolvingSymlinksInPath()
+
+        guard destination.isContained(in: allowedRoot) else {
+            throw WonderShowPluginPathSecurityError.destinationEscapesAllowedDirectory(destinationURL)
+        }
+        guard !destination.hasDirectoryPath else {
+            throw WonderShowPluginPathSecurityError.destinationIsDirectory(destinationURL)
+        }
+        return destination
+    }
+}
+
+private extension URL {
+    func isContained(in directory: URL) -> Bool {
+        let path = standardizedFileURL.path
+        let directoryPath = directory.standardizedFileURL.path
+        return path == directoryPath || path.hasPrefix(directoryPath + "/")
+    }
+}

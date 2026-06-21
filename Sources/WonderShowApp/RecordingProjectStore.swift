@@ -7,6 +7,8 @@ enum RecordingProjectStoreError: Error, LocalizedError {
     case unsupportedSchemaVersion(Int)
     case missingProgramExport(URL)
     case sameSourceAndDestination(URL)
+    case unsafeMediaAssetPath(String)
+    case unsafeExportDestination(URL)
 
     var errorDescription: String? {
         switch self {
@@ -20,6 +22,10 @@ enum RecordingProjectStoreError: Error, LocalizedError {
             return "合成视频尚未生成：\(url.path)"
         case .sameSourceAndDestination(let url):
             return "导出位置不能与源文件相同：\(url.path)"
+        case .unsafeMediaAssetPath(let path):
+            return "项目包含不安全的媒体路径，已拒绝导入：\(path)"
+        case .unsafeExportDestination(let url):
+            return "导出位置不安全，已拒绝写入：\(url.path)"
         }
     }
 }
@@ -58,6 +64,7 @@ struct RecordingProjectStore {
         guard Self.supportedSchemaVersions.contains(manifest.schemaVersion) else {
             throw RecordingProjectStoreError.unsupportedSchemaVersion(manifest.schemaVersion)
         }
+        try validateMediaAssetPaths(manifest.mediaAssets)
         return RecordingSessionRecord(
             url: projectURL,
             manifestURL: manifestURL,
@@ -70,6 +77,7 @@ struct RecordingProjectStore {
     }
 
     func copyProject(session: RecordingSessionRecord, to destinationURL: URL) throws {
+        try validateExportDestination(destinationURL)
         guard normalized(session.url) != normalized(destinationURL) else {
             throw RecordingProjectStoreError.sameSourceAndDestination(destinationURL)
         }
@@ -80,6 +88,7 @@ struct RecordingProjectStore {
     }
 
     func copyProgramExport(session: RecordingSessionRecord, to destinationURL: URL) throws {
+        try validateExportDestination(destinationURL)
         guard fileManager.fileExists(atPath: session.programOutputURL.path) else {
             throw RecordingProjectStoreError.missingProgramExport(session.programOutputURL)
         }
@@ -94,5 +103,31 @@ struct RecordingProjectStore {
 
     private func normalized(_ url: URL) -> URL {
         url.standardizedFileURL.resolvingSymlinksInPath()
+    }
+
+    private func validateMediaAssetPaths(_ assets: [RecordingMediaAsset]) throws {
+        for asset in assets where !Self.isSafeRelativePath(asset.relativePath) {
+            throw RecordingProjectStoreError.unsafeMediaAssetPath(asset.relativePath)
+        }
+    }
+
+    private func validateExportDestination(_ url: URL) throws {
+        guard url.isFileURL, !url.hasDirectoryPath else {
+            throw RecordingProjectStoreError.unsafeExportDestination(url)
+        }
+        let fileName = url.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !fileName.isEmpty, fileName != "." && fileName != ".." else {
+            throw RecordingProjectStoreError.unsafeExportDestination(url)
+        }
+    }
+
+    private static func isSafeRelativePath(_ relativePath: String) -> Bool {
+        let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard !trimmed.hasPrefix("/") && !trimmed.hasPrefix("~") else { return false }
+        guard !trimmed.contains("\\") else { return false }
+
+        let components = trimmed.split(separator: "/", omittingEmptySubsequences: false)
+        return !components.contains { $0.isEmpty || $0 == "." || $0 == ".." }
     }
 }

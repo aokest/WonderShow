@@ -2,9 +2,15 @@ import Foundation
 
 public enum WonderShowMediaPipeProtocol {
     public static let defaultPort = 18777
+    public static let loopbackHost = "127.0.0.1"
     public static let healthPath = "/health"
     public static let inferPath = "/infer"
     public static let localTokenHeader = "X-WonderShow-Local-Token"
+    public static let minimumTokenBytes = 16
+    public static let maximumTokenBytes = 256
+    public static let maximumJPEGBytes = 6 * 1_024 * 1_024
+    public static let maximumPortraitMaskPixels = 512 * 512
+    public static let maximumLandmarkCount = 512
 }
 
 public struct WonderShowMediaPipeHealth: Codable, Equatable, Sendable {
@@ -161,3 +167,61 @@ public struct WonderShowMediaPipeBoundingBox: Codable, Equatable, Sendable {
     }
 }
 
+public enum WonderShowMediaPipeSecurityError: Error, Equatable, Sendable {
+    case invalidLocalToken
+    case invalidBase64Image
+    case oversizedImagePayload(decodedBytes: Int, maximumBytes: Int)
+    case invalidPortraitMaskDimensions(width: Int, height: Int)
+    case tooManyLandmarks(count: Int, maximum: Int)
+}
+
+public enum WonderShowMediaPipeSecurity {
+    public static func isPlausibleLocalToken(_ token: String) -> Bool {
+        let byteCount = token.utf8.count
+        return byteCount >= WonderShowMediaPipeProtocol.minimumTokenBytes
+            && byteCount <= WonderShowMediaPipeProtocol.maximumTokenBytes
+    }
+
+    public static func validateLocalToken(_ token: String) throws {
+        guard isPlausibleLocalToken(token) else {
+            throw WonderShowMediaPipeSecurityError.invalidLocalToken
+        }
+    }
+
+    public static func validate(_ request: WonderShowMediaPipeInferRequest) throws {
+        guard let imageData = Data(base64Encoded: request.imageBase64JPEG) else {
+            throw WonderShowMediaPipeSecurityError.invalidBase64Image
+        }
+        guard imageData.count <= WonderShowMediaPipeProtocol.maximumJPEGBytes else {
+            throw WonderShowMediaPipeSecurityError.oversizedImagePayload(
+                decodedBytes: imageData.count,
+                maximumBytes: WonderShowMediaPipeProtocol.maximumJPEGBytes
+            )
+        }
+    }
+
+    public static func validate(_ response: WonderShowMediaPipeInferResponse) throws {
+        for hand in response.hands where hand.landmarks.count > WonderShowMediaPipeProtocol.maximumLandmarkCount {
+            throw WonderShowMediaPipeSecurityError.tooManyLandmarks(
+                count: hand.landmarks.count,
+                maximum: WonderShowMediaPipeProtocol.maximumLandmarkCount
+            )
+        }
+        for face in response.faces where face.landmarks.count > WonderShowMediaPipeProtocol.maximumLandmarkCount {
+            throw WonderShowMediaPipeSecurityError.tooManyLandmarks(
+                count: face.landmarks.count,
+                maximum: WonderShowMediaPipeProtocol.maximumLandmarkCount
+            )
+        }
+        if let portrait = response.portrait {
+            guard portrait.maskWidth > 0,
+                  portrait.maskHeight > 0,
+                  portrait.maskWidth * portrait.maskHeight <= WonderShowMediaPipeProtocol.maximumPortraitMaskPixels else {
+                throw WonderShowMediaPipeSecurityError.invalidPortraitMaskDimensions(
+                    width: portrait.maskWidth,
+                    height: portrait.maskHeight
+                )
+            }
+        }
+    }
+}
