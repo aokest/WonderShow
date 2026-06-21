@@ -653,7 +653,18 @@ final class CameraPreviewService: NSObject, ObservableObject {
                 allowSubjectAwareBeautyDetection: CameraPreviewMediaPipePolicy
                     .shouldRunSubjectAwareBeautyDetectionForLiveMonitor(effects)
             )
-            guard let cgImage = sessionBox.previewContext.createCGImage(previewImage, from: image.extent) else {
+            let displayImage: CIImage
+            let displayExtent: CGRect
+            if let contentRect = CameraFrameMatteDetector.contentRect(in: pixelBuffer) {
+                displayImage = previewImage
+                    .cropped(to: contentRect)
+                    .transformed(by: CGAffineTransform(translationX: -contentRect.minX, y: -contentRect.minY))
+                displayExtent = displayImage.extent
+            } else {
+                displayImage = previewImage
+                displayExtent = image.extent
+            }
+            guard let cgImage = sessionBox.previewContext.createCGImage(displayImage, from: displayExtent) else {
                 return
             }
             sessionBox.lastPreviewFramePublishedAt = now
@@ -665,6 +676,9 @@ final class CameraPreviewService: NSObject, ObservableObject {
 
     private nonisolated func configureVideoOutput(on session: AVCaptureSession, sessionBox: CaptureSessionBox) {
         sessionBox.videoOutput.alwaysDiscardsLateVideoFrames = true
+        sessionBox.videoOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
         sessionBox.videoOutput.setSampleBufferDelegate(self, queue: sessionBox.videoQueue)
         if session.canAddOutput(sessionBox.videoOutput) {
             session.addOutput(sessionBox.videoOutput)

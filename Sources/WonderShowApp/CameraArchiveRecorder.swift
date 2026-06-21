@@ -6,7 +6,7 @@ enum CameraArchiveFrameGeometry {
     static func centeredAspectFitRect(
         sourceSize: CGSize,
         targetSize: CGSize,
-        allowsUpscaling: Bool = false
+        allowsUpscaling: Bool = true
     ) -> CGRect {
         let sourceWidth = max(1, sourceSize.width)
         let sourceHeight = max(1, sourceSize.height)
@@ -25,6 +25,72 @@ enum CameraArchiveFrameGeometry {
             width: width,
             height: height
         ).integral
+    }
+}
+
+enum CameraFrameMatteDetector {
+    static func contentRect(in pixelBuffer: CVPixelBuffer) -> CGRect? {
+        guard CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA else {
+            return nil
+        }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+        }
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            return nil
+        }
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard width >= 320, height >= 240 else {
+            return nil
+        }
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let pointer = baseAddress.assumingMemoryBound(to: UInt8.self)
+        let sampleStep = max(2, min(width, height) / 180)
+        var minX = width
+        var minY = height
+        var maxX = -1
+        var maxY = -1
+        var contentSamples = 0
+
+        for y in stride(from: 0, to: height, by: sampleStep) {
+            for x in stride(from: 0, to: width, by: sampleStep) {
+                let offset = y * bytesPerRow + x * 4
+                let blue = Int(pointer[offset])
+                let green = Int(pointer[offset + 1])
+                let red = Int(pointer[offset + 2])
+                if red + green + blue > 48 {
+                    minX = min(minX, x)
+                    minY = min(minY, y)
+                    maxX = max(maxX, x)
+                    maxY = max(maxY, y)
+                    contentSamples += 1
+                }
+            }
+        }
+
+        guard contentSamples > 20, maxX > minX, maxY > minY else {
+            return nil
+        }
+        let expansion = sampleStep * 2
+        let rect = CGRect(
+            x: max(0, minX - expansion),
+            y: max(0, minY - expansion),
+            width: min(width - 1, maxX + expansion) - max(0, minX - expansion) + 1,
+            height: min(height - 1, maxY + expansion) - max(0, minY - expansion) + 1
+        ).integral
+        let frameArea = CGFloat(width * height)
+        let rectArea = rect.width * rect.height
+        guard rectArea / frameArea >= 0.04, rectArea / frameArea <= 0.92 else {
+            return nil
+        }
+        guard rect.minX > 8 || rect.minY > 8 || rect.maxX < CGFloat(width - 8) || rect.maxY < CGFloat(height - 8) else {
+            return nil
+        }
+        return rect
     }
 }
 
@@ -265,7 +331,9 @@ final class CameraArchiveRecorder: @unchecked Sendable {
         let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
         let targetWidth = max(1, Int(recording.pixelSize.width))
         let targetHeight = max(1, Int(recording.pixelSize.height))
-        guard sourceWidth != targetWidth || sourceHeight != targetHeight else {
+        let sourceExtent = CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight)
+        let detectedContentRect = CameraFrameMatteDetector.contentRect(in: pixelBuffer)
+        guard sourceWidth != targetWidth || sourceHeight != targetHeight || detectedContentRect != nil else {
             return pixelBuffer
         }
         guard let pool = recording.adaptor.pixelBufferPool else {
@@ -279,15 +347,19 @@ final class CameraArchiveRecorder: @unchecked Sendable {
 
         let targetRect = CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight)
         let sourceImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let contentRect = detectedContentRect ?? sourceExtent
+        let contentImage = sourceImage
+            .cropped(to: contentRect)
+            .transformed(by: CGAffineTransform(translationX: -contentRect.minX, y: -contentRect.minY))
         let fittedRect = CameraArchiveFrameGeometry.centeredAspectFitRect(
-            sourceSize: sourceImage.extent.size,
+            sourceSize: contentImage.extent.size,
             targetSize: targetRect.size
         )
         let scale = min(
-            fittedRect.width / max(1, sourceImage.extent.width),
-            fittedRect.height / max(1, sourceImage.extent.height)
+            fittedRect.width / max(1, contentImage.extent.width),
+            fittedRect.height / max(1, contentImage.extent.height)
         )
-        let fittedImage = sourceImage
+        let fittedImage = contentImage
             .applyingFilter("CILanczosScaleTransform", parameters: [
                 kCIInputScaleKey: scale,
                 kCIInputAspectRatioKey: 1

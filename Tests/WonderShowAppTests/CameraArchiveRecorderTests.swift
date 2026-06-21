@@ -6,16 +6,16 @@ import Testing
 
 @Suite(.serialized)
 struct CameraArchiveRecorderTests {
-    @Test func cameraArchiveCentersSmallerSwitchedCameraWithoutUpscaling() {
+    @Test func cameraArchiveUpscalesSmallerSwitchedCameraToStableFrame() {
         let rect = CameraArchiveFrameGeometry.centeredAspectFitRect(
             sourceSize: CGSize(width: 640, height: 360),
             targetSize: CGSize(width: 1920, height: 1080)
         )
 
-        #expect(rect.origin.x == 640)
-        #expect(rect.origin.y == 360)
-        #expect(rect.width == 640)
-        #expect(rect.height == 360)
+        #expect(rect.origin.x == 0)
+        #expect(rect.origin.y == 0)
+        #expect(rect.width == 1920)
+        #expect(rect.height == 1080)
     }
 
     @Test func cameraArchiveFitsPortraitCameraInsideStableLandscapeCanvas() {
@@ -28,6 +28,23 @@ struct CameraArchiveRecorderTests {
         #expect(rect.height == 360)
         #expect(rect.width < 210)
         #expect(rect.midX == 320)
+    }
+
+    @Test func cameraArchiveDetectsDeviceMatteAroundRealCameraContent() throws {
+        let sampleBuffer = try makeCameraArchiveSampleBuffer(
+            width: 640,
+            height: 360,
+            red: 220,
+            contentRect: CGRect(x: 220, y: 120, width: 200, height: 112)
+        )
+        let pixelBuffer = try #require(CMSampleBufferGetImageBuffer(sampleBuffer))
+
+        let rect = try #require(CameraFrameMatteDetector.contentRect(in: pixelBuffer))
+
+        #expect(rect.minX > 190)
+        #expect(rect.minY > 90)
+        #expect(rect.maxX < 450)
+        #expect(rect.maxY < 260)
     }
 
     @Test func cameraArchiveKeepsInitialCanvasAndPadsSwitchGaps() async throws {
@@ -65,7 +82,12 @@ struct CameraArchiveRecorderTests {
     }
 }
 
-private func makeCameraArchiveSampleBuffer(width: Int, height: Int, red: UInt8) throws -> CMSampleBuffer {
+private func makeCameraArchiveSampleBuffer(
+    width: Int,
+    height: Int,
+    red: UInt8,
+    contentRect: CGRect? = nil
+) throws -> CMSampleBuffer {
     var pixelBuffer: CVPixelBuffer?
     CVPixelBufferCreate(
         kCFAllocatorDefault,
@@ -87,9 +109,15 @@ private func makeCameraArchiveSampleBuffer(width: Int, height: Int, red: UInt8) 
     for y in 0..<height {
         for x in 0..<width {
             let offset = y * bytesPerRow + x * 4
-            pointer[offset] = 32
-            pointer[offset + 1] = 96
-            pointer[offset + 2] = red
+            if let contentRect, !contentRect.contains(CGPoint(x: x, y: y)) {
+                pointer[offset] = 0
+                pointer[offset + 1] = 0
+                pointer[offset + 2] = 0
+            } else {
+                pointer[offset] = 32
+                pointer[offset + 1] = 96
+                pointer[offset + 2] = red
+            }
             pointer[offset + 3] = 255
         }
     }
