@@ -35,9 +35,8 @@ The Pro edition is still in development and testing. I hope the Pro edition and 
 
 ## Highlights
 
-- Community Edition focuses on stable, usable, transparent recording. It does not show VIP, SVIP, or gesture-control entry points.
-- Community Edition does not include experimental Pro features such as advanced beauty filters, background replacement, Emoji face replacement, or live gesture directing.
-- Community Edition uses the independent bundle id `com.wondershow.community`, keeping macOS permissions separate from the main app.
+- Community Edition focuses on stable, usable, transparent recording. 
+- Community Edition uses the independent bundle id `com.wondershow.community`.
 - The app package includes signed permission entitlements so macOS can request Camera, Microphone, and Screen Recording access correctly.
 - The recording path inherits the protected v1.0.0 baseline: direct active-window capture, source switching, complete-window display, preview/export parity, and HD export.
 
