@@ -41,7 +41,11 @@ RESOURCE_BUNDLE="$ROOT_DIR/.build/arm64-apple-macosx/$BUILD_CONFIGURATION/Wonder
 cd "$ROOT_DIR"
 # SwiftPM manifest evaluation is sandboxed by default on macOS and fails in this repo path.
 # Release builds keep DEBUG-only local telemetry out of the app bundle.
-swift build -c "$BUILD_CONFIGURATION" --disable-sandbox "${SWIFT_FLAGS[@]}"
+swift_build_args=(-c "$BUILD_CONFIGURATION" --disable-sandbox)
+if [[ ${#SWIFT_FLAGS[@]} -gt 0 ]]; then
+  swift_build_args+=("${SWIFT_FLAGS[@]}")
+fi
+swift build "${swift_build_args[@]}"
 
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/Contents/MacOS" "$BUNDLE_DIR/Contents/Resources"
