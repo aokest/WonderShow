@@ -27,14 +27,16 @@ PACKAGE_NAME="wondershow-community-${VERSION}-${BUILD_VERSION}-macos"
 PACKAGE_DIR="$STAGING_ROOT/$PACKAGE_NAME"
 OUTPUT_ZIP="$OUTPUT_DIR/$PACKAGE_NAME.zip"
 OUTPUT_SHA="$OUTPUT_ZIP.sha256"
+COMMUNITY_DOCS_DIR="$ROOT_DIR/open-source/wondershow-core/docs"
 
 rm -rf "$STAGING_ROOT"
 mkdir -p "$PACKAGE_DIR" "$OUTPUT_DIR"
 cp -R "$APP_PATH" "$PACKAGE_DIR/"
+cp "$COMMUNITY_DOCS_DIR"/COMMUNITY_EDITION.*.md "$PACKAGE_DIR/"
 find "$PACKAGE_DIR" -name '.DS_Store' -delete
 find "$PACKAGE_DIR" -name '__MACOSX' -type d -prune -exec rm -rf {} +
 
 (cd "$STAGING_ROOT" && zip -qry "$OUTPUT_ZIP" "$PACKAGE_NAME")
-shasum -a 256 "$OUTPUT_ZIP" > "$OUTPUT_SHA"
+(cd "$OUTPUT_DIR" && shasum -a 256 "$(basename "$OUTPUT_ZIP")") > "$OUTPUT_SHA"
 
 echo "$OUTPUT_ZIP"

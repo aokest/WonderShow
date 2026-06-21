@@ -1108,7 +1108,7 @@ struct DashboardView: View {
                     .shadow(color: ConsolePalette.gold.opacity(0.22), radius: 10, x: 0, y: 2)
                     .accessibilityHidden(true)
 
-                Text(copy.productName)
+                Text(WonderShowDistribution.presentation.productName(for: copy))
                     .font(.system(size: 17, weight: .bold, design: .serif))
                     .foregroundStyle(ConsolePalette.textPrimary)
                     .tracking(1.2)
@@ -1122,7 +1122,7 @@ struct DashboardView: View {
                         .font(.system(size: 13, weight: .bold, design: .serif))
                         .foregroundStyle(ConsolePalette.textPrimary)
                         .tracking(2.2)
-                    Text(copy.brandLine2)
+                    Text(WonderShowDistribution.presentation.brandLine2(for: copy))
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundStyle(ConsolePalette.textTertiary)
                         .tracking(2.4)
@@ -2097,7 +2097,7 @@ struct DashboardView: View {
                 .frame(height: 40)
 
                 if showsAboutCard {
-                    AboutPopoverCard(copy: copy)
+                    AboutPopoverCard(copy: copy, presentation: WonderShowDistribution.presentation)
                         .padding(.leading, 12)
                         .padding(.bottom, 48)
                 }
@@ -3967,11 +3967,12 @@ private struct DiagnosticsLine: View {
 
 private struct AboutPopoverCard: View {
     let copy: AppCopy
+    let presentation: WonderShowEditionPresentation
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(copy.aboutTitle)
+                Text(presentation.aboutTitle(for: copy))
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(ConsolePalette.textPrimary)
                 Spacer()
@@ -3981,6 +3982,15 @@ private struct AboutPopoverCard: View {
             }
 
             ConsoleDivider()
+
+            if let editionNote = presentation.aboutEditionNote(for: copy) {
+                Text(editionNote)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(ConsolePalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                ConsoleDivider()
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(copy.authorLabel)
@@ -4000,12 +4010,16 @@ private struct AboutPopoverCard: View {
             ConsoleDivider()
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("感谢作者")
+                Text(presentation.supportTitle(for: copy))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(ConsolePalette.textPrimary)
                 Text("Buy me a coffee")
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(ConsolePalette.gold)
+                Text(presentation.supportBody(for: copy))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(ConsolePalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
                     ForEach(AboutSupportQRCodeResource.allCases, id: \.rawValue) { code in
                         AboutSupportQRCodeTile(resource: code)
@@ -4026,7 +4040,7 @@ private struct AboutPopoverCard: View {
             }
         }
         .padding(16)
-        .frame(width: 262)
+        .frame(width: 292)
         .background(ConsolePalette.overlay)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(

@@ -9,6 +9,14 @@ enum WonderShowDistribution {
     static let isCommunityEdition = false
     #endif
 
+    static var presentation: WonderShowEditionPresentation {
+        WonderShowEditionPresentation(isCommunityEdition: isCommunityEdition)
+    }
+
+    static var windowTitle: String {
+        presentation.windowTitle
+    }
+
     static var defaultRecordingFeatureTier: RecordingFeatureTier {
         isCommunityEdition ? .vip : .svip
     }

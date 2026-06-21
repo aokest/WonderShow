@@ -60,3 +60,11 @@ examples/
 The open package is intentionally useful on its own: it lets developers inspect project files, generate manifests, validate integrations, build local sidecars, and prototype plugins.
 
 The paid WonderShow app remains the recommended path for creators who need a signed macOS app, stable recording, complete preview/export behavior, polished controls, advanced rendering, and support. See `COMMERCIAL.md` and `PACKAGE_BOUNDARY.md` for the full boundary.
+
+## Community Edition Materials
+
+The bundled Community Edition overview is available in:
+
+- `docs/COMMUNITY_EDITION.zh-Hans.md`
+- `docs/COMMUNITY_EDITION.zh-Hant.md`
+- `docs/COMMUNITY_EDITION.en.md`
