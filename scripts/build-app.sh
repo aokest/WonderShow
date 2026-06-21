@@ -56,6 +56,7 @@ mkdir -p "$BUNDLE_DIR/Contents/MacOS" "$BUNDLE_DIR/Contents/Resources"
 cp "$BUILD_EXECUTABLE" "$BUNDLE_DIR/Contents/MacOS/$EXECUTABLE"
 if [[ -d "$RESOURCE_BUNDLE" ]]; then
   cp -R "$RESOURCE_BUNDLE" "$BUNDLE_DIR/Contents/Resources/"
+  find "$BUNDLE_DIR/Contents/Resources" -name "WonderShow.entitlements" -type f -delete
 fi
 if [[ "$APP_EDITION" != "community" ]]; then
   cp "$ROOT_DIR/examples/wondershow-demo.html" "$BUNDLE_DIR/Contents/Resources/wondershow-demo.html"

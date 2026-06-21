@@ -22,6 +22,7 @@ import Testing
     #expect(script.contains("WonderShow_WonderShowApp.bundle"))
     #expect(script.contains("CFBundleIdentifier -string \"$BUNDLE_IDENTIFIER\""))
     #expect(script.contains("cp -R \"$RESOURCE_BUNDLE\" \"$BUNDLE_DIR/Contents/Resources/\""))
+    #expect(script.contains("find \"$BUNDLE_DIR/Contents/Resources\" -name \"WonderShow.entitlements\" -type f -delete"))
     #expect(script.contains("WonderShowEdition"))
     #expect(script.contains("swift_build_args=(-c \"$BUILD_CONFIGURATION\" --disable-sandbox)"))
     #expect(script.contains("swift build \"${swift_build_args[@]}\""))
