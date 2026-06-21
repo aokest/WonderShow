@@ -295,6 +295,15 @@ struct DashboardView: View {
         copy.runtimeText(commandSummary)
     }
 
+    private var permitsPresenterColorEffects: Bool {
+        WonderShowDistribution.permitsPresenterColorEffects(for: recordingFeatureTier)
+    }
+
+    private var permitsSubjectAwareBeauty: Bool {
+        WonderShowDistribution.permitsSubjectAwareBeauty(for: recordingFeatureTier)
+            && PresenterExperimentalEffectsGate.isEnabled
+    }
+
     private var programCanvasExportSettings: RecordingExportSettings {
         RecordingExportSettings(
             resolution: programCanvasResolution.baseResolution,
@@ -454,6 +463,7 @@ struct DashboardView: View {
             Text(copy.runtimeText("保存后会生成原始轨并尝试合成视频；丢弃会删除本次录制项目。"))
         }
         .onAppear {
+            applyDistributionPolicy()
             configureRecordingControlCenter()
             syncRecordingControlCenter()
             commandController.refreshAccessibilityStatus()
@@ -474,12 +484,7 @@ struct DashboardView: View {
         }
         .onChange(of: recordingFeatureTier) {
             persistRecordingFeatureTier()
-            if !recordingFeatureTier.permitsSubjectAwareBeauty {
-                presenterSmartBeautyEnabled = false
-                presenterAdvancedBeautyEnabled = false
-                presenterPortraitSegmentationEnabled = false
-                presenterBeautyControlsExpanded = false
-            }
+            applyDistributionPolicy()
             syncRecordingControlCenter()
         }
         .onChange(of: layout) {
@@ -571,13 +576,54 @@ struct DashboardView: View {
         camera.stop()
     }
 
+    private func applyDistributionPolicy() {
+        if WonderShowDistribution.isCommunityEdition {
+            recordingFeatureTier = WonderShowDistribution.defaultRecordingFeatureTier
+        }
+        if !WonderShowDistribution.includesGestureControl {
+            camera.gestureControlEnabled = false
+            camera.onGestureRecognized = nil
+            camera.onGestureRecognizedWithMotion = nil
+            camera.onZoomChanged = nil
+            camera.onPanChanged = nil
+            calibrationFlow = nil
+            showsGestureCheatsheet = false
+            if commandController.isRehearsing {
+                commandController.toggleRehearsal(target: target)
+            }
+        }
+        if !permitsSubjectAwareBeauty {
+            presenterSmartBeautyEnabled = false
+            presenterAdvancedBeautyEnabled = false
+            presenterPortraitSegmentationEnabled = false
+            presenterBackgroundBlur = 0
+            presenterBackgroundReplacementEnabled = false
+            presenterBackgroundReplacementStrength = 0
+            presenterFaceLandmarkBeautyEnabled = false
+            presenterFaceSlimming = 0
+            presenterEyeEnlargement = 0
+            presenterEmojiFaceReplacementEnabled = false
+            presenterEmojiFaceReplacementScale = 1
+            presenterBeautyControlsExpanded = false
+        }
+    }
+
     private func handleSmartBeautyToggleChange() {
+        guard permitsSubjectAwareBeauty else {
+            presenterSmartBeautyEnabled = false
+            return
+        }
         if presenterSmartBeautyEnabled {
             seedSubjectAwareBeautyDefaultsIfNeeded()
         }
     }
 
     private func handleAdvancedBeautyToggleChange() {
+        guard permitsSubjectAwareBeauty else {
+            presenterAdvancedBeautyEnabled = false
+            presenterFaceLandmarkBeautyEnabled = false
+            return
+        }
         if presenterAdvancedBeautyEnabled {
             presenterSmartBeautyEnabled = true
             presenterFaceLandmarkBeautyEnabled = true
@@ -585,6 +631,11 @@ struct DashboardView: View {
     }
 
     private func handleBackgroundReplacementToggleChange() {
+        guard permitsSubjectAwareBeauty else {
+            presenterBackgroundReplacementEnabled = false
+            presenterBackgroundReplacementStrength = 0
+            return
+        }
         if presenterBackgroundReplacementEnabled {
             presenterPortraitSegmentationEnabled = true
             if presenterBackgroundReplacementStrength == 0 {
@@ -594,6 +645,11 @@ struct DashboardView: View {
     }
 
     private func handleEmojiFaceReplacementToggleChange() {
+        guard permitsSubjectAwareBeauty else {
+            presenterEmojiFaceReplacementEnabled = false
+            presenterEmojiFaceReplacementScale = 1
+            return
+        }
         guard presenterEmojiFaceReplacementEnabled else {
             return
         }
@@ -607,6 +663,14 @@ struct DashboardView: View {
 
     /// 将当前手势和缩放回调绑定到选中的演示目标，避免目标切换时投递错位。
     private func updateGestureHandler() {
+        guard WonderShowDistribution.includesGestureControl else {
+            camera.gestureControlEnabled = false
+            camera.onGestureRecognized = nil
+            camera.onGestureRecognizedWithMotion = nil
+            camera.onZoomChanged = nil
+            camera.onPanChanged = nil
+            return
+        }
         let currentTarget = target
         camera.onGestureRecognized = { gesture in
             commandController.handle(gesture, target: currentTarget)
@@ -1063,13 +1127,15 @@ struct DashboardView: View {
                     isActive: camera.status == .running,
                     isRecording: false
                 )
-                ConsoleStatusPill(
-                    icon: "hand.raised",
-                    title: copy.gesture,
-                    value: camera.gestureControlEnabled ? copy.recognizing : copy.standby,
-                    isActive: camera.gestureControlEnabled,
-                    isRecording: false
-                )
+                if WonderShowDistribution.includesGestureControl {
+                    ConsoleStatusPill(
+                        icon: "hand.raised",
+                        title: copy.gesture,
+                        value: camera.gestureControlEnabled ? copy.recognizing : copy.standby,
+                        isActive: camera.gestureControlEnabled,
+                        isRecording: false
+                    )
+                }
                 ConsoleStatusPill(
                     icon: "rectangle.on.rectangle",
                     title: copy.target,
@@ -1104,10 +1170,12 @@ struct DashboardView: View {
                         .stroke(ConsolePalette.border, lineWidth: 1)
                 )
 
-                Button(commandController.isRehearsing ? copy.stopRehearse : copy.rehearsalButton) {
-                    commandController.toggleRehearsal(target: target)
+                if WonderShowDistribution.includesGestureControl {
+                    Button(commandController.isRehearsing ? copy.stopRehearse : copy.rehearsalButton) {
+                        commandController.toggleRehearsal(target: target)
+                    }
+                    .buttonStyle(ConsoleGradientButtonStyle(variant: .gold, expands: false))
                 }
-                .buttonStyle(ConsoleGradientButtonStyle(variant: .gold, expands: false))
 
                 recordingControls
             }
@@ -1171,7 +1239,9 @@ struct DashboardView: View {
                     quickStartPanel
                     presentationPanel
                     projectPanel
-                    gesturePanel
+                    if WonderShowDistribution.includesGestureControl {
+                        gesturePanel
+                    }
                     devicePanel
                 }
                 .padding(.bottom, 12)
@@ -1245,6 +1315,7 @@ struct DashboardView: View {
                 copy: copy,
                 aspect: $programCanvasAspect,
                 resolution: $programCanvasResolution,
+                showsAdvancedPresenterEffectsUI: WonderShowDistribution.showsAdvancedPresenterEffectsUI,
                 presenterBeautyControlsExpanded: $presenterBeautyControlsExpanded,
                 presenterSmartBeautyEnabled: $presenterSmartBeautyEnabled,
                 presenterBeauty: $presenterBeauty,
@@ -1267,10 +1338,9 @@ struct DashboardView: View {
                 presenterEmojiFaceReplacementScale: $presenterEmojiFaceReplacementScale,
                 onBeautyEditingEnded: handlePresenterVideoEffectsChange,
                 onBeautyEnabled: seedSubjectAwareBeautyDefaultsIfNeeded,
-                isSubjectAwareBeautyPermitted: recordingFeatureTier.permitsSubjectAwareBeauty
-                    && PresenterExperimentalEffectsGate.isEnabled
+                isSubjectAwareBeautyPermitted: permitsSubjectAwareBeauty
             )
-            .frame(width: 48, height: 258)
+            .frame(width: 48, height: WonderShowDistribution.showsAdvancedPresenterEffectsUI ? 258 : 106)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
             .padding(.trailing, 12)
             .zIndex(20)
@@ -1361,11 +1431,13 @@ struct DashboardView: View {
 
             if !quickStartCollapsed {
                 VStack(alignment: .leading, spacing: 10) {
-                    ConsoleDetailLine(label: copy.rehearseState, value: commandController.isRehearsing ? copy.recording : copy.ready)
-                    ConsoleDetailLine(label: copy.rehearse, value: copy.rehearsalPurpose)
                     ConsoleDetailLine(label: copy.recState, value: commandController.isRecording ? copy.recording : copy.standby)
                     ConsoleDetailLine(label: copy.activeDevice, value: localizedActiveDeviceName)
-                    ConsoleDetailLine(label: copy.currentGesture, value: localizedDetectedHandShapes)
+                    if WonderShowDistribution.includesGestureControl {
+                        ConsoleDetailLine(label: copy.rehearseState, value: commandController.isRehearsing ? copy.recording : copy.ready)
+                        ConsoleDetailLine(label: copy.rehearse, value: copy.rehearsalPurpose)
+                        ConsoleDetailLine(label: copy.currentGesture, value: localizedDetectedHandShapes)
+                    }
 
                     ConsoleDivider()
 
@@ -1375,10 +1447,12 @@ struct DashboardView: View {
                         }
                         .buttonStyle(ConsoleGradientButtonStyle(variant: .gold, expands: true))
 
-                        Button(copy.testSlide) {
-                            commandController.testNextSlide(target: target)
+                        if WonderShowDistribution.includesGestureControl {
+                            Button(copy.testSlide) {
+                                commandController.testNextSlide(target: target)
+                            }
+                            .buttonStyle(ConsoleGradientButtonStyle(variant: .gold, expands: true))
                         }
-                        .buttonStyle(ConsoleGradientButtonStyle(variant: .gold, expands: true))
                     }
                 }
                 .padding(14)
@@ -1556,13 +1630,15 @@ struct DashboardView: View {
                         }
                     }
 
-                    ConsoleDivider()
+                    if WonderShowDistribution.includesDemoDeck {
+                        ConsoleDivider()
 
-                    Button(copy.openTestDeck) {
-                        target = .html(engine: .custom)
-                        commandController.reportDemoDeckOpenResult(DemoDeckLauncher.openDemoDeck())
+                        Button(copy.openTestDeck) {
+                            target = .html(engine: .custom)
+                            commandController.reportDemoDeckOpenResult(DemoDeckLauncher.openDemoDeck())
+                        }
+                        .buttonStyle(ConsoleGradientButtonStyle(variant: .gold, expands: true))
                     }
-                    .buttonStyle(ConsoleGradientButtonStyle(variant: .gold, expands: true))
                 }
                 .padding(14)
             }
@@ -1712,8 +1788,10 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 ConsoleFieldLabel(copy.text("presenterVideoEffects"))
-                FeatureTierBadge(text: copy.text("sourceTierVIP"))
-                FeatureTierBadge(text: copy.text("sourceTierSVIP"), isProminent: true)
+                if WonderShowDistribution.showsFeatureTierUI {
+                    FeatureTierBadge(text: copy.text("sourceTierVIP"))
+                    FeatureTierBadge(text: copy.text("sourceTierSVIP"), isProminent: true)
+                }
                 Spacer()
                 Toggle("", isOn: $presenterMirrorEnabled)
                     .labelsHidden()
@@ -1732,176 +1810,53 @@ struct DashboardView: View {
                     return percent > 0 ? "+\(percent)%" : "\(percent)%"
                 }
             )
-            .disabled(!recordingFeatureTier.permitsPresenterColorEffects)
-            .opacity(recordingFeatureTier.permitsPresenterColorEffects ? 1 : 0.42)
+            .disabled(!permitsPresenterColorEffects)
+            .opacity(permitsPresenterColorEffects ? 1 : 0.42)
             presenterEffectSlider(
                 label: copy.text("presenterContrast"),
                 value: $presenterContrast,
                 range: 0.75...1.35,
                 format: { value in "\(Int((value * 100).rounded()))%" }
             )
-            .disabled(!recordingFeatureTier.permitsPresenterColorEffects)
-            .opacity(recordingFeatureTier.permitsPresenterColorEffects ? 1 : 0.42)
-            presenterEffectSlider(
-                label: copy.text("presenterNaturalBeauty"),
-                value: $presenterBeauty,
-                range: 0...0.8,
-                format: { value in "\(Int((value * 100).rounded()))%" }
-            )
-            .disabled(!recordingFeatureTier.permitsPresenterColorEffects || !PresenterExperimentalEffectsGate.isEnabled)
-            .opacity(recordingFeatureTier.permitsPresenterColorEffects && PresenterExperimentalEffectsGate.isEnabled ? 1 : 0.42)
-            HStack(spacing: 8) {
-                Text(copy.text("presenterSmartBeauty"))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(ConsolePalette.textSecondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                FeatureTierBadge(text: copy.text("sourceTierSVIP"), isProminent: true)
-                Spacer()
-                Toggle("", isOn: $presenterSmartBeautyEnabled)
-                    .labelsHidden()
-                    .toggleStyle(ConsoleSwitchToggleStyle())
-                    .onChange(of: presenterSmartBeautyEnabled) { _, enabled in
-                        if enabled {
-                            seedSubjectAwareBeautyDefaultsIfNeeded()
-                        }
-                        updatePresenterVideoEffectsForLastRecording()
-                    }
-            }
-            .disabled(!recordingFeatureTier.permitsSubjectAwareBeauty || !PresenterExperimentalEffectsGate.isEnabled)
-            .opacity(recordingFeatureTier.permitsSubjectAwareBeauty && PresenterExperimentalEffectsGate.isEnabled ? 1 : 0.42)
-            .help(copy.text("presenterBeautyHelp"))
+            .disabled(!permitsPresenterColorEffects)
+            .opacity(permitsPresenterColorEffects ? 1 : 0.42)
 
-            if presenterSmartBeautyEnabled && recordingFeatureTier.permitsSubjectAwareBeauty && PresenterExperimentalEffectsGate.isEnabled {
+            if WonderShowDistribution.showsAdvancedPresenterEffectsUI {
+                presenterEffectSlider(
+                    label: copy.text("presenterNaturalBeauty"),
+                    value: $presenterBeauty,
+                    range: 0...0.8,
+                    format: { value in "\(Int((value * 100).rounded()))%" }
+                )
+                .disabled(!permitsPresenterColorEffects || !PresenterExperimentalEffectsGate.isEnabled)
+                .opacity(permitsPresenterColorEffects && PresenterExperimentalEffectsGate.isEnabled ? 1 : 0.42)
                 HStack(spacing: 8) {
-                    Text(copy.runtimeText("高级美颜"))
+                    Text(copy.text("presenterSmartBeauty"))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(ConsolePalette.textSecondary)
-                    Spacer()
-                    Toggle("", isOn: $presenterAdvancedBeautyEnabled)
-                        .labelsHidden()
-                        .toggleStyle(ConsoleSwitchToggleStyle())
-                }
-                HStack(spacing: 8) {
-                    Text(copy.runtimeText("背景分割"))
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(ConsolePalette.textSecondary)
-                    Spacer()
-                    Toggle("", isOn: $presenterPortraitSegmentationEnabled)
-                        .labelsHidden()
-                        .toggleStyle(ConsoleSwitchToggleStyle())
-                }
-                MenuControlRow(label: copy.text("presenterBeautyStyle")) {
-                    Menu {
-                        ForEach(PresenterBeautyStyle.allCases, id: \.self) { style in
-                            Button(style.localizedLabel(copy)) {
-                                presenterBeautyStyle = style
-                                updatePresenterVideoEffectsForLastRecording()
-                            }
-                        }
-                    } label: {
-                        MenuFieldLabel(text: presenterBeautyStyle.localizedLabel(copy))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                    if WonderShowDistribution.showsFeatureTierUI {
+                        FeatureTierBadge(text: copy.text("sourceTierSVIP"), isProminent: true)
                     }
-                    .menuStyle(.borderlessButton)
-                    .buttonStyle(.plain)
+                    Spacer()
+                    Toggle("", isOn: $presenterSmartBeautyEnabled)
+                        .labelsHidden()
+                        .toggleStyle(ConsoleSwitchToggleStyle())
+                        .onChange(of: presenterSmartBeautyEnabled) { _, enabled in
+                            if enabled {
+                                seedSubjectAwareBeautyDefaultsIfNeeded()
+                            }
+                            updatePresenterVideoEffectsForLastRecording()
+                        }
                 }
+                .disabled(!permitsSubjectAwareBeauty)
+                .opacity(permitsSubjectAwareBeauty ? 1 : 0.42)
+                .help(copy.text("presenterBeautyHelp"))
 
-                presenterEffectSlider(
-                    label: copy.text("presenterSkinSmoothing"),
-                    value: $presenterSkinSmoothing,
-                    range: 0...1,
-                    format: { value in "\(Int((value * 100).rounded()))%" }
-                )
-                presenterEffectSlider(
-                    label: copy.text("presenterSkinBrightening"),
-                    value: $presenterSkinBrightening,
-                    range: 0...1,
-                    format: { value in "\(Int((value * 100).rounded()))%" }
-                )
-                presenterEffectSlider(
-                    label: copy.text("presenterSkinWhitening"),
-                    value: $presenterSkinWhitening,
-                    range: 0...1,
-                    format: { value in "\(Int((value * 100).rounded()))%" }
-                )
-                presenterEffectSlider(
-                    label: copy.text("presenterComplexion"),
-                    value: $presenterComplexion,
-                    range: 0...1,
-                    format: { value in "\(Int((value * 100).rounded()))%" }
-                )
-                presenterEffectSlider(
-                    label: copy.runtimeText("背景虚化"),
-                    value: $presenterBackgroundBlur,
-                    range: 0...1,
-                    format: { value in "\(Int((value * 100).rounded()))%" }
-                )
-                HStack(spacing: 8) {
-                    Text(copy.runtimeText("换背景"))
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(ConsolePalette.textSecondary)
-                    Spacer()
-                    Toggle("", isOn: $presenterBackgroundReplacementEnabled)
-                        .labelsHidden()
-                        .toggleStyle(ConsoleSwitchToggleStyle())
+                if presenterSmartBeautyEnabled && permitsSubjectAwareBeauty {
+                    advancedPresenterVideoEffectsControls
                 }
-                if presenterBackgroundReplacementEnabled {
-                    presenterEffectSlider(
-                        label: copy.runtimeText("替换强度"),
-                        value: $presenterBackgroundReplacementStrength,
-                        range: 0...1,
-                        format: { value in "\(Int((value * 100).rounded()))%" }
-                    )
-                }
-                HStack(spacing: 8) {
-                    Text(copy.runtimeText("Emoji脸"))
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(ConsolePalette.textSecondary)
-                    Spacer()
-                    Toggle("", isOn: $presenterEmojiFaceReplacementEnabled)
-                        .labelsHidden()
-                        .toggleStyle(ConsoleSwitchToggleStyle())
-                }
-                if presenterEmojiFaceReplacementEnabled {
-                    MenuControlRow(label: copy.runtimeText("Emoji")) {
-                        Menu {
-                            ForEach(presenterEmojiChoices, id: \.self) { symbol in
-                                Button(symbol) {
-                                    presenterEmojiFaceReplacementSymbol = symbol
-                                    handlePresenterVideoEffectsChange()
-                                }
-                            }
-                        } label: {
-                            MenuFieldLabel(text: presenterEmojiFaceReplacementSymbol)
-                        }
-                        .menuStyle(.borderlessButton)
-                        .buttonStyle(.plain)
-                    }
-                    presenterEffectSlider(
-                        label: copy.runtimeText("大小"),
-                        value: $presenterEmojiFaceReplacementScale,
-                        range: 0.68...1.65,
-                        format: { value in "\(Int((value * 100).rounded()))%" }
-                    )
-                }
-                presenterEffectSlider(
-                    label: copy.runtimeText("瘦脸"),
-                    value: $presenterFaceSlimming,
-                    range: 0...0.6,
-                    format: { value in "\(Int((value * 100).rounded()))%" }
-                )
-                presenterEffectSlider(
-                    label: copy.runtimeText("大眼"),
-                    value: $presenterEyeEnlargement,
-                    range: 0...0.5,
-                    format: { value in "\(Int((value * 100).rounded()))%" }
-                )
-                presenterEffectSlider(
-                    label: copy.text("presenterBlemishReduction"),
-                    value: $presenterBlemishReduction,
-                    range: 0...1,
-                    format: { value in "\(Int((value * 100).rounded()))%" }
-                )
             }
         }
         .padding(.horizontal, 8)
@@ -1937,6 +1892,139 @@ struct DashboardView: View {
                 .foregroundStyle(ConsolePalette.textTertiary)
                 .frame(width: 42, alignment: .trailing)
         }
+    }
+
+    @ViewBuilder
+    private var advancedPresenterVideoEffectsControls: some View {
+        HStack(spacing: 8) {
+            Text(copy.runtimeText("高级美颜"))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ConsolePalette.textSecondary)
+            Spacer()
+            Toggle("", isOn: $presenterAdvancedBeautyEnabled)
+                .labelsHidden()
+                .toggleStyle(ConsoleSwitchToggleStyle())
+        }
+        HStack(spacing: 8) {
+            Text(copy.runtimeText("背景分割"))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ConsolePalette.textSecondary)
+            Spacer()
+            Toggle("", isOn: $presenterPortraitSegmentationEnabled)
+                .labelsHidden()
+                .toggleStyle(ConsoleSwitchToggleStyle())
+        }
+        MenuControlRow(label: copy.text("presenterBeautyStyle")) {
+            Menu {
+                ForEach(PresenterBeautyStyle.allCases, id: \.self) { style in
+                    Button(style.localizedLabel(copy)) {
+                        presenterBeautyStyle = style
+                        updatePresenterVideoEffectsForLastRecording()
+                    }
+                }
+            } label: {
+                MenuFieldLabel(text: presenterBeautyStyle.localizedLabel(copy))
+            }
+            .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
+        }
+
+        presenterEffectSlider(
+            label: copy.text("presenterSkinSmoothing"),
+            value: $presenterSkinSmoothing,
+            range: 0...1,
+            format: { value in "\(Int((value * 100).rounded()))%" }
+        )
+        presenterEffectSlider(
+            label: copy.text("presenterSkinBrightening"),
+            value: $presenterSkinBrightening,
+            range: 0...1,
+            format: { value in "\(Int((value * 100).rounded()))%" }
+        )
+        presenterEffectSlider(
+            label: copy.text("presenterSkinWhitening"),
+            value: $presenterSkinWhitening,
+            range: 0...1,
+            format: { value in "\(Int((value * 100).rounded()))%" }
+        )
+        presenterEffectSlider(
+            label: copy.text("presenterComplexion"),
+            value: $presenterComplexion,
+            range: 0...1,
+            format: { value in "\(Int((value * 100).rounded()))%" }
+        )
+        presenterEffectSlider(
+            label: copy.runtimeText("背景虚化"),
+            value: $presenterBackgroundBlur,
+            range: 0...1,
+            format: { value in "\(Int((value * 100).rounded()))%" }
+        )
+        HStack(spacing: 8) {
+            Text(copy.runtimeText("换背景"))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ConsolePalette.textSecondary)
+            Spacer()
+            Toggle("", isOn: $presenterBackgroundReplacementEnabled)
+                .labelsHidden()
+                .toggleStyle(ConsoleSwitchToggleStyle())
+        }
+        if presenterBackgroundReplacementEnabled {
+            presenterEffectSlider(
+                label: copy.runtimeText("替换强度"),
+                value: $presenterBackgroundReplacementStrength,
+                range: 0...1,
+                format: { value in "\(Int((value * 100).rounded()))%" }
+            )
+        }
+        HStack(spacing: 8) {
+            Text(copy.runtimeText("Emoji脸"))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ConsolePalette.textSecondary)
+            Spacer()
+            Toggle("", isOn: $presenterEmojiFaceReplacementEnabled)
+                .labelsHidden()
+                .toggleStyle(ConsoleSwitchToggleStyle())
+        }
+        if presenterEmojiFaceReplacementEnabled {
+            MenuControlRow(label: copy.runtimeText("Emoji")) {
+                Menu {
+                    ForEach(presenterEmojiChoices, id: \.self) { symbol in
+                        Button(symbol) {
+                            presenterEmojiFaceReplacementSymbol = symbol
+                            handlePresenterVideoEffectsChange()
+                        }
+                    }
+                } label: {
+                    MenuFieldLabel(text: presenterEmojiFaceReplacementSymbol)
+                }
+                .menuStyle(.borderlessButton)
+                .buttonStyle(.plain)
+            }
+            presenterEffectSlider(
+                label: copy.runtimeText("大小"),
+                value: $presenterEmojiFaceReplacementScale,
+                range: 0.68...1.65,
+                format: { value in "\(Int((value * 100).rounded()))%" }
+            )
+        }
+        presenterEffectSlider(
+            label: copy.runtimeText("瘦脸"),
+            value: $presenterFaceSlimming,
+            range: 0...0.6,
+            format: { value in "\(Int((value * 100).rounded()))%" }
+        )
+        presenterEffectSlider(
+            label: copy.runtimeText("大眼"),
+            value: $presenterEyeEnlargement,
+            range: 0...0.5,
+            format: { value in "\(Int((value * 100).rounded()))%" }
+        )
+        presenterEffectSlider(
+            label: copy.text("presenterBlemishReduction"),
+            value: $presenterBlemishReduction,
+            range: 0...1,
+            format: { value in "\(Int((value * 100).rounded()))%" }
+        )
     }
 
     private var footerArea: some View {
@@ -2770,7 +2858,8 @@ struct DashboardView: View {
     }
 
     private func currentPresenterVideoEffects(permittedBy tier: RecordingFeatureTier) -> PresenterVideoEffects {
-        let permitsSubjectAwareBeauty = tier.permitsSubjectAwareBeauty
+        let permitsPresenterColorEffects = WonderShowDistribution.permitsPresenterColorEffects(for: tier)
+        let permitsSubjectAwareBeauty = WonderShowDistribution.permitsSubjectAwareBeauty(for: tier)
         let backgroundEffect: PresenterBackgroundEffect
         if permitsSubjectAwareBeauty, presenterBackgroundReplacementEnabled {
             backgroundEffect = .replacement(
@@ -2785,9 +2874,9 @@ struct DashboardView: View {
 
         return PresenterVideoEffects(
             isMirrored: presenterMirrorEnabled,
-            brightness: tier.permitsPresenterColorEffects ? Double(presenterBrightness) : 0,
-            contrast: tier.permitsPresenterColorEffects ? Double(presenterContrast) : 1,
-            beauty: tier.permitsPresenterColorEffects ? Double(presenterBeauty) : 0,
+            brightness: permitsPresenterColorEffects ? Double(presenterBrightness) : 0,
+            contrast: permitsPresenterColorEffects ? Double(presenterContrast) : 1,
+            beauty: permitsPresenterColorEffects && WonderShowDistribution.showsAdvancedPresenterEffectsUI ? Double(presenterBeauty) : 0,
             isSubjectAwareBeautyEnabled: permitsSubjectAwareBeauty && presenterSmartBeautyEnabled,
             skinSmoothing: permitsSubjectAwareBeauty ? Double(presenterSkinSmoothing) : 0,
             skinBrightening: permitsSubjectAwareBeauty ? Double(presenterSkinBrightening) : 0,
@@ -2810,7 +2899,7 @@ struct DashboardView: View {
     }
 
     private func seedSubjectAwareBeautyDefaultsIfNeeded() {
-        guard recordingFeatureTier.permitsSubjectAwareBeauty else {
+        guard permitsSubjectAwareBeauty else {
             return
         }
         guard presenterBeauty == 0,
@@ -4406,8 +4495,10 @@ private struct ScreenSourcePickerSheet: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(ConsolePalette.textTertiary)
                 Spacer()
-                SourceTierPicker(copy: copy, selection: $featureTier) {
-                    persistFeatureTier()
+                if WonderShowDistribution.showsFeatureTierUI {
+                    SourceTierPicker(copy: copy, selection: $featureTier) {
+                        persistFeatureTier()
+                    }
                 }
                 ScreenSourceViewModePicker(copy: copy, selection: $viewMode)
                 Button(copy.rescan) {
@@ -4782,7 +4873,7 @@ private struct SourceSlotPicker: View {
             alignment: .leading,
             spacing: 4
         ) {
-            ForEach(Array(RecordingSourceSlots.validSlots), id: \.self) { slot in
+            ForEach(WonderShowDistribution.visibleSourceSlots(for: featureTier), id: \.self) { slot in
                 let isPermitted = featureTier.permitsSourceSlot(slot)
                 Button {
                     assignSlot(slot)
@@ -4800,7 +4891,7 @@ private struct SourceSlotPicker: View {
                 }
                 .buttonStyle(PressablePlainButtonStyle(scale: 0.9))
                 .disabled(!isPermitted)
-                .help(isPermitted ? "\(copy.text("sourceSlotHelp")) \(slot) · Command+\(slot)" : "\(featureTier.localizedLabel(copy)) \(copy.text("sourceSlotLocked")) \(slot)")
+                .help(isPermitted ? "\(copy.text("sourceSlotHelp")) \(slot) · Command+\(slot)" : WonderShowDistribution.unavailableSourceSlotMessage(slot: slot, copy: copy, tier: featureTier))
             }
         }
     }
@@ -4824,6 +4915,7 @@ private struct ProgramCanvasControls: View {
     let copy: AppCopy
     @Binding var aspect: ProgramCanvasAspect
     @Binding var resolution: ProgramCanvasResolution
+    let showsAdvancedPresenterEffectsUI: Bool
     @Binding var presenterBeautyControlsExpanded: Bool
     @Binding var presenterSmartBeautyEnabled: Bool
     @Binding var presenterBeauty: CGFloat
@@ -4859,59 +4951,61 @@ private struct ProgramCanvasControls: View {
                         .transition(.opacity.combined(with: .move(edge: .trailing)))
                 }
             }
-            .frame(width: 48, height: 258)
+            .frame(width: 48, height: showsAdvancedPresenterEffectsUI ? 258 : 106)
         .zIndex(20)
     }
 
     private var controlRail: some View {
         VStack(spacing: 8) {
-            CanvasControlRailButton(
-                title: copy.text("presenterSmartBeauty"),
-                shortTitle: copy.runtimeText("美颜"),
-                icon: "sparkles",
-                isActive: isSubjectAwareBeautyPermitted && presenterSmartBeautyEnabled,
-                isEnabled: isSubjectAwareBeautyPermitted,
-                help: copy.text("presenterBeautyHelp")
-            ) {
-                guard isSubjectAwareBeautyPermitted else { return }
-                let willExpand = expandedPopover != .beauty
-                togglePopover(.beauty)
-                if willExpand && presenterSmartBeautyEnabled {
-                    onBeautyEnabled()
+            if showsAdvancedPresenterEffectsUI {
+                CanvasControlRailButton(
+                    title: copy.text("presenterSmartBeauty"),
+                    shortTitle: copy.runtimeText("美颜"),
+                    icon: "sparkles",
+                    isActive: isSubjectAwareBeautyPermitted && presenterSmartBeautyEnabled,
+                    isEnabled: isSubjectAwareBeautyPermitted,
+                    help: copy.text("presenterBeautyHelp")
+                ) {
+                    guard isSubjectAwareBeautyPermitted else { return }
+                    let willExpand = expandedPopover != .beauty
+                    togglePopover(.beauty)
+                    if willExpand && presenterSmartBeautyEnabled {
+                        onBeautyEnabled()
+                    }
                 }
-            }
 
-            CanvasControlRailButton(
-                title: copy.runtimeText("背景虚化"),
-                shortTitle: copy.runtimeText("背景"),
-                icon: "person.crop.rectangle",
-                isActive: isSubjectAwareBeautyPermitted
-                    && presenterPortraitSegmentationEnabled
-                    && (presenterBackgroundBlur > 0 || presenterBackgroundReplacementEnabled),
-                isEnabled: isSubjectAwareBeautyPermitted,
-                help: copy.runtimeText("直接开启人像分割、背景虚化或自然换背景")
-            ) {
-                guard isSubjectAwareBeautyPermitted else { return }
-                enablePortraitEffects()
-                if presenterBackgroundBlur == 0, !presenterBackgroundReplacementEnabled {
-                    presenterBackgroundBlur = 0.55
+                CanvasControlRailButton(
+                    title: copy.runtimeText("背景虚化"),
+                    shortTitle: copy.runtimeText("背景"),
+                    icon: "person.crop.rectangle",
+                    isActive: isSubjectAwareBeautyPermitted
+                        && presenterPortraitSegmentationEnabled
+                        && (presenterBackgroundBlur > 0 || presenterBackgroundReplacementEnabled),
+                    isEnabled: isSubjectAwareBeautyPermitted,
+                    help: copy.runtimeText("直接开启人像分割、背景虚化或自然换背景")
+                ) {
+                    guard isSubjectAwareBeautyPermitted else { return }
+                    enablePortraitEffects()
+                    if presenterBackgroundBlur == 0, !presenterBackgroundReplacementEnabled {
+                        presenterBackgroundBlur = 0.55
+                    }
+                    togglePopover(.background)
+                    onBeautyEditingEnded()
                 }
-                togglePopover(.background)
-                onBeautyEditingEnded()
-            }
 
-            CanvasControlRailButton(
-                title: copy.runtimeText("Emoji替脸"),
-                shortTitle: copy.runtimeText("Emoji"),
-                icon: "face.smiling",
-                isActive: isSubjectAwareBeautyPermitted && presenterEmojiFaceReplacementEnabled,
-                isEnabled: isSubjectAwareBeautyPermitted,
-                help: copy.runtimeText("用 Emoji 直接覆盖讲者脸部，预览实时生效")
-            ) {
-                guard isSubjectAwareBeautyPermitted else { return }
-                presenterEmojiFaceReplacementEnabled.toggle()
-                togglePopover(.emoji)
-                onBeautyEditingEnded()
+                CanvasControlRailButton(
+                    title: copy.runtimeText("Emoji替脸"),
+                    shortTitle: copy.runtimeText("Emoji"),
+                    icon: "face.smiling",
+                    isActive: isSubjectAwareBeautyPermitted && presenterEmojiFaceReplacementEnabled,
+                    isEnabled: isSubjectAwareBeautyPermitted,
+                    help: copy.runtimeText("用 Emoji 直接覆盖讲者脸部，预览实时生效")
+                ) {
+                    guard isSubjectAwareBeautyPermitted else { return }
+                    presenterEmojiFaceReplacementEnabled.toggle()
+                    togglePopover(.emoji)
+                    onBeautyEditingEnded()
+                }
             }
 
             CanvasControlRailButton(
@@ -4948,6 +5042,9 @@ private struct ProgramCanvasControls: View {
     }
 
     private func enablePortraitEffects() {
+        guard showsAdvancedPresenterEffectsUI else {
+            return
+        }
         presenterSmartBeautyEnabled = true
         presenterAdvancedBeautyEnabled = true
         presenterFaceLandmarkBeautyEnabled = true

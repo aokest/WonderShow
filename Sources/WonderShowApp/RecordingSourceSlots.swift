@@ -35,7 +35,10 @@ enum RecordingFeatureTier: String, CaseIterable, Codable, Hashable, Sendable {
     static func load(from defaults: UserDefaults = .standard) -> RecordingFeatureTier {
         guard let rawValue = defaults.string(forKey: userDefaultsKey),
               let tier = RecordingFeatureTier(rawValue: rawValue) else {
-            return .svip
+            return WonderShowDistribution.defaultRecordingFeatureTier
+        }
+        if WonderShowDistribution.isCommunityEdition, tier == .free {
+            return WonderShowDistribution.defaultRecordingFeatureTier
         }
         return tier
     }

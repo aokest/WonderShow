@@ -8,7 +8,7 @@ final class RecordingControlCenter: ObservableObject {
             stateDidChange?()
         }
     }
-    @Published var featureTier: RecordingFeatureTier = .svip {
+    @Published var featureTier: RecordingFeatureTier = WonderShowDistribution.defaultRecordingFeatureTier {
         didSet {
             stateDidChange?()
         }
@@ -178,7 +178,7 @@ private struct MiniRecordingToolbar: View {
         controlCenter.featureTier
     }
     private var permittedSlots: [Int] {
-        RecordingSourceSlots.validSlots.filter(activeFeatureTier.permitsSourceSlot)
+        WonderShowDistribution.visibleSourceSlots(for: activeFeatureTier)
     }
 
     var body: some View {
