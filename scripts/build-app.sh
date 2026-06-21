@@ -39,6 +39,7 @@ BUNDLE_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 EXECUTABLE="WonderShowApp"
 BUILD_EXECUTABLE="$ROOT_DIR/.build/arm64-apple-macosx/$BUILD_CONFIGURATION/$EXECUTABLE"
 RESOURCE_BUNDLE="$ROOT_DIR/.build/arm64-apple-macosx/$BUILD_CONFIGURATION/WonderShow_WonderShowApp.bundle"
+ENTITLEMENTS_FILE="$ROOT_DIR/Sources/WonderShowApp/Resources/WonderShow.entitlements"
 
 cd "$ROOT_DIR"
 # SwiftPM manifest evaluation is sandboxed by default on macOS and fails in this repo path.
@@ -86,6 +87,7 @@ if [[ "$BUILD_CONFIGURATION" == "release" ]]; then
 fi
 
 codesign --force --deep --options runtime --sign - \
+  --entitlements "$ENTITLEMENTS_FILE" \
   --requirements "=designated => identifier \"$BUNDLE_IDENTIFIER\"" \
   "$BUNDLE_DIR"
 
