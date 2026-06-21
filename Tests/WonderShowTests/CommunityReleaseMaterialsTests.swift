@@ -14,15 +14,15 @@ import Testing
     let expectedDocuments: [(name: String, requiredPhrases: [String])] = [
         (
             "COMMUNITY_EDITION.zh-Hans.md",
-            ["功能介绍", "应用场景", "使用说明", "特点说明", "开源项目适合谁", "专业版仍在开发测试中"]
+            ["功能介绍", "应用场景", "使用说明", "特点说明", "开源项目适合谁", "录制演示窗口"]
         ),
         (
             "COMMUNITY_EDITION.zh-Hant.md",
-            ["功能介紹", "應用場景", "使用說明", "特點說明", "開源專案適合誰", "專業版仍在開發測試中"]
+            ["功能介紹", "應用場景", "使用說明", "特點說明", "開源專案適合誰", "錄製簡報視窗"]
         ),
         (
             "COMMUNITY_EDITION.en.md",
-            ["Feature Overview", "Use Cases", "How To Use", "Highlights", "Who The Open-Source Project Is For", "Pro edition is still in development and testing"]
+            ["Feature Overview", "Use Cases", "How To Use", "Highlights", "Who The Open-Source Project Is For", "record a presentation window"]
         )
     ]
 
@@ -34,5 +34,19 @@ import Testing
         for phrase in document.requiredPhrases {
             #expect(text.contains(phrase))
         }
+        for forbiddenPhrase in forbiddenCommunityReleasePhrases {
+            #expect(!text.localizedCaseInsensitiveContains(forbiddenPhrase))
+        }
     }
 }
+
+private let forbiddenCommunityReleasePhrases = [
+    "VIP", "SVIP",
+    "实验", "實驗", "experimental", "laboratory",
+    "专业版", "專業版", "Pro edition", "Pro features",
+    "美颜", "美顏", "beauty",
+    "手势", "手勢", "gesture",
+    "训练", "訓練", "training",
+    "Emoji",
+    "背景替换", "背景替換", "background replacement"
+]

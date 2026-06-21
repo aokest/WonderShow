@@ -11,12 +11,18 @@ case "$APP_EDITION" in
     APP_NAME="${APP_NAME:-灵演}"
     BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.wondershow.studio}"
     EXECUTABLE="${EXECUTABLE:-WonderShowStudio}"
+    CAMERA_USAGE_DESCRIPTION="灵演需要访问摄像头，用于接入外接或内置输入设备并识别演讲手势。"
+    MICROPHONE_USAGE_DESCRIPTION="灵演需要访问麦克风，用于录制讲者声音并合成演讲或培训视频。"
+    APPLE_EVENTS_USAGE_DESCRIPTION="灵演需要控制 Google Chrome、PowerPoint、Keynote 等演示软件，用于根据手势执行翻页和播放控制。"
     SWIFT_FLAGS=()
     ;;
   community)
     APP_NAME="${APP_NAME:-灵演社区版}"
     BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.wondershow.community}"
     EXECUTABLE="${EXECUTABLE:-WonderShowCommunity}"
+    CAMERA_USAGE_DESCRIPTION="灵演社区版需要访问摄像头，用于录制讲者画面。"
+    MICROPHONE_USAGE_DESCRIPTION="灵演社区版需要访问麦克风，用于录制讲者声音并合成视频。"
+    APPLE_EVENTS_USAGE_DESCRIPTION="灵演社区版需要控制 Keynote、PowerPoint 或浏览器，用于演示播放和录制辅助操作。"
     SWIFT_FLAGS=(-Xswiftc -DWONDERSHOW_COMMUNITY)
     ;;
   *)
@@ -78,9 +84,9 @@ plutil -insert CFBundleVersion -string "$APP_BUILD_VERSION" "$BUNDLE_DIR/Content
 plutil -insert CFBundleShortVersionString -string "$APP_MARKETING_VERSION" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert WonderShowEdition -string "$APP_EDITION" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert LSMinimumSystemVersion -string 14.0 "$BUNDLE_DIR/Contents/Info.plist"
-plutil -insert NSCameraUsageDescription -string "灵演需要访问摄像头，用于接入外接或内置输入设备并识别演讲手势。" "$BUNDLE_DIR/Contents/Info.plist"
-plutil -insert NSMicrophoneUsageDescription -string "灵演需要访问麦克风，用于录制讲者声音并合成演讲或培训视频。" "$BUNDLE_DIR/Contents/Info.plist"
-plutil -insert NSAppleEventsUsageDescription -string "灵演需要控制 Google Chrome、PowerPoint、Keynote 等演示软件，用于根据手势执行翻页和播放控制。" "$BUNDLE_DIR/Contents/Info.plist"
+plutil -insert NSCameraUsageDescription -string "$CAMERA_USAGE_DESCRIPTION" "$BUNDLE_DIR/Contents/Info.plist"
+plutil -insert NSMicrophoneUsageDescription -string "$MICROPHONE_USAGE_DESCRIPTION" "$BUNDLE_DIR/Contents/Info.plist"
+plutil -insert NSAppleEventsUsageDescription -string "$APPLE_EVENTS_USAGE_DESCRIPTION" "$BUNDLE_DIR/Contents/Info.plist"
 
 printf "APPL????" > "$BUNDLE_DIR/Contents/PkgInfo"
 

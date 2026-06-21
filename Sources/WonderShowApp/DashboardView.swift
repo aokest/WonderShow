@@ -433,8 +433,8 @@ struct DashboardView: View {
                 persistFeatureTier: {
                     persistRecordingFeatureTier()
                 },
-                apply: {
-                    applySelectedScreenWindows()
+                apply: { selectedIDs in
+                    applyScreenSourceSelection(selectedIDs)
                 },
                 refresh: {
                     refreshScreenWindowOptions()
@@ -2508,21 +2508,23 @@ struct DashboardView: View {
     }
 
     private func applySelectedScreenWindows() {
-        let selectedOptions = screenWindowOptions.filter { selectedScreenSourceIDs.contains($0.id) }
-        guard !selectedOptions.isEmpty else {
+        applyScreenSourceSelection(selectedScreenSourceIDs)
+    }
+
+    private func applyScreenSourceSelection(_ selectedIDs: Set<ScreenCaptureSourceID>) {
+        guard let result = ScreenSourceSelectionResolver.resolve(
+            options: screenWindowOptions,
+            selectedIDs: selectedIDs
+        ) else {
             screenSourcePreference = .automaticPresentationWindow
+            selectedScreenSourceIDs = []
             showsScreenSourcePicker = false
             handleScreenCaptureSourceChange()
             return
         }
 
-        if let displayID = selectedOptions.compactMap(\.id.displayID).first {
-            selectedScreenSourceIDs = [.display(displayID)]
-            screenSourcePreference = .selectedDisplay(displayID)
-        } else {
-            let windowIDs = selectedOptions.compactMap(\.id.windowID)
-            screenSourcePreference = .selectedWindows(windowIDs)
-        }
+        selectedScreenSourceIDs = result.selectedIDs
+        screenSourcePreference = result.sourcePreference
         showsScreenSourcePicker = false
         handleScreenCaptureSourceChange()
     }
@@ -4502,11 +4504,12 @@ private struct ScreenSourcePickerSheet: View {
     @Binding var featureTier: RecordingFeatureTier
     let persistSourceSlots: () -> Void
     let persistFeatureTier: () -> Void
-    let apply: () -> Void
+    let apply: (Set<ScreenCaptureSourceID>) -> Void
     let refresh: () -> Void
     let requestPermission: () -> Void
     let openSettings: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var draftSelectedIDs: Set<ScreenCaptureSourceID> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -4555,16 +4558,22 @@ private struct ScreenSourcePickerSheet: View {
                 .buttonStyle(ConsoleGradientButtonStyle(variant: .outline, expands: true))
 
                 Button(copy.text("useSelectedSource")) {
-                    apply()
+                    let selection = draftSelectedIDs
+                    selectedIDs = selection
+                    apply(selection)
+                    dismiss()
                 }
                 .buttonStyle(ConsoleGradientButtonStyle(variant: .gold, expands: true))
-                .disabled(selectedIDs.isEmpty)
+                .disabled(draftSelectedIDs.isEmpty)
             }
         }
         .padding(18)
         .frame(minWidth: 760, idealWidth: 920, maxWidth: .infinity, minHeight: 620, idealHeight: 740, maxHeight: .infinity)
         .background(ConsolePalette.background)
         .background(ResizableSheetWindowAccessor(minSize: NSSize(width: 760, height: 620)))
+        .onAppear {
+            draftSelectedIDs = selectedIDs
+        }
     }
 
     private var emptySourceState: some View {
@@ -4607,7 +4616,7 @@ private struct ScreenSourcePickerSheet: View {
                         copy: copy,
                         option: option,
                         thumbnail: thumbnails[option.id],
-                        isSelected: selectedIDs.contains(option.id),
+                        isSelected: draftSelectedIDs.contains(option.id),
                         assignedSlot: sourceSlots.slot(for: option.id),
                         featureTier: featureTier,
                         assignSlot: { slot in
@@ -4629,7 +4638,7 @@ private struct ScreenSourcePickerSheet: View {
                     ScreenSourceListRow(
                         copy: copy,
                         option: option,
-                        isSelected: selectedIDs.contains(option.id),
+                        isSelected: draftSelectedIDs.contains(option.id),
                         assignedSlot: sourceSlots.slot(for: option.id),
                         featureTier: featureTier,
                         assignSlot: { slot in
@@ -4645,18 +4654,18 @@ private struct ScreenSourcePickerSheet: View {
     }
 
     private func toggle(_ id: ScreenCaptureSourceID) {
-        if selectedIDs.contains(id) {
-            selectedIDs.remove(id)
+        if draftSelectedIDs.contains(id) {
+            draftSelectedIDs.remove(id)
         } else if case .display = id {
-            selectedIDs = [id]
+            draftSelectedIDs = [id]
         } else {
-            selectedIDs = selectedIDs.filter {
+            draftSelectedIDs = draftSelectedIDs.filter {
                 if case .display = $0 {
                     return false
                 }
                 return true
             }
-            selectedIDs.insert(id)
+            draftSelectedIDs.insert(id)
         }
     }
 
