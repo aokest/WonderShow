@@ -109,6 +109,48 @@ struct ScreenCaptureSourceSnapshot: Hashable, Sendable {
     }
 }
 
+enum ScreenCaptureSourceOptionBuilder {
+    static func options(
+        displays: [CaptureDisplayCandidate],
+        windows: [CaptureWindowCandidate],
+        allowsOwnApplication: Bool = false
+    ) -> [ScreenCaptureWindowOption] {
+        let displayOptions = displays
+            .sorted { ($0.width * $0.height) > ($1.width * $1.height) }
+            .enumerated()
+            .map { index, display in
+                ScreenCaptureWindowOption(
+                    id: .display(display.id),
+                    applicationName: "Display",
+                    title: "屏幕 \(index + 1)",
+                    width: display.width,
+                    height: display.height
+                )
+            }
+
+        let filter = ScreenSharingWindowFilter(allowsOwnApplication: allowsOwnApplication)
+        let windowOptions = windows
+            .filter(filter.isShareable)
+            .map { window in
+                ScreenCaptureWindowOption(
+                    id: .window(window.id),
+                    applicationName: window.applicationName.isEmpty ? "Unknown" : window.applicationName,
+                    title: window.title,
+                    width: window.frameWidth,
+                    height: window.frameHeight
+                )
+            }
+            .sorted {
+                if $0.applicationName == $1.applicationName {
+                    return $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending
+                }
+                return $0.applicationName.localizedCaseInsensitiveCompare($1.applicationName) == .orderedAscending
+            }
+
+        return windowOptions + displayOptions
+    }
+}
+
 enum ScreenCapturePermissionStatus: Hashable, Sendable {
     case granted
     case denied
@@ -850,7 +892,7 @@ enum ScreenCaptureSourceResolver {
             throw ScreenArchiveRecorderError.screenRecordingPermissionRequired
         }
 
-        return try await shareableContent(onScreenWindowsOnly: true)
+        return try await shareableContent(onScreenWindowsOnly: false)
     }
 
     private static func shareableContent(onScreenWindowsOnly: Bool) async throws -> SCShareableContent {
@@ -919,60 +961,29 @@ enum ScreenCaptureSourceResolver {
     }
 
     private static func sourceOptions(from content: SCShareableContent) -> [ScreenCaptureWindowOption] {
-        let displayOptions = content.displays
-            .sorted { ($0.width * $0.height) > ($1.width * $1.height) }
-            .enumerated()
-            .map { index, display in
-                ScreenCaptureWindowOption(
-                    id: .display(display.displayID),
-                    applicationName: "Display",
-                    title: "屏幕 \(index + 1)",
-                    width: display.width,
-                    height: display.height
-                )
-            }
-
-        let windowOptions = content.windows
-            .filter { window in
-                let candidate = CaptureWindowCandidate(
-                    id: window.windowID,
-                    displayID: displayID(containing: window.frame, displays: content.displays),
-                    title: window.title ?? "",
-                    applicationName: window.owningApplication?.applicationName ?? "",
-                    bundleIdentifier: window.owningApplication?.bundleIdentifier ?? "",
-                    frameWidth: Int(window.frame.width),
-                    frameHeight: Int(window.frame.height)
-                )
-                return ScreenSharingWindowFilter().isShareable(candidate)
-            }
-            .compactMap { window -> ScreenCaptureWindowOption? in
-                let title = (window.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                let applicationName = (window.owningApplication?.applicationName ?? "Unknown")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                let width = Int(window.frame.width)
-                let height = Int(window.frame.height)
-                guard width >= 80, height >= 60 else {
-                    return nil
-                }
-                guard !title.isEmpty || !applicationName.isEmpty else {
-                    return nil
-                }
-                return ScreenCaptureWindowOption(
-                    id: .window(window.windowID),
-                    applicationName: applicationName.isEmpty ? "Unknown" : applicationName,
-                    title: title,
-                    width: width,
-                    height: height
-                )
-            }
-            .sorted {
-                if $0.applicationName == $1.applicationName {
-                    return $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending
-                }
-                return $0.applicationName.localizedCaseInsensitiveCompare($1.applicationName) == .orderedAscending
-            }
-
-        return windowOptions + displayOptions
+        let displays = content.displays.map {
+            CaptureDisplayCandidate(
+                id: $0.displayID,
+                width: $0.width,
+                height: $0.height
+            )
+        }
+        let windows = content.windows.map { window in
+            CaptureWindowCandidate(
+                id: window.windowID,
+                displayID: displayID(containing: window.frame, displays: content.displays),
+                title: window.title ?? "",
+                applicationName: window.owningApplication?.applicationName ?? "",
+                bundleIdentifier: window.owningApplication?.bundleIdentifier ?? "",
+                frameWidth: Int(window.frame.width),
+                frameHeight: Int(window.frame.height)
+            )
+        }
+        return ScreenCaptureSourceOptionBuilder.options(
+            displays: displays,
+            windows: windows,
+            allowsOwnApplication: true
+        )
     }
 
     private static func selection(

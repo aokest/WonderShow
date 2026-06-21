@@ -1748,7 +1748,7 @@ struct DashboardView: View {
                             Menu {
                                 ForEach(audioInputDevices) { device in
                                     Button(localizedAudioInputName(device)) {
-                                        selectedAudioInputDeviceID = device.id
+                                        selectAudioInputDevice(device.id)
                                     }
                                 }
                             } label: {
@@ -3281,7 +3281,22 @@ struct DashboardView: View {
     }
 
     private var selectedAudioInputDeviceDetail: String {
-        localizedAudioInputDetail(selectedAudioInputDevice)
+        if commandController.isRecording {
+            return copy.runtimeText("录制中锁定，停止后可切换音频输入")
+        }
+        return localizedAudioInputDetail(selectedAudioInputDevice)
+    }
+
+    private func selectAudioInputDevice(_ deviceID: String) {
+        let result = AudioInputSelectionPolicy.resolve(
+            currentDeviceID: selectedAudioInputDeviceID,
+            requestedDeviceID: deviceID,
+            isRecording: commandController.isRecording
+        )
+        selectedAudioInputDeviceID = result.selectedDeviceID
+        if let warning = result.warning {
+            commandController.reportRecordingIssue(warning)
+        }
     }
 
     private func localizedAudioInputName(_ device: AudioInputDeviceOption) -> String {

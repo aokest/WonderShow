@@ -204,6 +204,7 @@ final class CameraPreviewService: NSObject, ObservableObject {
     private var lastReportedGestureMode: GestureMode = .idle
     private var swipeReturnLockGesture: GestureIntent?
     private var swipeReturnLockUntilMilliseconds = 0
+    private var isCameraArchiveRecording = false
 
     var session: AVCaptureSession {
         sessionBox.session
@@ -297,8 +298,14 @@ final class CameraPreviewService: NSObject, ObservableObject {
 
     func stop() {
         resetGestureTracking()
-        stopCameraArchiveRecording()
         latestPreviewImage = nil
+        if !isCameraArchiveRecording {
+            stopCameraArchiveRecording()
+        }
+        stopCaptureSession()
+    }
+
+    private func stopCaptureSession() {
         let sessionBox = sessionBox
         sessionQueue.async {
             if sessionBox.session.isRunning {
@@ -309,6 +316,7 @@ final class CameraPreviewService: NSObject, ObservableObject {
 
     func startCameraArchiveRecording(to outputURL: URL) throws {
         try cameraArchiveRecorder.startRecording(to: outputURL)
+        isCameraArchiveRecording = true
     }
 
     func pauseCameraArchiveRecording() {
@@ -320,10 +328,12 @@ final class CameraPreviewService: NSObject, ObservableObject {
     }
 
     func stopCameraArchiveRecording() {
+        isCameraArchiveRecording = false
         cameraArchiveRecorder.stopRecording()
     }
 
     func stopCameraArchiveRecording() async {
+        isCameraArchiveRecording = false
         await withCheckedContinuation { continuation in
             cameraArchiveRecorder.stopRecording { _ in
                 continuation.resume()
@@ -351,7 +361,12 @@ final class CameraPreviewService: NSObject, ObservableObject {
     }
 
     func refreshDevicesAndRestart() {
-        stop()
+        resetGestureTracking()
+        latestPreviewImage = nil
+        if !isCameraArchiveRecording {
+            stopCameraArchiveRecording()
+        }
+        stopCaptureSession()
         refreshAvailableDevices()
         start()
     }

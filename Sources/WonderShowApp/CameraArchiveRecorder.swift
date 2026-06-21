@@ -1,5 +1,35 @@
 @preconcurrency import AVFoundation
+import CoreImage
 import Foundation
+
+enum CameraArchiveFrameGeometry {
+    static func aspectFillCropRect(sourceSize: CGSize, targetSize: CGSize) -> CGRect {
+        let sourceWidth = max(1, sourceSize.width)
+        let sourceHeight = max(1, sourceSize.height)
+        let targetWidth = max(1, targetSize.width)
+        let targetHeight = max(1, targetSize.height)
+        let sourceAspect = sourceWidth / sourceHeight
+        let targetAspect = targetWidth / targetHeight
+
+        if sourceAspect > targetAspect {
+            let cropWidth = sourceHeight * targetAspect
+            return CGRect(
+                x: (sourceWidth - cropWidth) / 2,
+                y: 0,
+                width: cropWidth,
+                height: sourceHeight
+            ).integral
+        }
+
+        let cropHeight = sourceWidth / targetAspect
+        return CGRect(
+            x: 0,
+            y: (sourceHeight - cropHeight) / 2,
+            width: sourceWidth,
+            height: cropHeight
+        ).integral
+    }
+}
 
 final class CameraArchiveRecorder: @unchecked Sendable {
     private final class SampleBufferBox: @unchecked Sendable {
@@ -14,7 +44,8 @@ final class CameraArchiveRecorder: @unchecked Sendable {
         let url: URL
         let writer: AVAssetWriter
         let input: AVAssetWriterInput
-        var frameIndex: CMTimeValue
+        let adaptor: AVAssetWriterInputPixelBufferAdaptor
+        let pixelSize: CGSize
     }
 
     private enum State {
@@ -26,8 +57,12 @@ final class CameraArchiveRecorder: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "com.wondershow.camera-archive-recorder")
     private let fileManager: FileManager
+    private let renderContext = CIContext()
     private var state: State = .idle
     private var isPaused = false
+    private var latestPixelBuffer: CVPixelBuffer?
+    private var framePump: DispatchSourceTimer?
+    private var frameIndex: CMTimeValue = 0
 
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -44,6 +79,10 @@ final class CameraArchiveRecorder: @unchecked Sendable {
 
         queue.sync {
             isPaused = false
+            framePump?.cancel()
+            framePump = nil
+            latestPixelBuffer = nil
+            frameIndex = 0
             state = .waitingForFirstFrame(outputURL)
         }
     }
@@ -79,10 +118,16 @@ final class CameraArchiveRecorder: @unchecked Sendable {
                 completion?(nil)
             case .waitingForFirstFrame(let url):
                 isPaused = false
+                latestPixelBuffer = nil
+                framePump?.cancel()
+                framePump = nil
                 state = .idle
                 completion?(url)
             case .writing(let recording):
                 isPaused = false
+                latestPixelBuffer = nil
+                framePump?.cancel()
+                framePump = nil
                 state = .finishing
                 let finishedURL = recording.url
                 recording.input.markAsFinished()
@@ -103,7 +148,7 @@ final class CameraArchiveRecorder: @unchecked Sendable {
     }
 
     private func appendOnQueue(_ sampleBuffer: CMSampleBuffer) {
-        guard !isPaused else {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return
         }
 
@@ -112,55 +157,87 @@ final class CameraArchiveRecorder: @unchecked Sendable {
             return
         case .waitingForFirstFrame(let url):
             do {
-                let recording = try makeRecording(url: url, sampleBuffer: sampleBuffer)
+                let recording = try makeRecording(url: url, pixelBuffer: pixelBuffer)
                 state = .writing(recording)
-                append(sampleBuffer, to: recording)
+                latestPixelBuffer = normalizedPixelBuffer(pixelBuffer, for: recording)
+                startFramePumpOnQueue()
+                appendLatestFrameOnQueue()
             } catch {
+                latestPixelBuffer = nil
                 state = .idle
             }
         case .writing(let recording):
-            append(sampleBuffer, to: recording)
+            if let normalized = normalizedPixelBuffer(pixelBuffer, for: recording) {
+                latestPixelBuffer = normalized
+            }
         }
     }
 
-    private func makeRecording(url: URL, sampleBuffer: CMSampleBuffer) throws -> ActiveRecording {
+    private func makeRecording(url: URL, pixelBuffer: CVPixelBuffer) throws -> ActiveRecording {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let width = max(1, CVPixelBufferGetWidth(pixelBuffer))
+        let height = max(1, CVPixelBufferGetHeight(pixelBuffer))
         let input = AVAssetWriterInput(
             mediaType: .video,
-            outputSettings: videoOutputSettings(from: sampleBuffer)
+            outputSettings: videoOutputSettings(width: width, height: height)
         )
         input.expectsMediaDataInRealTime = true
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+            ]
+        )
 
-        if writer.canAdd(input) {
-            writer.add(input)
+        guard writer.canAdd(input) else {
+            throw NSError(domain: "CameraArchiveRecorder", code: 1)
         }
+        writer.add(input)
 
         writer.startWriting()
         writer.startSession(atSourceTime: .zero)
-        return ActiveRecording(url: url, writer: writer, input: input, frameIndex: 0)
+        return ActiveRecording(
+            url: url,
+            writer: writer,
+            input: input,
+            adaptor: adaptor,
+            pixelSize: CGSize(width: width, height: height)
+        )
     }
 
-    private func append(_ sampleBuffer: CMSampleBuffer, to recording: ActiveRecording) {
+    private func startFramePumpOnQueue() {
+        framePump?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(33), leeway: .milliseconds(4))
+        timer.setEventHandler { [weak self] in
+            self?.appendLatestFrameOnQueue()
+        }
+        framePump = timer
+        timer.resume()
+    }
+
+    private func appendLatestFrameOnQueue() {
+        guard !isPaused,
+              case .writing(let recording) = state,
+              let latestPixelBuffer else {
+            return
+        }
         guard recording.writer.status == .writing else {
             return
         }
+
+        let presentationTime = CMTime(value: frameIndex, timescale: 30)
+        frameIndex += 1
         guard recording.input.isReadyForMoreMediaData else {
             return
         }
-
-        var recording = recording
-        let presentationTime = CMTime(value: recording.frameIndex, timescale: 30)
-        recording.frameIndex += 1
-        state = .writing(recording)
-        recording.input.append(retimed(sampleBuffer, presentationTime: presentationTime) ?? sampleBuffer)
+        _ = recording.adaptor.append(latestPixelBuffer, withPresentationTime: presentationTime)
     }
 
-    private func videoOutputSettings(from sampleBuffer: CMSampleBuffer) -> [String: Any] {
-        let dimensions = CMSampleBufferGetFormatDescription(sampleBuffer)
-            .map(CMVideoFormatDescriptionGetDimensions)
-        let width = max(1, Int(dimensions?.width ?? 1920))
-        let height = max(1, Int(dimensions?.height ?? 1080))
-
+    private func videoOutputSettings(width: Int, height: Int) -> [String: Any] {
         return [
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width,
@@ -168,23 +245,38 @@ final class CameraArchiveRecorder: @unchecked Sendable {
         ]
     }
 
-    private func retimed(_ sampleBuffer: CMSampleBuffer, presentationTime: CMTime) -> CMSampleBuffer? {
-        var timing = CMSampleTimingInfo(
-            duration: CMTime(value: 1, timescale: 30),
-            presentationTimeStamp: presentationTime,
-            decodeTimeStamp: .invalid
-        )
-        var output: CMSampleBuffer?
-        let status = CMSampleBufferCreateCopyWithNewTiming(
-            allocator: kCFAllocatorDefault,
-            sampleBuffer: sampleBuffer,
-            sampleTimingEntryCount: 1,
-            sampleTimingArray: &timing,
-            sampleBufferOut: &output
-        )
-        guard status == noErr else {
+    private func normalizedPixelBuffer(_ pixelBuffer: CVPixelBuffer, for recording: ActiveRecording) -> CVPixelBuffer? {
+        let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let targetWidth = max(1, Int(recording.pixelSize.width))
+        let targetHeight = max(1, Int(recording.pixelSize.height))
+        guard sourceWidth != targetWidth || sourceHeight != targetHeight else {
+            return pixelBuffer
+        }
+        guard let pool = recording.adaptor.pixelBufferPool else {
             return nil
         }
-        return output
+        var outputBuffer: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &outputBuffer) == kCVReturnSuccess,
+              let outputBuffer else {
+            return nil
+        }
+
+        let targetRect = CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight)
+        let sourceImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let cropRect = CameraArchiveFrameGeometry.aspectFillCropRect(
+            sourceSize: sourceImage.extent.size,
+            targetSize: targetRect.size
+        )
+        let croppedImage = sourceImage
+            .cropped(to: cropRect)
+            .transformed(by: CGAffineTransform(translationX: -cropRect.minX, y: -cropRect.minY))
+        let scaleX = targetRect.width / max(1, cropRect.width)
+        let scaleY = targetRect.height / max(1, cropRect.height)
+        let outputImage = croppedImage.transformed(
+            by: CGAffineTransform(scaleX: scaleX, y: scaleY)
+        )
+        renderContext.render(outputImage, to: outputBuffer, bounds: targetRect, colorSpace: CGColorSpaceCreateDeviceRGB())
+        return outputBuffer
     }
 }

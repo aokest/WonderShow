@@ -215,15 +215,6 @@ import Testing
             frameHeight: 19
         ),
         CaptureWindowCandidate(
-            id: 65,
-            displayID: 1,
-            title: "灵演",
-            applicationName: "WonderShow",
-            bundleIdentifier: "com.wondershow.studio",
-            frameWidth: 1674,
-            frameHeight: 947
-        ),
-        CaptureWindowCandidate(
             id: 66,
             displayID: 1,
             title: "Display 1 Backstop",
@@ -245,4 +236,19 @@ import Testing
     for window in blockedWindows {
         #expect(!filter.isShareable(window))
     }
+}
+
+@Test func screenSharingWindowFilterCanIncludeOwnApplicationForManualPicker() {
+    let ownWindow = CaptureWindowCandidate(
+        id: 65,
+        displayID: 1,
+        title: "灵演",
+        applicationName: "WonderShow",
+        bundleIdentifier: "com.wondershow.studio",
+        frameWidth: 1674,
+        frameHeight: 947
+    )
+
+    #expect(!ScreenSharingWindowFilter().isShareable(ownWindow))
+    #expect(ScreenSharingWindowFilter(allowsOwnApplication: true).isShareable(ownWindow))
 }

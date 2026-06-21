@@ -39,7 +39,11 @@ public struct CaptureWindowCandidate: Hashable, Sendable {
 }
 
 public struct ScreenSharingWindowFilter: Sendable {
-    public init() {}
+    private let allowsOwnApplication: Bool
+
+    public init(allowsOwnApplication: Bool = false) {
+        self.allowsOwnApplication = allowsOwnApplication
+    }
 
     public func isShareable(_ window: CaptureWindowCandidate) -> Bool {
         guard window.frameWidth >= 360, window.frameHeight >= 220 else {
@@ -57,7 +61,10 @@ public struct ScreenSharingWindowFilter: Sendable {
         guard !isSystemSurface(applicationName: applicationName, bundleIdentifier: bundleIdentifier, title: title) else {
             return false
         }
-        guard !isOwnApplication(applicationName: applicationName, bundleIdentifier: bundleIdentifier) else {
+        guard allowsOwnApplication || !isOwnApplication(
+            applicationName: applicationName,
+            bundleIdentifier: bundleIdentifier
+        ) else {
             return false
         }
         guard !decorativeTitleMarkers.contains(where: { combinedText.contains($0) }) else {
