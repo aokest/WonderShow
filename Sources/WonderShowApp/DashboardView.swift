@@ -149,11 +149,6 @@ private struct ExportOutcomePresentation: Identifiable {
     let url: URL?
 }
 
-private struct SourceSlotConflictPresentation: Identifiable, Equatable {
-    let id = UUID()
-    let message: String
-}
-
 struct DashboardView: View {
     fileprivate static var appVersion: String {
         let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
@@ -198,7 +193,6 @@ struct DashboardView: View {
     @State private var exportProgress: ExportProgressPresentation?
     @State private var activeProgramRenderTask: Task<Void, Never>?
     @State private var exportOutcome: ExportOutcomePresentation?
-    @State private var sourceSlotConflict: SourceSlotConflictPresentation?
     @State private var recordingCountdownTask: Task<Void, Never>?
     @State private var localRecordingHotKeyMonitor: Any?
     @State private var globalRecordingHotKeyMonitor: Any?
@@ -423,13 +417,6 @@ struct DashboardView: View {
                 )
             }
         }
-        .alert(item: $sourceSlotConflict) { conflict in
-            Alert(
-                title: Text(copy.text("sourceSlotConflictTitle")),
-                message: Text(copy.runtimeText(conflict.message)),
-                dismissButton: .default(Text(copy.runtimeText("确定")))
-            )
-        }
         .sheet(isPresented: $showsScreenSourcePicker) {
             ScreenSourcePickerSheet(
                 copy: copy,
@@ -445,9 +432,6 @@ struct DashboardView: View {
                 },
                 persistFeatureTier: {
                     persistRecordingFeatureTier()
-                },
-                showSlotConflict: { message in
-                    sourceSlotConflict = SourceSlotConflictPresentation(message: message)
                 },
                 apply: {
                     applySelectedScreenWindows()
@@ -4518,7 +4502,6 @@ private struct ScreenSourcePickerSheet: View {
     @Binding var featureTier: RecordingFeatureTier
     let persistSourceSlots: () -> Void
     let persistFeatureTier: () -> Void
-    let showSlotConflict: (String) -> Void
     let apply: () -> Void
     let refresh: () -> Void
     let requestPermission: () -> Void
@@ -4681,13 +4664,13 @@ private struct ScreenSourcePickerSheet: View {
         guard featureTier.permitsSourceSlot(slot) else {
             return
         }
-        switch sourceSlots.assignWithoutReplacingOccupiedSlot(option, to: slot) {
-        case .assigned, .cleared:
+        if sourceSlots.assignment(for: slot)?.sourceID == option.id {
+            sourceSlots.clear(slot: slot)
             persistSourceSlots()
-        case .slotOccupied(let existing):
-            showSlotConflict("\(copy.text("sourceSlot")) \(slot) \(copy.text("sourceSlotConflictBody")) \(existing.displayName)")
-        case .invalidSlot:
-            break
+            return
+        }
+        if sourceSlots.assign(option, to: slot) {
+            persistSourceSlots()
         }
     }
 }

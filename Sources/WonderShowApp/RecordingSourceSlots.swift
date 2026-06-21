@@ -149,28 +149,6 @@ struct RecordingSourceSlots: Codable, Hashable, Sendable {
     }
 
     @discardableResult
-    mutating func assignWithoutReplacingOccupiedSlot(
-        _ option: ScreenCaptureWindowOption,
-        to slot: Int
-    ) -> RecordingSourceSlotUpdate {
-        guard Self.validSlots.contains(slot) else {
-            return .invalidSlot
-        }
-        if let existing = assignment(for: slot), existing.sourceID != option.id {
-            return .slotOccupied(existing)
-        }
-        if self.slot(for: option.id) == slot {
-            clear(slot: slot)
-            return .cleared
-        }
-
-        assignments.removeAll { $0.sourceID == option.id }
-        assignments.append(RecordingSourceSlotAssignment(slot: slot, option: option))
-        assignments = Self.normalized(assignments)
-        return .assigned
-    }
-
-    @discardableResult
     mutating func assignDefaultSlots(
         for options: [ScreenCaptureWindowOption],
         featureTier: RecordingFeatureTier
@@ -268,13 +246,6 @@ struct RecordingSourceSlots: Codable, Hashable, Sendable {
         }
         return normalized
     }
-}
-
-enum RecordingSourceSlotUpdate: Equatable, Sendable {
-    case assigned
-    case cleared
-    case slotOccupied(RecordingSourceSlotAssignment)
-    case invalidSlot
 }
 
 enum RecordingSourceSlotHotKey {

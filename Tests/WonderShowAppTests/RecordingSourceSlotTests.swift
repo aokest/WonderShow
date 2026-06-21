@@ -51,22 +51,19 @@ import Testing
     #expect(slots.slot(for: .window(10)) == nil)
 }
 
-@Test func sourceSlotsRejectManualConflictWithoutReplacingExistingAssignment() {
+@Test func sourceSlotsRebindOccupiedSlotWhenUserChoosesANewSource() {
     var slots = RecordingSourceSlots()
     let first = makeWindowOption(id: 10, title: "Slides")
     let second = makeWindowOption(id: 20, title: "Notes")
 
-    #expect(slots.assignWithoutReplacingOccupiedSlot(first, to: 1) == .assigned)
-    let result = slots.assignWithoutReplacingOccupiedSlot(second, to: 1)
+    let firstAssign = slots.assign(first, to: 1)
+    let secondAssign = slots.assign(second, to: 1)
 
-    guard case .slotOccupied(let existing) = result else {
-        Issue.record("Expected slot conflict")
-        return
-    }
-
-    #expect(existing.sourceID == .window(10))
-    #expect(slots.assignment(for: 1)?.sourceID == .window(10))
-    #expect(slots.slot(for: .window(20)) == nil)
+    #expect(firstAssign)
+    #expect(secondAssign)
+    #expect(slots.assignment(for: 1)?.sourceID == .window(20))
+    #expect(slots.slot(for: .window(10)) == nil)
+    #expect(slots.slot(for: .window(20)) == 1)
 }
 
 @Test func sourceSlotsAutoAssignAvailableSourcesWithoutOverwritingCustomSlots() {
@@ -75,7 +72,8 @@ import Testing
     let third = makeWindowOption(id: 30, title: "Browser")
     var slots = RecordingSourceSlots()
 
-    #expect(slots.assignWithoutReplacingOccupiedSlot(second, to: 3) == .assigned)
+    let userAssignedSecond = slots.assign(second, to: 3)
+    #expect(userAssignedSecond)
     let changed = slots.assignDefaultSlots(
         for: [first, second, third],
         featureTier: .vip
