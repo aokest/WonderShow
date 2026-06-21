@@ -1,3 +1,4 @@
+import AppKit
 @preconcurrency import AVFoundation
 @preconcurrency import Vision
 import Foundation
@@ -237,6 +238,10 @@ final class CameraPreviewService: NSObject, ObservableObject {
         gestureRuntimeState.update(lastMediaPipeFrameTimestampMilliseconds: timestampMilliseconds)
     }
 
+    var cameraAuthorizationStatus: AVAuthorizationStatus {
+        AVCaptureDevice.authorizationStatus(for: .video)
+    }
+
     func start() {
         refreshAvailableDevices()
         refreshGestureEngineAvailability()
@@ -259,6 +264,35 @@ final class CameraPreviewService: NSObject, ObservableObject {
         @unknown default:
             setPermissionDenied()
         }
+    }
+
+    func requestCameraAccessOrOpenSettings() {
+        refreshAvailableDevices()
+
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            start()
+        case .notDetermined:
+            status = .connecting
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                Task { @MainActor in
+                    granted ? self?.start() : self?.setPermissionDenied()
+                }
+            }
+        case .denied, .restricted:
+            setPermissionDenied()
+            openCameraPrivacySettings()
+        @unknown default:
+            setPermissionDenied()
+            openCameraPrivacySettings()
+        }
+    }
+
+    func openCameraPrivacySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     func stop() {
@@ -1956,6 +1990,41 @@ enum CameraStatus: Equatable {
             return message
         default:
             return label
+        }
+    }
+
+    func primaryActionTitle(copy: AppCopy) -> String {
+        switch self {
+        case .permissionDenied:
+            return copy.text("cameraPermBtn")
+        default:
+            return copy.reconnect
+        }
+    }
+
+    func recoveryHint(copy: AppCopy) -> String {
+        switch self {
+        case .permissionDenied:
+            return copy.text("cameraPermissionDeniedHint")
+        default:
+            return copy.runtimeText(detail)
+        }
+    }
+}
+
+enum CameraPermissionPresentation {
+    static func statusText(for status: AVAuthorizationStatus, copy: AppCopy) -> String {
+        switch status {
+        case .authorized:
+            return copy.text("permissionGranted")
+        case .notDetermined:
+            return copy.text("permissionNeeded")
+        case .denied:
+            return copy.text("permissionDenied")
+        case .restricted:
+            return copy.text("permissionRestricted")
+        @unknown default:
+            return copy.text("permissionUnknown")
         }
     }
 }

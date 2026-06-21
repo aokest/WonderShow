@@ -263,6 +263,18 @@ struct DashboardView: View {
         copy.runtimeText(camera.status.detail)
     }
 
+    private var cameraRecoveryHint: String {
+        camera.status.recoveryHint(copy: copy)
+    }
+
+    private var cameraPrimaryActionTitle: String {
+        camera.status.primaryActionTitle(copy: copy)
+    }
+
+    private var cameraPermissionStatusValue: String {
+        CameraPermissionPresentation.statusText(for: camera.cameraAuthorizationStatus, copy: copy)
+    }
+
     private var isGestureZoneActive: Bool {
         camera.gestureZoneLabel == "热区已进入"
     }
@@ -1277,7 +1289,8 @@ struct DashboardView: View {
                 cameraPreviewImage: camera.latestPreviewImage,
                 cameraSession: camera.session,
                 cameraStatus: camera.status,
-                cameraStatusDetail: cameraStatusDetail,
+                cameraStatusDetail: cameraRecoveryHint,
+                cameraActionTitle: cameraPrimaryActionTitle,
                 screenSourceLabel: monitorScreenStatusLabel,
                 isRecording: commandController.isRecording,
                 pipOffset: $pipOffset,
@@ -1293,7 +1306,7 @@ struct DashboardView: View {
                 pipCornerChanged: { corner in
                     updatePiPCorner(corner)
                 },
-                reconnect: { camera.start() }
+                reconnect: { handleCameraPrimaryAction() }
             )
 
             VStack(alignment: .leading, spacing: 6) {
@@ -2161,9 +2174,9 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 32) {
                 DiagnosticsLine(label: copy.accessPerm, value: localizedRuntime(commandController.accessibilityStatus.rawValue))
+                DiagnosticsLine(label: copy.text("cameraPerm"), value: cameraPermissionStatusValue)
                 DiagnosticsLine(label: copy.chromeAuto, value: localizedRuntime(commandController.automationStatus.rawValue))
                 DiagnosticsLine(label: copy.scanSummary, value: localizedDeviceScanSummary)
-                DiagnosticsLine(label: copy.examples, value: supportedDeviceSummary)
             }
 
             HStack(spacing: 7) {
@@ -2174,6 +2187,11 @@ struct DashboardView: View {
 
                 Button(copy.requestBtn) {
                     commandController.requestAccessibilityPermission()
+                }
+                .buttonStyle(FooterGhostButtonStyle())
+
+                Button(copy.text("cameraPermBtn")) {
+                    camera.requestCameraAccessOrOpenSettings()
                 }
                 .buttonStyle(FooterGhostButtonStyle())
 
@@ -2199,6 +2217,14 @@ struct DashboardView: View {
         .overlay(alignment: .top) {
             Divider()
                 .overlay(ConsolePalette.innerBorder)
+        }
+    }
+
+    private func handleCameraPrimaryAction() {
+        if camera.status == .permissionDenied {
+            camera.requestCameraAccessOrOpenSettings()
+        } else {
+            camera.start()
         }
     }
 
@@ -5651,6 +5677,7 @@ private struct ProgramMonitorView: View {
     let cameraSession: AVCaptureSession
     let cameraStatus: CameraStatus
     let cameraStatusDetail: String
+    let cameraActionTitle: String
     let screenSourceLabel: String
     let isRecording: Bool
     @Binding var pipOffset: CGSize
@@ -5909,7 +5936,7 @@ private struct ProgramMonitorView: View {
                     .foregroundStyle(ConsolePalette.textTertiary)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                Button(copy.reconnect) {
+                Button(cameraActionTitle) {
                     reconnect()
                 }
                 .buttonStyle(ConsoleGradientButtonStyle(variant: .outline, expands: false))
