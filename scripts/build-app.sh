@@ -10,11 +10,13 @@ case "$APP_EDITION" in
   studio)
     APP_NAME="${APP_NAME:-灵演}"
     BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.wondershow.studio}"
+    EXECUTABLE="${EXECUTABLE:-WonderShowStudio}"
     SWIFT_FLAGS=()
     ;;
   community)
     APP_NAME="${APP_NAME:-灵演社区版}"
     BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.wondershow.community}"
+    EXECUTABLE="${EXECUTABLE:-WonderShowCommunity}"
     SWIFT_FLAGS=(-Xswiftc -DWONDERSHOW_COMMUNITY)
     ;;
   *)
@@ -36,10 +38,9 @@ APP_MARKETING_VERSION="${APP_MARKETING_VERSION:-${DEFAULT_MARKETING_VERSION:-1.0
 APP_BUILD_VERSION="${APP_BUILD_VERSION:-${DEFAULT_BUILD_VERSION:-$(date +%Y%m%d%H%M%S)}}"
 BUILD_CONFIGURATION="${BUILD_CONFIGURATION:-release}"
 BUNDLE_DIR="$ROOT_DIR/dist/$APP_NAME.app"
-EXECUTABLE="WonderShowApp"
-BUILD_EXECUTABLE="$ROOT_DIR/.build/arm64-apple-macosx/$BUILD_CONFIGURATION/$EXECUTABLE"
+BUILD_EXECUTABLE="$ROOT_DIR/.build/arm64-apple-macosx/$BUILD_CONFIGURATION/WonderShowApp"
 RESOURCE_BUNDLE="$ROOT_DIR/.build/arm64-apple-macosx/$BUILD_CONFIGURATION/WonderShow_WonderShowApp.bundle"
-ENTITLEMENTS_FILE="$ROOT_DIR/Sources/WonderShowApp/Resources/WonderShow.entitlements"
+ENTITLEMENTS_FILE="$ROOT_DIR/packaging/WonderShow.entitlements"
 
 cd "$ROOT_DIR"
 # SwiftPM manifest evaluation is sandboxed by default on macOS and fails in this repo path.
