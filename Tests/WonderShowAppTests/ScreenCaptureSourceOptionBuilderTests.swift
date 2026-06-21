@@ -97,3 +97,44 @@ import WonderShow
 
     #expect(options.map(\.id) == [.window(10)])
 }
+
+@Test func screenCaptureSourceOptionsFilterOffScreenApplicationWindows() {
+    let options = ScreenCaptureSourceOptionBuilder.options(
+        displays: [],
+        windows: [
+            CaptureWindowCandidate(
+                id: 20,
+                displayID: 1,
+                title: "钉钉",
+                applicationName: "钉钉",
+                bundleIdentifier: "com.alibabainc.dingtalk",
+                frameWidth: 997,
+                frameHeight: 773,
+                isOnScreen: true
+            ),
+            CaptureWindowCandidate(
+                id: 21,
+                displayID: 1,
+                title: "钉钉",
+                applicationName: "钉钉",
+                bundleIdentifier: "com.alibabainc.dingtalk",
+                frameWidth: 500,
+                frameHeight: 500,
+                isOnScreen: false
+            ),
+            CaptureWindowCandidate(
+                id: 22,
+                displayID: 1,
+                title: "iCloud 全部",
+                applicationName: "备忘录",
+                bundleIdentifier: "com.apple.Notes",
+                frameWidth: 1173,
+                frameHeight: 660,
+                isOnScreen: false
+            )
+        ],
+        allowsOwnApplication: true
+    )
+
+    #expect(options.map(\.id) == [.window(20)])
+}

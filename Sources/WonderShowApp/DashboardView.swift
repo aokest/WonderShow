@@ -5908,8 +5908,8 @@ private struct ProgramMonitorView: View {
         if let cameraPreviewImage {
             Image(decorative: cameraPreviewImage, scale: 1)
                 .resizable()
-                .aspectRatio(contentMode: .fill)
-                .clipped()
+                .aspectRatio(contentMode: .fit)
+                .background(Color.black)
         } else {
             CameraPreviewView(session: cameraSession)
                 .modifier(PresenterVideoPreviewEffectModifier(effects: presenterVideoEffects))

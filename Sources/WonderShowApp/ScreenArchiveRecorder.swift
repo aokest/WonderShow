@@ -105,7 +105,7 @@ struct ScreenCaptureSourceSnapshot: Hashable, Sendable {
         if let issue {
             return issue
         }
-        return "发现 \(displayCount) 个屏幕、\(windowCount) 个前台窗口，可共享 \(options.count) 个录制源"
+        return "发现 \(displayCount) 个屏幕、\(windowCount) 个可见窗口，可共享 \(options.count) 个录制源"
     }
 }
 
@@ -884,7 +884,7 @@ enum ScreenCaptureSourceResolver {
             throw ScreenArchiveRecorderError.screenRecordingPermissionRequired
         }
 
-        return try await shareableContent(onScreenWindowsOnly: false)
+        return try await shareableContent(onScreenWindowsOnly: true)
     }
 
     private static func pickerShareableContent() async throws -> SCShareableContent {
@@ -976,7 +976,8 @@ enum ScreenCaptureSourceResolver {
                 applicationName: window.owningApplication?.applicationName ?? "",
                 bundleIdentifier: window.owningApplication?.bundleIdentifier ?? "",
                 frameWidth: Int(window.frame.width),
-                frameHeight: Int(window.frame.height)
+                frameHeight: Int(window.frame.height),
+                isOnScreen: window.isOnScreen
             )
         }
         return ScreenCaptureSourceOptionBuilder.options(
@@ -1054,7 +1055,8 @@ enum ScreenCaptureSourceResolver {
                 applicationName: $0.owningApplication?.applicationName ?? "",
                 bundleIdentifier: $0.owningApplication?.bundleIdentifier ?? "",
                 frameWidth: Int(windowFrame.width),
-                frameHeight: Int(windowFrame.height)
+                frameHeight: Int(windowFrame.height),
+                isOnScreen: $0.isOnScreen
             )
         }
 

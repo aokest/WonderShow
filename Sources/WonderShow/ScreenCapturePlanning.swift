@@ -18,6 +18,7 @@ public struct CaptureWindowCandidate: Hashable, Sendable {
     public let bundleIdentifier: String
     public let frameWidth: Int
     public let frameHeight: Int
+    public let isOnScreen: Bool
 
     public init(
         id: UInt32,
@@ -26,7 +27,8 @@ public struct CaptureWindowCandidate: Hashable, Sendable {
         applicationName: String,
         bundleIdentifier: String = "",
         frameWidth: Int,
-        frameHeight: Int
+        frameHeight: Int,
+        isOnScreen: Bool = true
     ) {
         self.id = id
         self.displayID = displayID
@@ -35,6 +37,7 @@ public struct CaptureWindowCandidate: Hashable, Sendable {
         self.bundleIdentifier = bundleIdentifier
         self.frameWidth = frameWidth
         self.frameHeight = frameHeight
+        self.isOnScreen = isOnScreen
     }
 }
 
@@ -46,6 +49,9 @@ public struct ScreenSharingWindowFilter: Sendable {
     }
 
     public func isShareable(_ window: CaptureWindowCandidate) -> Bool {
+        guard window.isOnScreen else {
+            return false
+        }
         guard window.frameWidth >= 360, window.frameHeight >= 220 else {
             return false
         }

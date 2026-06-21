@@ -451,6 +451,63 @@ struct ProgramVideoRendererTests {
     #expect(backgroundPixel.blue > 180)
 }
 
+@Test func programVideoRendererFitsPresenterPictureInPictureWithoutCroppingOrUpscaling() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("wondershow-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .camera)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen)
+
+    let geometry = ProgramPictureInPictureGeometry(
+        centerX: 0.50,
+        centerY: 0.50,
+        width: 0.24,
+        height: 0.40,
+        shape: .square
+    )
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .screenWithCameraPictureInPicture(corner: .bottomRight),
+        durationMilliseconds: 1_000,
+        pictureInPictureGeometry: geometry
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: RecordingProjectManifestFactory().makeManifest(project: project)
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/fit-pip.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264),
+        outputURL: outputURL
+    )
+
+    let image = try firstFrameImage(from: outputURL)
+    let cameraCenter = try #require(pixel(in: image, x: 480, y: 270))
+    let pipMatte = try #require(pixel(in: image, x: 480, y: 180))
+
+    #expect(cameraCenter.red > 170)
+    #expect(pipMatte.red < 140)
+}
+
 @Test func programVideoRendererPreservesWholeMainScreenLayerWithoutCroppingWindowChrome() async throws {
     let fileManager = FileManager.default
     let rootURL = fileManager.temporaryDirectory

@@ -6,16 +6,28 @@ import Testing
 
 @Suite(.serialized)
 struct CameraArchiveRecorderTests {
-    @Test func cameraArchiveAspectFillCropsWideFramesToTargetAspect() {
-        let cropRect = CameraArchiveFrameGeometry.aspectFillCropRect(
-            sourceSize: CGSize(width: 1280, height: 720),
-            targetSize: CGSize(width: 640, height: 640)
+    @Test func cameraArchiveCentersSmallerSwitchedCameraWithoutUpscaling() {
+        let rect = CameraArchiveFrameGeometry.centeredAspectFitRect(
+            sourceSize: CGSize(width: 640, height: 360),
+            targetSize: CGSize(width: 1920, height: 1080)
         )
 
-        #expect(cropRect.origin.x == 280)
-        #expect(cropRect.origin.y == 0)
-        #expect(cropRect.width == 720)
-        #expect(cropRect.height == 720)
+        #expect(rect.origin.x == 640)
+        #expect(rect.origin.y == 360)
+        #expect(rect.width == 640)
+        #expect(rect.height == 360)
+    }
+
+    @Test func cameraArchiveFitsPortraitCameraInsideStableLandscapeCanvas() {
+        let rect = CameraArchiveFrameGeometry.centeredAspectFitRect(
+            sourceSize: CGSize(width: 360, height: 640),
+            targetSize: CGSize(width: 640, height: 360)
+        )
+
+        #expect(rect.origin.y == 0)
+        #expect(rect.height == 360)
+        #expect(rect.width < 210)
+        #expect(rect.midX == 320)
     }
 
     @Test func cameraArchiveKeepsInitialCanvasAndPadsSwitchGaps() async throws {
@@ -32,9 +44,9 @@ struct CameraArchiveRecorderTests {
         let recorder = CameraArchiveRecorder()
         try recorder.startRecording(to: outputURL)
         recorder.append(try makeCameraArchiveSampleBuffer(width: 640, height: 360, red: 220))
-        try await Task.sleep(for: .milliseconds(160))
+        try await Task.sleep(for: .milliseconds(260))
         recorder.append(try makeCameraArchiveSampleBuffer(width: 360, height: 640, red: 90))
-        try await Task.sleep(for: .milliseconds(160))
+        try await Task.sleep(for: .milliseconds(260))
         await withCheckedContinuation { continuation in
             recorder.stopRecording { _ in
                 continuation.resume()

@@ -558,7 +558,7 @@ struct ProgramVideoRenderer {
                     naturalSize: cameraNaturalSize,
                     sourceCropRect: nil,
                     placement: speakerLayer.placement,
-                    fillMode: speakerLayer.speakerShot == .fullBody ? .fit : .fill,
+                    fillMode: .fit,
                     presenterVideoEffects: presenterVideoEffects
                 ),
                 ProgramVideoRenderLayer(

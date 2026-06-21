@@ -3,30 +3,27 @@ import CoreImage
 import Foundation
 
 enum CameraArchiveFrameGeometry {
-    static func aspectFillCropRect(sourceSize: CGSize, targetSize: CGSize) -> CGRect {
+    static func centeredAspectFitRect(
+        sourceSize: CGSize,
+        targetSize: CGSize,
+        allowsUpscaling: Bool = false
+    ) -> CGRect {
         let sourceWidth = max(1, sourceSize.width)
         let sourceHeight = max(1, sourceSize.height)
         let targetWidth = max(1, targetSize.width)
         let targetHeight = max(1, targetSize.height)
-        let sourceAspect = sourceWidth / sourceHeight
-        let targetAspect = targetWidth / targetHeight
-
-        if sourceAspect > targetAspect {
-            let cropWidth = sourceHeight * targetAspect
-            return CGRect(
-                x: (sourceWidth - cropWidth) / 2,
-                y: 0,
-                width: cropWidth,
-                height: sourceHeight
-            ).integral
-        }
-
-        let cropHeight = sourceWidth / targetAspect
+        let scale = min(
+            allowsUpscaling ? .greatestFiniteMagnitude : 1,
+            targetWidth / sourceWidth,
+            targetHeight / sourceHeight
+        )
+        let width = sourceWidth * scale
+        let height = sourceHeight * scale
         return CGRect(
-            x: 0,
-            y: (sourceHeight - cropHeight) / 2,
-            width: sourceWidth,
-            height: cropHeight
+            x: (targetWidth - width) / 2,
+            y: (targetHeight - height) / 2,
+            width: width,
+            height: height
         ).integral
     }
 }
@@ -63,6 +60,7 @@ final class CameraArchiveRecorder: @unchecked Sendable {
     private var latestPixelBuffer: CVPixelBuffer?
     private var framePump: DispatchSourceTimer?
     private var frameIndex: CMTimeValue = 0
+    private var recordingStartedAt: DispatchTime?
 
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -83,6 +81,7 @@ final class CameraArchiveRecorder: @unchecked Sendable {
             framePump = nil
             latestPixelBuffer = nil
             frameIndex = 0
+            recordingStartedAt = nil
             state = .waitingForFirstFrame(outputURL)
         }
     }
@@ -121,13 +120,16 @@ final class CameraArchiveRecorder: @unchecked Sendable {
                 latestPixelBuffer = nil
                 framePump?.cancel()
                 framePump = nil
+                recordingStartedAt = nil
                 state = .idle
                 completion?(url)
             case .writing(let recording):
+                appendLatestFrameOnQueue()
                 isPaused = false
                 latestPixelBuffer = nil
                 framePump?.cancel()
                 framePump = nil
+                recordingStartedAt = nil
                 state = .finishing
                 let finishedURL = recording.url
                 recording.input.markAsFinished()
@@ -210,6 +212,7 @@ final class CameraArchiveRecorder: @unchecked Sendable {
 
     private func startFramePumpOnQueue() {
         framePump?.cancel()
+        recordingStartedAt = .now()
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(33), leeway: .milliseconds(4))
         timer.setEventHandler { [weak self] in
@@ -229,12 +232,24 @@ final class CameraArchiveRecorder: @unchecked Sendable {
             return
         }
 
-        let presentationTime = CMTime(value: frameIndex, timescale: 30)
-        frameIndex += 1
+        let elapsedFrameIndex = elapsedFrameIndexOnQueue()
+        let presentationFrameIndex = max(frameIndex, elapsedFrameIndex)
+        let elapsedPresentationTime = CMTime(value: presentationFrameIndex, timescale: 30)
         guard recording.input.isReadyForMoreMediaData else {
             return
         }
-        _ = recording.adaptor.append(latestPixelBuffer, withPresentationTime: presentationTime)
+        if recording.adaptor.append(latestPixelBuffer, withPresentationTime: elapsedPresentationTime) {
+            frameIndex = presentationFrameIndex + 1
+        }
+    }
+
+    private func elapsedFrameIndexOnQueue() -> CMTimeValue {
+        guard let recordingStartedAt else {
+            return frameIndex
+        }
+        let elapsedNanoseconds = DispatchTime.now().uptimeNanoseconds - recordingStartedAt.uptimeNanoseconds
+        let elapsedSeconds = Double(elapsedNanoseconds) / 1_000_000_000
+        return max(0, CMTimeValue((elapsedSeconds * 30).rounded(.down)))
     }
 
     private func videoOutputSettings(width: Int, height: Int) -> [String: Any] {
@@ -264,18 +279,23 @@ final class CameraArchiveRecorder: @unchecked Sendable {
 
         let targetRect = CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight)
         let sourceImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let cropRect = CameraArchiveFrameGeometry.aspectFillCropRect(
+        let fittedRect = CameraArchiveFrameGeometry.centeredAspectFitRect(
             sourceSize: sourceImage.extent.size,
             targetSize: targetRect.size
         )
-        let croppedImage = sourceImage
-            .cropped(to: cropRect)
-            .transformed(by: CGAffineTransform(translationX: -cropRect.minX, y: -cropRect.minY))
-        let scaleX = targetRect.width / max(1, cropRect.width)
-        let scaleY = targetRect.height / max(1, cropRect.height)
-        let outputImage = croppedImage.transformed(
-            by: CGAffineTransform(scaleX: scaleX, y: scaleY)
+        let scale = min(
+            fittedRect.width / max(1, sourceImage.extent.width),
+            fittedRect.height / max(1, sourceImage.extent.height)
         )
+        let fittedImage = sourceImage
+            .applyingFilter("CILanczosScaleTransform", parameters: [
+                kCIInputScaleKey: scale,
+                kCIInputAspectRatioKey: 1
+            ])
+            .transformed(by: CGAffineTransform(translationX: fittedRect.minX, y: fittedRect.minY))
+        let outputImage = fittedImage
+            .composited(over: CIImage(color: .black).cropped(to: targetRect))
+            .cropped(to: targetRect)
         renderContext.render(outputImage, to: outputBuffer, bounds: targetRect, colorSpace: CGColorSpaceCreateDeviceRGB())
         return outputBuffer
     }
