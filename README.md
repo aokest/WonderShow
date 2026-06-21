@@ -3,6 +3,7 @@
 [中文](docs/COMMUNITY_EDITION.zh-Hans.md) | [繁體中文](docs/COMMUNITY_EDITION.zh-Hant.md) | [English](docs/COMMUNITY_EDITION.en.md)
 
 灵演 WonderShow 是一款 macOS 演示录制助手，支持多摄像头输入、讲者画中画和 `.wondershow` 项目格式。
+<img width="1024" height="1536" alt="img_v3_0212s_db33d387-d55e-47eb-b80c-a8c0214c496g" src="https://github.com/user-attachments/assets/40c99bf3-8aa6-49d4-884c-f798d8f70204" />
 
 ## 社区版 App
 
