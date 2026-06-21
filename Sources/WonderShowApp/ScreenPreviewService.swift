@@ -19,8 +19,6 @@ final class ScreenPreviewService: ObservableObject {
     ) {
         previewGeneration += 1
         let generation = previewGeneration
-        latestImage = nil
-        latestSourceID = nil
 
         guard CGPreflightScreenCaptureAccess() else {
             latestImage = nil
@@ -53,6 +51,18 @@ final class ScreenPreviewService: ObservableObject {
         latestImage = nil
         latestSourceID = nil
     }
+
+#if DEBUG
+    func replaceLatestFrameForTesting(
+        _ image: CGImage,
+        sourceID: ScreenCaptureSourceID,
+        statusText: String = "画面已接入"
+    ) {
+        latestImage = image
+        latestSourceID = sourceID
+        self.statusText = statusText
+    }
+#endif
 
     private func captureOnce(
         target: PresentationTarget,

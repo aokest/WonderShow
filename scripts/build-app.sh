@@ -9,10 +9,12 @@ APP_EDITION="${APP_EDITION:-studio}"
 case "$APP_EDITION" in
   studio)
     APP_NAME="${APP_NAME:-灵演}"
+    BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.wondershow.studio}"
     SWIFT_FLAGS=()
     ;;
   community)
     APP_NAME="${APP_NAME:-灵演社区版}"
+    BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.wondershow.community}"
     SWIFT_FLAGS=(-Xswiftc -DWONDERSHOW_COMMUNITY)
     ;;
   *)
@@ -64,7 +66,7 @@ fi
 
 plutil -create xml1 "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleExecutable -string "$EXECUTABLE" "$BUNDLE_DIR/Contents/Info.plist"
-plutil -insert CFBundleIdentifier -string "com.wondershow.studio" "$BUNDLE_DIR/Contents/Info.plist"
+plutil -insert CFBundleIdentifier -string "$BUNDLE_IDENTIFIER" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleName -string "$APP_NAME" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleDisplayName -string "$APP_NAME" "$BUNDLE_DIR/Contents/Info.plist"
 plutil -insert CFBundleIconFile -string "AppIcon" "$BUNDLE_DIR/Contents/Info.plist"
@@ -84,7 +86,7 @@ if [[ "$BUILD_CONFIGURATION" == "release" ]]; then
 fi
 
 codesign --force --deep --options runtime --sign - \
-  --requirements '=designated => identifier "com.wondershow.studio"' \
+  --requirements "=designated => identifier \"$BUNDLE_IDENTIFIER\"" \
   "$BUNDLE_DIR"
 
 touch "$BUNDLE_DIR/Contents/Resources/AppIcon.icns"
