@@ -18,6 +18,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "训练样本"
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+MIN_TIMED_INTERVAL_SECONDS = 0.2
 
 
 @dataclass(frozen=True)
@@ -158,12 +159,44 @@ def parse_capture_tags(value: str | None) -> CaptureTags:
     return CaptureTags(light=light, distance=distance)
 
 
-def next_sample_path(root: Path, label: GestureLabel, extension: str, *, tags: CaptureTags | None = None) -> Path:
+def sanitize_subject_id(value: str | None) -> str:
+    """Returns a filename-safe collector identifier."""
+
+    if not value:
+        return ""
+    normalized = value.strip()
+    if not normalized:
+        return ""
+    normalized = re.sub(r"[^\w.-]+", "_", normalized, flags=re.UNICODE)
+    normalized = normalized.strip("._-")
+    return normalized[:48]
+
+
+def sample_prefix(label: GestureLabel, *, tags: CaptureTags | None = None, subject_id: str | None = None) -> str:
+    """Builds the filename prefix used for captured samples."""
+
+    parts = [label.canonical]
+    token = tags.filename_token() if tags else ""
+    if token:
+        parts.append(token)
+    safe_subject = sanitize_subject_id(subject_id)
+    if safe_subject:
+        parts.insert(0, safe_subject)
+    return "_".join(parts)
+
+
+def next_sample_path(
+    root: Path,
+    label: GestureLabel,
+    extension: str,
+    *,
+    tags: CaptureTags | None = None,
+    subject_id: str | None = None,
+) -> Path:
     """Returns the next non-conflicting sample path for a label."""
 
     directory = root / label.folder
-    token = tags.filename_token() if tags else ""
-    prefix = f"{label.canonical}_{token}" if token else label.canonical
+    prefix = sample_prefix(label, tags=tags, subject_id=subject_id)
     pattern = re.compile(rf"^{re.escape(prefix)}_(\d+){re.escape(extension)}$")
     max_index = 0
     for path in directory.iterdir() if directory.exists() else []:
@@ -213,16 +246,22 @@ def overlay_lines(
     tags: CaptureTags | None = None,
     quality: FrameQuality | None = None,
     burst_count: int = 1,
+    timed_capture_enabled: bool = False,
+    timed_interval_seconds: float = 1.0,
+    subject_id: str | None = None,
 ) -> list[str]:
     """Builds ASCII-only overlay lines for OpenCV's limited text renderer."""
 
     tags = tags or CaptureTags()
+    timed_state = "on" if timed_capture_enabled else "off"
+    subject_label = sanitize_subject_id(subject_id) or "none"
     return [
         f"Gesture Sampler | Current: {label.display} ({label.canonical})",
         "Click this window, then use keyboard shortcuts:",
-        "Enter/Space=SAVE   B=burst   1-7=switch gesture   C=camera   Q/Esc=quit",
+        "Enter/Space=SAVE   B=burst   T=timed   1-7=switch gesture   C=camera   Q/Esc=quit",
         overlay_label_menu(),
-        f"Tags: light={tags.light} distance={tags.distance} burst={burst_count}",
+        f"Subject: {subject_label}   Tags: light={tags.light} distance={tags.distance} burst={burst_count}",
+        f"Timed: {timed_state} every {timed_interval_seconds:.1f}s",
         quality_summary(quality),
         "Counts: " + " ".join(f"{item.display}:{counts[item.folder]}" for item in LABELS),
         "Tip: save one clear single-hand photo each time.",
@@ -352,11 +391,23 @@ def draw_overlay(
     tags: CaptureTags | None = None,
     quality: FrameQuality | None = None,
     burst_count: int = 1,
+    timed_capture_enabled: bool = False,
+    timed_interval_seconds: float = 1.0,
+    subject_id: str | None = None,
 ) -> None:
     """Draws capture instructions on the preview frame."""
 
     counts = counts_by_label(root)
-    lines = overlay_lines(label, counts, tags=tags, quality=quality, burst_count=burst_count)
+    lines = overlay_lines(
+        label,
+        counts,
+        tags=tags,
+        quality=quality,
+        burst_count=burst_count,
+        timed_capture_enabled=timed_capture_enabled,
+        timed_interval_seconds=timed_interval_seconds,
+        subject_id=subject_id,
+    )
     for offset, line in enumerate(lines):
         y = 28 + offset * 26
         cv2.putText(frame, line, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (0, 0, 0), 4, cv2.LINE_AA)
@@ -370,10 +421,11 @@ def save_frame(
     extension: str,
     *,
     tags: CaptureTags | None = None,
+    subject_id: str | None = None,
 ) -> Path:
     """Writes the current camera frame to the label folder."""
 
-    path = next_sample_path(root, label, extension, tags=tags)
+    path = next_sample_path(root, label, extension, tags=tags, subject_id=subject_id)
     ok = cv2.imwrite(str(path), frame)
     if not ok:
         raise RuntimeError(f"Failed to save image: {path}")
@@ -409,15 +461,34 @@ def run_capture(args: argparse.Namespace) -> int:
     if args.list_cameras:
         return list_cameras(args.max_camera_index)
 
+    if args.timed_interval_seconds < MIN_TIMED_INTERVAL_SECONDS:
+        print(
+            f"[WonderShow] 定时拍摄间隔不能小于 {MIN_TIMED_INTERVAL_SECONDS:.1f} 秒。",
+            file=sys.stderr,
+        )
+        return 1
+
     current_label = select_initial_label(args.label)
+    timed_interval_seconds = float(args.timed_interval_seconds)
+    timed_capture_enabled = bool(args.timed_start)
+    subject_id = sanitize_subject_id(args.subject_id)
     print_counts(output_root)
     print("[WonderShow] 采集窗口打开后，摆好动作，按 Enter 或空格保存当前帧。")
-    print("[WonderShow] 可在预览窗口按 1-7 切换类别，按 b 连拍，按 c 切换摄像头，按 q 或 Esc 退出。")
+    print("[WonderShow] 可在预览窗口按 1-7 切换类别，按 b 连拍，按 t 开关定时拍摄，按 c 切换摄像头，按 q 或 Esc 退出。")
+    print(
+        f"[WonderShow] 定时拍摄: {'已开启' if timed_capture_enabled else '未开启'}，"
+        f"间隔 {timed_interval_seconds:.1f} 秒。"
+    )
+    if subject_id:
+        print(f"[WonderShow] 采样人 ID: {subject_id}")
 
     if args.dry_run:
         print(
             f"[WonderShow] dry-run: camera={args.camera} label={current_label.folder} "
-            f"tags={tags.light},{tags.distance} burst={args.burst_count} output={output_root}"
+            f"tags={tags.light},{tags.distance} burst={args.burst_count} "
+            f"subject={subject_id or 'none'} "
+            f"timed={'on' if timed_capture_enabled else 'off'} interval={timed_interval_seconds:.1f}s "
+            f"output={output_root}"
         )
         return 0
 
@@ -445,6 +516,7 @@ def run_capture(args: argparse.Namespace) -> int:
     print(f"[WonderShow] 当前摄像头 index={camera_index}")
     last_saved_path: Path | None = None
     last_saved_at = 0.0
+    last_timed_saved_at = time.monotonic()
 
     try:
         while True:
@@ -452,6 +524,13 @@ def run_capture(args: argparse.Namespace) -> int:
             if not ok or frame is None:
                 print("[WonderShow] 无法读取摄像头画面。", file=sys.stderr)
                 return 1
+
+            now = time.monotonic()
+            if timed_capture_enabled and now - last_timed_saved_at >= timed_interval_seconds:
+                last_saved_path = save_frame(output_root, current_label, frame, args.extension, tags=tags, subject_id=subject_id)
+                last_saved_at = now
+                last_timed_saved_at = now
+                print(f"[WonderShow] 定时保存 {current_label.folder}: {last_saved_path}")
 
             preview = frame.copy()
             quality = estimate_frame_quality(frame, center_hand_box(frame))
@@ -462,6 +541,9 @@ def run_capture(args: argparse.Namespace) -> int:
                 tags=tags,
                 quality=quality,
                 burst_count=args.burst_count,
+                timed_capture_enabled=timed_capture_enabled,
+                timed_interval_seconds=timed_interval_seconds,
+                subject_id=subject_id,
             )
             if last_saved_path and time.monotonic() - last_saved_at < 1.2:
                 text = f"Saved: {last_saved_path.name}"
@@ -473,20 +555,28 @@ def run_capture(args: argparse.Namespace) -> int:
             if key in (27, ord("q")):
                 break
             if key in (13, 10, 32):
-                last_saved_path = save_frame(output_root, current_label, frame, args.extension, tags=tags)
+                last_saved_path = save_frame(output_root, current_label, frame, args.extension, tags=tags, subject_id=subject_id)
                 last_saved_at = time.monotonic()
+                last_timed_saved_at = last_saved_at
                 print(f"[WonderShow] 已保存 {current_label.folder}: {last_saved_path}")
             elif key == ord("b"):
                 for _ in range(max(1, args.burst_count)):
                     ok, burst_frame = capture.read()
                     if not ok or burst_frame is None:
                         break
-                    last_saved_path = save_frame(output_root, current_label, burst_frame, args.extension, tags=tags)
+                    last_saved_path = save_frame(output_root, current_label, burst_frame, args.extension, tags=tags, subject_id=subject_id)
                     last_saved_at = time.monotonic()
+                    last_timed_saved_at = last_saved_at
                     print(f"[WonderShow] 连拍保存 {current_label.folder}: {last_saved_path}")
                     time.sleep(max(0.0, args.burst_interval_ms / 1_000))
+            elif key in (ord("t"), ord("T")):
+                timed_capture_enabled = not timed_capture_enabled
+                last_timed_saved_at = time.monotonic()
+                state = "开启" if timed_capture_enabled else "关闭"
+                print(f"[WonderShow] 定时拍摄已{state}，间隔 {timed_interval_seconds:.1f} 秒。")
             elif ord("1") <= key <= ord("7"):
                 current_label = resolve_label(chr(key))
+                last_timed_saved_at = time.monotonic()
                 print(f"[WonderShow] 当前类别切换为: {current_label.folder}")
             elif key == ord("c"):
                 next_index = next_available_camera(camera_index, args.max_camera_index)
@@ -500,6 +590,7 @@ def run_capture(args: argparse.Namespace) -> int:
                     capture = open_camera(camera_index, args.width, args.height)
                     continue
                 camera_index = next_index
+                last_timed_saved_at = time.monotonic()
                 print(f"[WonderShow] 当前摄像头切换为 index={camera_index}")
     finally:
         capture.release()
@@ -520,8 +611,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--width", type=int, help="Optional camera capture width.")
     parser.add_argument("--height", type=int, help="Optional camera capture height.")
     parser.add_argument("--tags", default="normal,near", help="Comma-separated capture tags: normal, low_light, backlight, near, mid, far.")
+    parser.add_argument("--subject-id", default="", help="Optional collector ID or name included in sample filenames.")
     parser.add_argument("--burst-count", type=int, default=5, help="Number of frames saved when pressing B.")
     parser.add_argument("--burst-interval-ms", type=int, default=120, help="Delay between burst samples.")
+    parser.add_argument(
+        "--timed-interval-seconds",
+        type=float,
+        default=1.0,
+        help="Seconds between automatic saves when timed capture is enabled.",
+    )
+    parser.add_argument("--timed-start", action="store_true", help="Start timed capture when the sampler opens.")
     parser.add_argument("--list-cameras", action="store_true", help="Probe camera indices and exit.")
     parser.add_argument("--max-camera-index", type=int, default=5, help="Highest camera index to probe with --list-cameras.")
     parser.add_argument("--dry-run", action="store_true", help="Create directories and print settings without opening the camera.")

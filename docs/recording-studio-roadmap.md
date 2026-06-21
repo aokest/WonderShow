@@ -75,6 +75,7 @@ Composition modes:
 - Camera with picture-in-picture screen.
 - Keyed cutout speaker over screen.
 - Two-camera layout for stage plus close-up.
+- Dual-camera dialogue layout: side-by-side or interview-style framing for two presenters, with automatic or manual speaker-focused switching.
 
 This means the recording engine should be source-agnostic: it should not assume Pocket 3 is always present, and it should support one or two camera tracks plus screen/audio tracks.
 
@@ -142,6 +143,7 @@ Users should be able to:
 - Pick corner, size, shape, shadow, and border.
 - Animate PiP layout changes over time.
 - Switch between speaker close-up, screen-first, screen-only, and full-camera moments.
+- Smooth crossfade transitions between layout switches (fade in/out with configurable duration).
 - Save camera-only and screen-only raw files alongside the final program output.
 
 ### Export Settings
@@ -208,7 +210,7 @@ Current v0.8 branch sequence confirmed by the user on 2026-06-19:
 4. Convert the bottom timeline from status display to real track display and then editable timeline operations. Implemented as a safe foundation in the v0.8 branch: real tracks, folding, segment selection, playhead positioning, and single selected-range export are done; destructive delete, waveform thumbnails, selected-track-only export, and multi-range stitching remain future work.
 5. Add menu bar resident mode and draggable desktop mini toolbar with pause/resume/stop/time plus active-window/source switching. Implemented in the v0.8 branch with a status item, floating mini toolbar, source picker access, and source slot switching.
 
-Deferred backlog for later branches: dynamic gesture recognition improvements, licensing/paid activation, notarized distribution, multi-endpoint support, and multiple UI skins/themes.
+Deferred backlog for later branches: dynamic gesture recognition improvements, licensing/paid activation, notarized distribution, multi-endpoint support, multiple UI skins/themes, dual-camera dialogue mode, and crossfade transitions.
 
 1. Gesture calibration and gesture-to-slide control. Done as v0.7 visual/MediaPipe baseline, but still needs dynamic long-range improvement.
 2. Core project model for formal talk and training-course recording. Done.
@@ -228,3 +230,5 @@ Deferred backlog for later branches: dynamic gesture recognition improvements, l
 16. Add multi-camera simultaneous recording UI and source switching events.
 17. Add audio source switching during recording with segmented audio tracks.
 18. Add cursor smoothing, click highlight, auto zoom, annotations, captions, callouts, and title cards.
+19. Add dual-camera dialogue mode: side-by-side and interview-style two-presenter layouts with automatic speaker-focused switching and balanced audio mixing.
+20. Add smooth crossfade transitions: fade-in/fade-out effects between layout switches during recording and in timeline editing, with configurable duration and easing curves.

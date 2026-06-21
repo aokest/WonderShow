@@ -51,6 +51,52 @@ class GestureTrainingAssistantTests(unittest.TestCase):
         self.assertIn("120", command)
         self.assertEqual(command[-1], "/workspace/Samples")
 
+    def test_build_sampler_command_includes_timed_capture_interval(self):
+        module = load_module()
+
+        paths = module.AssistantPaths(
+            project_root=Path("/repo"),
+            workspace_root=Path("/workspace"),
+            samples_root=Path("/workspace/Samples"),
+            model_path=Path("/workspace/model.json"),
+            package_path=Path("/workspace/profile.wsgesture"),
+        )
+
+        command = module.build_sampler_command(
+            paths,
+            label="剑指",
+            timed_interval_seconds=1.0,
+            timed_start=True,
+            subject_id="alice-01",
+        )
+
+        self.assertIn("--timed-interval-seconds", command)
+        self.assertIn("1.0", command)
+        self.assertIn("--timed-start", command)
+        self.assertIn("--subject-id", command)
+        self.assertIn("alice-01", command)
+
+    def test_ui_texts_localize_all_visible_controls(self):
+        module = load_module()
+
+        simplified = module.ui_texts("zh-Hans")
+        traditional = module.ui_texts("zh-Hant")
+        english = module.ui_texts("en")
+
+        self.assertEqual(simplified["open_sampler"], "打开采样窗口")
+        self.assertEqual(traditional["open_sampler"], "開啟採樣視窗")
+        self.assertEqual(english["open_sampler"], "Open Sampler")
+        self.assertEqual(english["subject_id"], "Collector ID")
+        self.assertEqual(traditional["timed_capture"], "定時拍攝")
+        self.assertEqual(simplified["status_ready"], "准备采样")
+
+    def test_language_button_labels_are_human_readable(self):
+        module = load_module()
+
+        labels = module.language_button_labels()
+
+        self.assertEqual(labels, [("zh-Hans", "简"), ("zh-Hant", "繁"), ("en", "EN")])
+
     def test_summarize_training_report_highlights_accuracy_and_skips(self):
         module = load_module()
 
@@ -68,6 +114,31 @@ class GestureTrainingAssistantTests(unittest.TestCase):
         self.assertIn("samples=42", summary)
         self.assertIn("validation=81.2%", summary)
         self.assertIn("no_hand:3", summary)
+
+    def test_localized_guides_cover_all_supported_languages(self):
+        module = load_module()
+
+        self.assertEqual(set(module.SUPPORTED_LANGUAGES), {"zh-Hans", "zh-Hant", "en"})
+        self.assertIn("静态图片", module.localized_guide("zh-Hans"))
+        self.assertIn("定时拍摄", module.localized_guide("zh-Hans"))
+        self.assertIn("靜態圖片", module.localized_guide("zh-Hant"))
+        self.assertIn("定時拍攝", module.localized_guide("zh-Hant"))
+        self.assertIn("static photos", module.localized_guide("en"))
+        self.assertIn("timed capture", module.localized_guide("en"))
+
+    def test_localized_guide_falls_back_to_simplified_chinese(self):
+        module = load_module()
+
+        self.assertEqual(module.localized_guide("missing"), module.localized_guide("zh-Hans"))
+
+    def test_document_paths_exist_for_each_language(self):
+        module = load_module()
+
+        docs = module.localized_document_paths(module.PROJECT_ROOT)
+
+        self.assertEqual(set(docs), {"zh-Hans", "zh-Hant", "en"})
+        for path in docs.values():
+            self.assertTrue(path.exists(), path)
 
     def test_export_wsgesture_package_contains_model_and_manifest(self):
         module = load_module()

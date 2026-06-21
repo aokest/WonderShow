@@ -132,6 +132,43 @@ class CaptureGestureSamplesTests(unittest.TestCase):
 
             self.assertEqual(path.name, "sword_low_light_far_0001.jpg")
 
+    def test_next_sample_path_includes_optional_subject_id(self):
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            label = module.resolve_label("剑指")
+            tags = module.CaptureTags(light="low_light", distance="far")
+            module.ensure_sample_directories(root)
+            (root / "剑指" / "alice-01_sword_low_light_far_0001.jpg").write_bytes(b"image")
+
+            path = module.next_sample_path(root, label, ".jpg", tags=tags, subject_id="alice-01")
+
+            self.assertEqual(path.name, "alice-01_sword_low_light_far_0002.jpg")
+
+    def test_sanitize_subject_id_keeps_names_filename_safe(self):
+        module = load_module()
+
+        self.assertEqual(module.sanitize_subject_id(" Alice/张 三 "), "Alice_张_三")
+        self.assertEqual(module.sanitize_subject_id("../"), "")
+
+    def test_parse_args_accepts_timed_capture_interval(self):
+        module = load_module()
+
+        args = module.parse_args([
+            "--label",
+            "剑指",
+            "--subject-id",
+            "alice-01",
+            "--timed-interval-seconds",
+            "1.0",
+            "--timed-start",
+        ])
+
+        self.assertEqual(args.subject_id, "alice-01")
+        self.assertEqual(args.timed_interval_seconds, 1.0)
+        self.assertTrue(args.timed_start)
+
 
 if __name__ == "__main__":
     unittest.main()
