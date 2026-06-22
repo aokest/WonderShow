@@ -89,70 +89,51 @@ Get the latest version from [Releases](https://github.com/aokest/WonderShow/rele
 | `⌥⌘R` | Start/Stop recording |
 | `⌘1` - `⌘6` | Switch recording source |
 
-## 🏗️ Architecture
+## 📦 Open-Source Core Package
 
-```
-┌─────────────────────────────────────────────┐
-│              DashboardView                   │
-│  ┌──────────┐  ┌──────────┐  ┌───────────┐  │
-│  │ Camera   │  │ Screen   │  │ Timeline  │  │
-│  │ Preview  │  │ Capture  │  │ Track     │  │
-│  └────┬─────┘  └────┬─────┘  └─────┬─────┘  │
-│       │              │              │         │
-│  ┌────▼──────────────▼──────────────▼─────┐  │
-│  │       RecordingSessionService          │  │
-│  │   (Project · Manifest · Keyframes)     │  │
-│  └────────────────┬───────────────────────┘  │
-│                   │                          │
-│  ┌────────────────▼───────────────────────┐  │
-│  │        ProgramVideoRenderer            │  │
-│  │   (Compose · Scale · Export MP4)       │  │
-│  └────────────────────────────────────────┘  │
-└─────────────────────────────────────────────┘
+[WonderShow Core](open-source/wondershow-core/) is an open-source Swift Package providing:
+
+- **`.wondershow` project format**: Complete recording project schema definitions with JSON serialization
+- **MediaPipe sidecar protocol**: Camera gesture recognition communication protocol
+- **Plugin APIs**: Build custom project inspectors, converters, and tools
+
+```swift
+import WonderShowCore
+
+let project = try RecordingProject.load(from: projectURL)
+print(project.manifest.layout)  // Current layout
+print(project.rawTracks.count)  // Number of raw tracks
 ```
 
-- **WonderShow Core** (open-source Swift Package): `.wondershow` project format, MediaPipe sidecar protocol, plugin APIs
-- **WonderShow App** (Community Edition): Full recording workflow, UI, video composition engine
+See [open-source/wondershow-core/README.md](open-source/wondershow-core/README.md) for details.
 
-## 📂 Project Structure
+## 📂 Repository Structure
 
 ```
 WonderShow/
-├── Sources/
-│   ├── WonderShow/              # Core library (recording models, project format)
-│   └── WonderShowApp/           # macOS App (Dashboard, recording, composition)
-├── Tests/                       # Unit tests (244+ passing)
 ├── open-source/
 │   └── wondershow-core/         # Open-source Core Swift Package
-├── scripts/                     # Build and packaging scripts
+│       ├── Sources/WonderShowCore/
+│       │   ├── RecordingModel.swift      # Project format definitions
+│       │   ├── MediaPipeProtocol.swift   # Sidecar protocol
+│       │   └── PluginAPI.swift           # Plugin interfaces
+│       ├── Tests/                         # Core package tests
+│       ├── examples/                      # Example code
+│       └── docs/                          # Core documentation
 ├── docs/                        # Architecture docs and roadmap
-└── releases/                    # Release files and checksums
+├── releases/                    # Release files and checksums
+├── README.md                    # 简体中文
+├── README.en.md                 # English
+└── README.zh-Hant.md            # 繁體中文
 ```
 
-## 🧪 Testing
+## 🧪 Test the Core Package
 
 ```bash
-rtk swift test --disable-sandbox
-rtk swift test --package-path open-source/wondershow-core
-rtk bash scripts/build-app.sh
-rtk bash scripts/package-community-app.sh
+git clone https://github.com/aokest/WonderShow.git
+cd WonderShow
+swift test --package-path open-source/wondershow-core
 ```
-
-## 🤝 Community vs Pro
-
-| Feature | Community (this repo) | Pro (in development) |
-|---------|:---:|:---:|
-| Multi-camera input & switching | ✅ | ✅ |
-| Live source switching | ✅ | ✅ |
-| Flexible layouts & PiP | ✅ | ✅ |
-| Multiple canvas ratios | ✅ | ✅ |
-| Preview & export (incl. 4K) | ✅ | ✅ |
-| Trilingual UI | ✅ | ✅ |
-| .wondershow project format | ✅ | ✅ |
-| Gesture control (swipe/zoom) | — | ✅ |
-| Presenter video effects | — | ✅ |
-| Live director monitor | — | ✅ |
-| Licensing & updates | — | ✅ |
 
 ## 💡 Support the Author
 
