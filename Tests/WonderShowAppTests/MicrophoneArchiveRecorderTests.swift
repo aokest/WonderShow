@@ -14,7 +14,15 @@ struct MicrophoneArchiveRecorderTests {
         #expect(captureSettings[AVLinearPCMBitDepthKey] as? Int == 16)
         #expect(writerSettings[AVFormatIDKey] as? AudioFormatID == kAudioFormatMPEG4AAC)
         #expect(writerSettings[AVSampleRateKey] as? Int == 48_000)
-        #expect(writerSettings[AVEncoderAudioQualityKey] as? Int == AVAudioQuality.high.rawValue)
-        #expect(writerSettings[AVSampleRateConverterAudioQualityKey] as? Int == AVAudioQuality.high.rawValue)
+        #expect(writerSettings[AVEncoderBitRateKey] as? Int == 128_000)
+    }
+
+    @Test func microphoneArchiveWriterSettingsAreAcceptedByAVFoundation() {
+        let input = AVAssetWriterInput(
+            mediaType: .audio,
+            outputSettings: MicrophoneArchiveAudioSettings.writerAAC()
+        )
+
+        #expect(input.mediaType == .audio)
     }
 }

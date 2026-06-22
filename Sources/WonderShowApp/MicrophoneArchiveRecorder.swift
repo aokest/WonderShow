@@ -58,9 +58,7 @@ enum MicrophoneArchiveAudioSettings {
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVNumberOfChannelsKey: 1,
             AVSampleRateKey: 48_000,
-            AVEncoderBitRateKey: 128_000,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
-            AVSampleRateConverterAudioQualityKey: AVAudioQuality.high.rawValue
+            AVEncoderBitRateKey: 128_000
         ]
     }
 }
