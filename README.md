@@ -89,55 +89,88 @@
 | `⌥⌘R` | 开始/停止录制 |
 | `⌘1` - `⌘6` | 快速切换录制源 |
 
-## 📦 开源 Core 包
+## 🏗️ 技术架构
 
-[WonderShow Core](open-source/wondershow-core/) 是一个开源 Swift Package，提供：
-
-- **`.wondershow` 项目格式**：完整的录制项目 schema 定义，支持 JSON 序列化
-- **MediaPipe 侧车协议**：摄像头手势识别的通信协议
-- **插件 API**：用于构建自定义项目检查器、转换器和工具
-
-```swift
-// 使用 Core 包解析 .wondershow 项目
-import WonderShowCore
-
-let project = try RecordingProject.load(from: projectURL)
-print(project.manifest.layout)  // 当前布局
-print(project.rawTracks.count)  // 原始轨道数
+```
+┌─────────────────────────────────────────────┐
+│              DashboardView                   │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐  │
+│  │ Camera   │  │ Screen   │  │ Timeline  │  │
+│  │ Preview  │  │ Capture  │  │ Track     │  │
+│  └────┬─────┘  └────┬─────┘  └─────┬─────┘  │
+│       │              │              │         │
+│  ┌────▼──────────────▼──────────────▼─────┐  │
+│  │       RecordingSessionService          │  │
+│  │   (Project · Manifest · Keyframes)     │  │
+│  └────────────────┬───────────────────────┘  │
+│                   │                          │
+│  ┌────────────────▼───────────────────────┐  │
+│  │        ProgramVideoRenderer            │  │
+│  │   (Compose · Scale · Export MP4)       │  │
+│  └────────────────────────────────────────┘  │
+└─────────────────────────────────────────────┘
 ```
 
-详细文档见 [open-source/wondershow-core/README.md](open-source/wondershow-core/README.md)。
+- **WonderShow Core**（开源 Swift Package）：`.wondershow` 项目格式定义、MediaPipe 侧车协议、插件 API
+- **WonderShow App**（社区版）：完整录制工作流、UI、视频合成引擎
 
-## 📂 仓库结构
+## 📂 项目结构
 
 ```
 WonderShow/
+├── Sources/
+│   ├── WonderShow/              # 核心库（录制模型、项目格式）
+│   └── WonderShowApp/           # macOS App（Dashboard、录制、合成）
+├── Tests/                       # 单元测试（244+ 项）
 ├── open-source/
 │   └── wondershow-core/         # 开源 Core Swift Package
-│       ├── Sources/WonderShowCore/
-│       │   ├── RecordingModel.swift      # 项目格式定义
-│       │   ├── MediaPipeProtocol.swift   # 侧车协议
-│       │   └── PluginAPI.swift           # 插件接口
-│       ├── Tests/                         # Core 包测试
-│       ├── examples/                      # 示例代码
-│       └── docs/                          # Core 文档
+├── scripts/                     # 构建和打包脚本
 ├── docs/                        # 架构文档和路线图
-├── releases/                    # 发布文件和校验值
-├── README.md                    # 简体中文
-├── README.en.md                 # English
-└── README.zh-Hant.md            # 繁體中文
+└── releases/                    # 发布文件和校验值
 ```
 
-## 🧪 测试 Core 包
+## 🧪 测试
 
 ```bash
-# 克隆仓库
-git clone https://github.com/aokest/WonderShow.git
-cd WonderShow
+# 运行全部测试
+rtk swift test --disable-sandbox
 
 # 运行 Core 包测试
-swift test --package-path open-source/wondershow-core
+rtk swift test --package-path open-source/wondershow-core
+
+# 构建 App
+rtk bash scripts/build-app.sh
+
+# 打包社区版
+rtk bash scripts/package-community-app.sh
 ```
+
+## 🤝 社区版 vs 专业版
+
+| 功能 | 社区版（本仓库） | 专业版（开发中） |
+|------|:---:|:---:|
+| 多机位接入与切换 | ✅ | ✅ |
+| 录制中多源切换 | ✅ | ✅ |
+| 灵活布局与画中画 | ✅ | ✅ |
+| 多画布比例 | ✅ | ✅ |
+| 合成预览与导出（含 4K） | ✅ | ✅ |
+| 三语界面 | ✅ | ✅ |
+| .wondershow 项目格式 | ✅ | ✅ |
+| 手势控制（翻页/缩放） | — | ✅ |
+| 讲者视频特效（美颜/亮度） | — | ✅ |
+| 导演台实时监看 | — | ✅ |
+| 授权与更新系统 | — | ✅ |
+
+社区版专注于稳定、可用的核心录制工作流。专业版将在未来推出，包含更多高级功能。
+
+## 📖 开源项目适合谁
+
+- 想了解 `.wondershow` 项目格式的开发者
+- 想构建项目检查器、转换器、批处理工具的自动化开发者
+- 想基于公开格式做内容归档和工作流集成的团队
+- 想学习 macOS 录制产品如何拆分应用体验与开放数据格式的独立开发者
+
+开源包不包含完整桌面 App 源码、ScreenCaptureKit 采集实现、实时监视器、视频合成器、商业 UI、授权系统或更新系统。
 
 ## 💡 支持作者
 
