@@ -126,7 +126,6 @@ final class CameraArchiveRecorder: @unchecked Sendable {
     private var latestPixelBuffer: CVPixelBuffer?
     private var framePump: DispatchSourceTimer?
     private var frameIndex: CMTimeValue = 0
-    private var recordingStartedAt: DispatchTime?
 
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -147,7 +146,6 @@ final class CameraArchiveRecorder: @unchecked Sendable {
             framePump = nil
             latestPixelBuffer = nil
             frameIndex = 0
-            recordingStartedAt = nil
             state = .waitingForFirstFrame(outputURL)
         }
     }
@@ -186,7 +184,6 @@ final class CameraArchiveRecorder: @unchecked Sendable {
                 latestPixelBuffer = nil
                 framePump?.cancel()
                 framePump = nil
-                recordingStartedAt = nil
                 state = .idle
                 completion?(url)
             case .writing(let recording):
@@ -195,7 +192,6 @@ final class CameraArchiveRecorder: @unchecked Sendable {
                 latestPixelBuffer = nil
                 framePump?.cancel()
                 framePump = nil
-                recordingStartedAt = nil
                 state = .finishing
                 let finishedURL = recording.url
                 recording.input.markAsFinished()
@@ -278,7 +274,6 @@ final class CameraArchiveRecorder: @unchecked Sendable {
 
     private func startFramePumpOnQueue() {
         framePump?.cancel()
-        recordingStartedAt = .now()
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(33), leeway: .milliseconds(4))
         timer.setEventHandler { [weak self] in
@@ -298,24 +293,13 @@ final class CameraArchiveRecorder: @unchecked Sendable {
             return
         }
 
-        let elapsedFrameIndex = elapsedFrameIndexOnQueue()
-        let presentationFrameIndex = max(frameIndex, elapsedFrameIndex)
-        let elapsedPresentationTime = CMTime(value: presentationFrameIndex, timescale: 30)
         guard recording.input.isReadyForMoreMediaData else {
             return
         }
-        if recording.adaptor.append(latestPixelBuffer, withPresentationTime: elapsedPresentationTime) {
-            frameIndex = presentationFrameIndex + 1
+        let presentationTime = CMTime(value: frameIndex, timescale: 30)
+        if recording.adaptor.append(latestPixelBuffer, withPresentationTime: presentationTime) {
+            frameIndex += 1
         }
-    }
-
-    private func elapsedFrameIndexOnQueue() -> CMTimeValue {
-        guard let recordingStartedAt else {
-            return frameIndex
-        }
-        let elapsedNanoseconds = DispatchTime.now().uptimeNanoseconds - recordingStartedAt.uptimeNanoseconds
-        let elapsedSeconds = Double(elapsedNanoseconds) / 1_000_000_000
-        return max(0, CMTimeValue((elapsedSeconds * 30).rounded(.down)))
     }
 
     private func videoOutputSettings(width: Int, height: Int) -> [String: Any] {

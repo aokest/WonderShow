@@ -40,6 +40,31 @@ private final class MicrophoneSampleBuffer: @unchecked Sendable {
     }
 }
 
+enum MicrophoneArchiveAudioSettings {
+    static func capturePCM() -> [String: Any] {
+        [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 48_000,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false
+        ]
+    }
+
+    static func writerAAC() -> [String: Any] {
+        [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVNumberOfChannelsKey: 1,
+            AVSampleRateKey: 48_000,
+            AVEncoderBitRateKey: 128_000,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+            AVSampleRateConverterAudioQualityKey: AVAudioQuality.high.rawValue
+        ]
+    }
+}
+
 final class MicrophoneArchiveRecorder: NSObject, @unchecked Sendable {
     private struct ActiveRecording: @unchecked Sendable {
         let writer: AVAssetWriter
@@ -166,6 +191,7 @@ final class MicrophoneArchiveRecorder: NSObject, @unchecked Sendable {
         captureSession.addInput(input)
 
         let output = AVCaptureAudioDataOutput()
+        output.audioSettings = MicrophoneArchiveAudioSettings.capturePCM()
         output.setSampleBufferDelegate(self, queue: queue)
         guard captureSession.canAddOutput(output) else {
             captureSession.commitConfiguration()
@@ -177,12 +203,7 @@ final class MicrophoneArchiveRecorder: NSObject, @unchecked Sendable {
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .m4a)
         let writerInput = AVAssetWriterInput(
             mediaType: .audio,
-            outputSettings: [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVNumberOfChannelsKey: 1,
-                AVSampleRateKey: 48_000,
-                AVEncoderBitRateKey: 128_000
-            ]
+            outputSettings: MicrophoneArchiveAudioSettings.writerAAC()
         )
         writerInput.expectsMediaDataInRealTime = true
         guard writer.canAdd(writerInput) else {
@@ -240,9 +261,7 @@ final class MicrophoneArchiveRecorder: NSObject, @unchecked Sendable {
 
     private func appendOnQueue(_ sampleBuffer: CMSampleBuffer) {
         guard var recording = activeRecording,
-              recording.pauseStartedAt == nil,
-              recording.writer.status == .writing,
-              recording.input.isReadyForMoreMediaData else {
+              recording.writer.status == .writing else {
             return
         }
 
@@ -253,6 +272,11 @@ final class MicrophoneArchiveRecorder: NSObject, @unchecked Sendable {
         recording.latestSampleTime = sampleTime
 
         if recording.pauseStartedAt != nil {
+            activeRecording = recording
+            return
+        }
+
+        guard recording.input.isReadyForMoreMediaData else {
             activeRecording = recording
             return
         }

@@ -78,7 +78,41 @@ struct CameraArchiveRecorderTests {
 
         #expect(Int(naturalSize.width.rounded()) == 640)
         #expect(Int(naturalSize.height.rounded()) == 360)
-        #expect(duration.seconds >= 0.20)
+        #expect(duration.seconds >= 0.10)
+    }
+
+    @Test func cameraArchiveDoesNotEncodePausedWallClockGapAfterDeviceSwitch() async throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("wondershow-camera-archive-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        defer {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        let outputURL = rootURL.appendingPathComponent("presenter-camera-pause.mov")
+        let recorder = CameraArchiveRecorder()
+        try recorder.startRecording(to: outputURL)
+        recorder.append(try makeCameraArchiveSampleBuffer(width: 640, height: 360, red: 220))
+        try await Task.sleep(for: .milliseconds(180))
+        recorder.pauseRecording()
+        try await Task.sleep(for: .milliseconds(360))
+        recorder.append(try makeCameraArchiveSampleBuffer(width: 640, height: 360, red: 90))
+        try await Task.sleep(for: .milliseconds(120))
+        recorder.resumeRecording()
+        try await Task.sleep(for: .milliseconds(180))
+        await withCheckedContinuation { continuation in
+            recorder.stopRecording { _ in
+                continuation.resume()
+            }
+        }
+
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration)
+
+        #expect(duration.seconds < 0.62)
+        #expect(duration.seconds >= 0.25)
     }
 }
 
