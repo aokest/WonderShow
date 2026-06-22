@@ -343,6 +343,9 @@ final class CameraPreviewService: NSObject, ObservableObject {
 
     func selectDevice(id: String) {
         selectedDeviceID = id
+        resetGestureTracking()
+        latestPreviewImage = nil
+        stopCaptureSession()
         start()
     }
 

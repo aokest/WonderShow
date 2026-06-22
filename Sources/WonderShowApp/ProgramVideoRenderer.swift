@@ -509,6 +509,7 @@ struct ProgramVideoRenderer {
                     sourceCropRect: nil,
                     placement: .fullCanvas,
                     fillMode: .fit,
+                    trimsBlackMatte: true,
                     presenterVideoEffects: presenterVideoEffects
                 )
             ]
@@ -523,6 +524,7 @@ struct ProgramVideoRenderer {
                     sourceCropRect: nil,
                     placement: .fullCanvas,
                     fillMode: .closeUp,
+                    trimsBlackMatte: true,
                     presenterVideoEffects: presenterVideoEffects
                 )
             ]
@@ -537,6 +539,7 @@ struct ProgramVideoRenderer {
                     sourceCropRect: screenContentCropRect,
                     placement: .fullCanvas,
                     fillMode: .fit,
+                    trimsBlackMatte: false,
                     presenterVideoEffects: .default
                 )
             ]
@@ -558,7 +561,8 @@ struct ProgramVideoRenderer {
                     naturalSize: cameraNaturalSize,
                     sourceCropRect: nil,
                     placement: speakerLayer.placement,
-                    fillMode: .fit,
+                    fillMode: .fill,
+                    trimsBlackMatte: true,
                     presenterVideoEffects: presenterVideoEffects
                 ),
                 ProgramVideoRenderLayer(
@@ -567,6 +571,7 @@ struct ProgramVideoRenderer {
                     sourceCropRect: screenContentCropRect,
                     placement: .fullCanvas,
                     fillMode: .fit,
+                    trimsBlackMatte: false,
                     presenterVideoEffects: .default
                 )
             ]
@@ -584,6 +589,7 @@ struct ProgramVideoRenderer {
                     sourceCropRect: screenContentCropRect,
                     placement: scene.layers.first(where: { $0.source == .slidesScreen })?.placement ?? .pictureInPicture(corner: .topRight, size: .medium),
                     fillMode: .fit,
+                    trimsBlackMatte: false,
                     presenterVideoEffects: .default
                 ),
                 ProgramVideoRenderLayer(
@@ -592,6 +598,7 @@ struct ProgramVideoRenderer {
                     sourceCropRect: nil,
                     placement: .fullCanvas,
                     fillMode: .fit,
+                    trimsBlackMatte: true,
                     presenterVideoEffects: presenterVideoEffects
                 )
             ]
@@ -609,6 +616,7 @@ struct ProgramVideoRenderer {
                     sourceCropRect: nil,
                     placement: .rightHalf,
                     fillMode: .fill,
+                    trimsBlackMatte: true,
                     presenterVideoEffects: presenterVideoEffects
                 ),
                 ProgramVideoRenderLayer(
@@ -617,6 +625,7 @@ struct ProgramVideoRenderer {
                     sourceCropRect: screenContentCropRect,
                     placement: .leftHalf,
                     fillMode: .fit,
+                    trimsBlackMatte: false,
                     presenterVideoEffects: .default
                 )
             ]
@@ -1038,6 +1047,7 @@ private struct ProgramVideoRenderLayer: Hashable, Sendable {
     let sourceCropRect: CGRect?
     let placement: ProgramLayerPlacement
     let fillMode: ProgramVideoFillMode
+    let trimsBlackMatte: Bool
     let presenterVideoEffects: PresenterVideoEffects
 }
 
@@ -1222,15 +1232,16 @@ private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unche
                 guard let sourceBuffer = request.sourceFrame(byTrackID: layer.trackID) else {
                     continue
                 }
+                let sourceImage = Self.sourceImage(
+                    from: sourceBuffer,
+                    cropRect: layer.sourceCropRect,
+                    trimsBlackMatte: layer.trimsBlackMatte
+                )
                 let geometry = ProgramLayerGeometry(
-                    naturalSize: layer.naturalSize,
+                    naturalSize: sourceImage.extent.size,
                     placement: layer.placement,
                     renderSize: renderSize,
                     fillMode: layer.fillMode
-                )
-                let sourceImage = Self.sourceImage(
-                    from: sourceBuffer,
-                    cropRect: layer.sourceCropRect
                 )
                 let fittedImage = Self.scaledImage(
                     sourceImage,
@@ -1259,12 +1270,17 @@ private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unche
 
     func cancelAllPendingVideoCompositionRequests() {}
 
-    private static func sourceImage(from sourceBuffer: CVPixelBuffer, cropRect: CGRect?) -> CIImage {
+    private static func sourceImage(
+        from sourceBuffer: CVPixelBuffer,
+        cropRect: CGRect?,
+        trimsBlackMatte: Bool
+    ) -> CIImage {
         let image = CIImage(cvPixelBuffer: sourceBuffer)
-        guard let cropRect else {
+        let resolvedCropRect = cropRect ?? (trimsBlackMatte ? CameraFrameMatteDetector.contentRect(in: sourceBuffer) : nil)
+        guard let resolvedCropRect else {
             return image
         }
-        let safeRect = cropRect
+        let safeRect = resolvedCropRect
             .standardized
             .intersection(image.extent)
             .integral

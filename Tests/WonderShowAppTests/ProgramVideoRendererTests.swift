@@ -451,7 +451,7 @@ struct ProgramVideoRendererTests {
     #expect(backgroundPixel.blue > 180)
 }
 
-@Test func programVideoRendererFitsPresenterPictureInPictureWithoutCroppingOrUpscaling() async throws {
+@Test func programVideoRendererFillsPresenterPictureInPictureLikeLiveMonitor() async throws {
     let fileManager = FileManager.default
     let rootURL = fileManager.temporaryDirectory
         .appendingPathComponent("wondershow-program-renderer-tests", isDirectory: true)
@@ -493,7 +493,7 @@ struct ProgramVideoRendererTests {
         manifest: RecordingProjectManifestFactory().makeManifest(project: project)
     )
 
-    let outputURL = rootURL.appendingPathComponent("Exports/fit-pip.mp4")
+    let outputURL = rootURL.appendingPathComponent("Exports/fill-pip.mp4")
     _ = try await ProgramVideoRenderer().render(
         session: session,
         settings: RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264),
@@ -502,10 +502,67 @@ struct ProgramVideoRendererTests {
 
     let image = try firstFrameImage(from: outputURL)
     let cameraCenter = try #require(pixel(in: image, x: 480, y: 270))
-    let pipMatte = try #require(pixel(in: image, x: 480, y: 180))
+    let pipTop = try #require(pixel(in: image, x: 480, y: 180))
 
     #expect(cameraCenter.red > 170)
-    #expect(pipMatte.red < 140)
+    #expect(pipTop.red > 170)
+}
+
+@Test func programVideoRendererCropsCameraBlackMatteBeforeFillingPictureInPicture() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("wondershow-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .cameraBlackMatte)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen)
+
+    let geometry = ProgramPictureInPictureGeometry(
+        centerX: 0.50,
+        centerY: 0.50,
+        width: 0.30,
+        height: 0.16875,
+        shape: .square
+    )
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .screenWithCameraPictureInPicture(corner: .bottomRight),
+        durationMilliseconds: 1_000,
+        pictureInPictureGeometry: geometry
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: RecordingProjectManifestFactory().makeManifest(project: project)
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/matte-cropped-pip.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264),
+        outputURL: outputURL
+    )
+
+    let image = try firstFrameImage(from: outputURL)
+    let pipInnerLeft = try #require(pixel(in: image, x: 350, y: 235))
+    let pipCenter = try #require(pixel(in: image, x: 480, y: 270))
+
+    #expect(pipInnerLeft.red > 170)
+    #expect(pipCenter.red > 170)
 }
 
 @Test func programVideoRendererPreservesWholeMainScreenLayerWithoutCroppingWindowChrome() async throws {
@@ -1484,6 +1541,7 @@ private enum TestVideoColor {
     case cameraDim
     case cameraPortrait
     case cameraSplit
+    case cameraBlackMatte
     case screen
     case screenWithTopChrome
     case screenWithCenteredWindow
@@ -1599,6 +1657,22 @@ private func makePixelBuffer(size: CGSize, color: TestVideoColor, frame: Int) ->
                     pointer[offset] = 40
                     pointer[offset + 1] = 220
                     pointer[offset + 2] = 40
+                }
+            case .cameraBlackMatte:
+                let contentRect = CGRect(
+                    x: CGFloat(width) * 0.375,
+                    y: CGFloat(height) * 0.375,
+                    width: CGFloat(width) * 0.25,
+                    height: CGFloat(height) * 0.25
+                )
+                if contentRect.contains(CGPoint(x: x, y: y)) {
+                    pointer[offset] = 90
+                    pointer[offset + 1] = 80 &+ pulse
+                    pointer[offset + 2] = 220
+                } else {
+                    pointer[offset] = 0
+                    pointer[offset + 1] = 0
+                    pointer[offset + 2] = 0
                 }
             case .screen:
                 pointer[offset] = 210

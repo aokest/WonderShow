@@ -5867,7 +5867,7 @@ private struct ProgramMonitorView: View {
     private var cameraLayer: some View {
         ZStack {
             if cameraStatus == .running {
-                presenterCameraPreview
+                presenterCameraPreview(contentMode: .fit)
             } else {
                 cameraPlaceholder
             }
@@ -5879,7 +5879,7 @@ private struct ProgramMonitorView: View {
     private var pipCameraLayer: some View {
         pipChrome {
             if cameraStatus == .running {
-                presenterCameraPreview
+                presenterCameraPreview(contentMode: .fill)
             } else {
                 cameraPlaceholder
             }
@@ -5904,11 +5904,12 @@ private struct ProgramMonitorView: View {
     }
 
     @ViewBuilder
-    private var presenterCameraPreview: some View {
+    private func presenterCameraPreview(contentMode: ContentMode) -> some View {
         if let cameraPreviewImage {
             Image(decorative: cameraPreviewImage, scale: 1)
                 .resizable()
-                .aspectRatio(contentMode: .fit)
+                .aspectRatio(contentMode: contentMode)
+                .clipped()
                 .background(Color.black)
         } else {
             CameraPreviewView(session: cameraSession)
