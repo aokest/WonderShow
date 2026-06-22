@@ -15,10 +15,11 @@ The current app can be tried as a recording studio baseline:
 - Presenter camera, selected screen/window, and selected microphone tracks can be recorded to raw media.
 - Screen/window source picking supports list and thumbnail views and filters out background/no-window items.
 - Source picker entries can be assigned to user-defined slots 1-6; during recording `Command+1` through `Command+6` and the mini toolbar reuse the existing ScreenCaptureKit `updateSource` pipeline.
-- Screen/window source switching during recording preserves a fixed raw track canvas and crops ScreenCaptureKit `contentRect` before normalization, so monitor preview and program preview/export stay closer in source size.
+- Screen/window source switching during recording crops ScreenCaptureKit `contentRect` before normalization, so monitor preview and program preview/export stay closer in source size.
+- Canvas aspect changes during recording are stored as layout keyframes with the active canvas pixel size; the screen raw track starts a new segment when the recording canvas size changes, and preview/export render each segment inside the same active canvas shape the monitor showed.
 - The monitor supports draggable/resizable shaped PiP, and the same PiP geometry/keyframes are used by preview and export.
 - Presenter video effects support mirror, brightness, contrast, and light beauty, with preview and program export driven by the same manifest value.
-- Layout switching during recording is stored as `RecordingLayoutKeyframe`, so screen-main/speaker-main changes appear in preview and export.
+- Layout switching during recording is stored as `RecordingLayoutKeyframe`, so screen-main/speaker-main changes, split-screen crop offsets, and active canvas aspect changes appear in preview and export.
 - Microphone recording uses sample-level `AVCaptureAudioDataOutput + AVAssetWriter`, skips startup transient audio, waits for writer completion on stop, and supports pause/resume retiming.
 - The bottom timeline displays real project tracks and segment ranges, supports folding tracks, selecting a segment, moving the export playhead, and exporting one selected time range.
 - Preview composition and video export are connected to the real renderer.
