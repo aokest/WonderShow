@@ -149,10 +149,9 @@ rtk bash scripts/package-community-app.sh
 | Preview & export (incl. 4K) | ✅ | ✅ |
 | Trilingual UI | ✅ | ✅ |
 | .wondershow project format | ✅ | ✅ |
-| Gesture control (swipe/zoom) | — | ✅ |
+
 | Presenter video effects | — | ✅ |
 | Live director monitor | — | ✅ |
-| Licensing & updates | — | ✅ |
 
 ## 💡 Support the Author
 
