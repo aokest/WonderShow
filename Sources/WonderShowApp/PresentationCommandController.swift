@@ -562,6 +562,37 @@ final class PresentationCommandController: ObservableObject {
         lastActionDescription = result.userFacingAction(action: .toggleRecording)
     }
 
+    func resumeLastRecordingSessionForContinuation() -> Bool {
+        guard !isRecording, let session = lastRecordingSession else {
+            return false
+        }
+        activeRecordingSession = session
+        isRecording = true
+        lastActionDescription = "录制状态：继续；已接回工程 \(session.url.path)"
+        lastDeliveryBackend = "录制工程"
+        lastDeliveryDetail = "继续写入上一段录制项目"
+        return true
+    }
+
+    func registerArchiveSegment(
+        presenterCameraURL: URL?,
+        slidesScreenURL: URL?,
+        microphoneAudioURL: URL?
+    ) {
+        guard let session = lastRecordingSession else {
+            return
+        }
+        let updatedSession = session.appendingArchiveSegment(
+            presenterCameraURL: presenterCameraURL,
+            slidesScreenURL: slidesScreenURL,
+            microphoneAudioURL: microphoneAudioURL
+        )
+        lastRecordingSession = updatedSession
+        if activeRecordingSession?.url == session.url {
+            activeRecordingSession = updatedSession
+        }
+    }
+
     @discardableResult
     private func sendCommand(
         _ action: PresentationAction,

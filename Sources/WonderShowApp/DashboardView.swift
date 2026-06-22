@@ -131,6 +131,17 @@ private enum ProgramCanvasResolution: String, CaseIterable, Hashable {
     }
 }
 
+private struct ActiveRecordingConfiguration: Equatable {
+    let scenario: RecordingScenario
+    let cameraName: String
+    let mode: RecordingMode
+    let layout: RecordingLayout
+    let pictureInPictureGeometry: ProgramPictureInPictureGeometry?
+    let presenterVideoEffects: PresenterVideoEffects
+    let exportSettings: RecordingExportSettings
+    let screenCapturePixelSize: ScreenArchiveRecorder.CapturePixelSize
+}
+
 private struct ExportProgressPresentation: Identifiable, Equatable {
     let id = "export-progress"
     var title: String
@@ -198,18 +209,32 @@ struct DashboardView: View {
     @State private var globalRecordingHotKeyMonitor: Any?
     @State private var recordingControlState: RecordingControlState = .idle
     @State private var showsFinishRecordingAlert = false
+    @State private var showsRestartRecordingAlert = false
+    @State private var finishAlertPausedActiveRecording = false
     @State private var shouldRenderStoppedRecording = true
     @State private var discardStoppedRecording = false
+    @State private var activeRecordingConfiguration: ActiveRecordingConfiguration?
+    @State private var lastRecordingExportSettings: RecordingExportSettings?
+    @State private var hasStoppedRecordingAvailableForContinuation = false
+    @State private var shouldContinueStoppedRecording = false
+    @State private var activeArchiveSegmentIndex = 1
+    @State private var nextArchiveSegmentIndex = 1
+    @State private var activeScreenArchivePixelSize: ScreenArchiveRecorder.CapturePixelSize?
+    @State private var isRestartingScreenArchiveForCanvasChange = false
     @State private var recordingActiveStartedAt: Date?
     @State private var accumulatedRecordingDuration: TimeInterval = 0
     @State private var audioInputDevices: [AudioInputDeviceOption] = MicrophoneArchiveRecorder.availableInputDevices()
     @State private var selectedAudioInputDeviceID = AudioInputDeviceOption.systemDefault.id
+    @State private var selectedCameraInputDeviceSnapshot: CameraInputDevice?
+    @State private var selectedAudioInputDeviceSnapshot: AudioInputDeviceOption?
     @State private var latestScreenPreviewImage: CGImage?
     @State private var latestScreenPreviewSourceID: ScreenCaptureSourceID?
     @State private var screenPreviewGeneration = 0
     @State private var pipOffset = CGSize(width: 18, height: -18)
     @State private var pipScale: CGFloat = 1
     @State private var pipShape: PiPShape = .roundedRectangle
+    @State private var splitScreenSourceOffset = CGSize.zero
+    @State private var splitCameraSourceOffset = CGSize.zero
     @State private var presenterMirrorEnabled = false
     @State private var presenterBrightness: CGFloat = 0
     @State private var presenterContrast: CGFloat = 1
@@ -235,7 +260,7 @@ struct DashboardView: View {
     @State private var presenterBeautyControlsExpanded = false
     @State private var monitorCanvasSize = CGSize(width: 1280, height: 720)
     @State private var programCanvasAspect: ProgramCanvasAspect = .widescreen
-    @State private var programCanvasResolution: ProgramCanvasResolution = .uhd
+    @State private var programCanvasResolution: ProgramCanvasResolution = .hd
     @State private var recordingStartedAt: Date?
     @State private var recordingPiPKeyframes: [RecordingPiPKeyframe] = []
     @State private var recordingLayoutKeyframes: [RecordingLayoutKeyframe] = []
@@ -320,8 +345,36 @@ struct DashboardView: View {
         )
     }
 
+    private var defaultExportSettingsForLastRecording: RecordingExportSettings {
+        lastRecordingExportSettings ?? programCanvasExportSettings
+    }
+
     private var effectivePresenterVideoEffects: PresenterVideoEffects {
         PresenterExperimentalEffectsGate.mask(currentPresenterVideoEffects(permittedBy: recordingFeatureTier))
+    }
+
+    private var programCanvasAspectBinding: Binding<ProgramCanvasAspect> {
+        Binding(
+            get: {
+                programCanvasAspect
+            },
+            set: { aspect in
+                programCanvasAspect = aspect
+                handleProgramCanvasConfigurationChanged()
+            }
+        )
+    }
+
+    private var programCanvasResolutionBinding: Binding<ProgramCanvasResolution> {
+        Binding(
+            get: {
+                programCanvasResolution
+            },
+            set: { resolution in
+                programCanvasResolution = resolution
+                handleProgramCanvasConfigurationChanged()
+            }
+        )
     }
 
     private var exportResolutionBinding: Binding<RecordingExportResolution> {
@@ -399,23 +452,22 @@ struct DashboardView: View {
                 cancel: cancelActiveProgramRender
             )
         }
-        .alert(item: $exportOutcome) { outcome in
-            if let url = outcome.url {
-                Alert(
-                    title: Text(outcome.title),
-                    message: Text(outcome.message),
-                    primaryButton: .default(Text(copy.revealProject)) {
+        .sheet(item: $exportOutcome, onDismiss: {
+            exportOutcome = nil
+        }) { outcome in
+            ExportOutcomeSheet(
+                copy: copy,
+                outcome: outcome,
+                reveal: {
+                    if let url = outcome.url {
                         NSWorkspace.shared.activateFileViewerSelecting([url])
-                    },
-                    secondaryButton: .cancel(Text(copy.runtimeText("关闭")))
-                )
-            } else {
-                Alert(
-                    title: Text(outcome.title),
-                    message: Text(outcome.message),
-                    dismissButton: .default(Text(copy.runtimeText("确定")))
-                )
-            }
+                    }
+                    exportOutcome = nil
+                },
+                close: {
+                    exportOutcome = nil
+                }
+            )
         }
         .sheet(isPresented: $showsScreenSourcePicker) {
             ScreenSourcePickerSheet(
@@ -454,9 +506,22 @@ struct DashboardView: View {
             Button(copy.runtimeText("丢弃录制"), role: .destructive) {
                 finishRecording(save: false)
             }
-            Button(copy.cancel, role: .cancel) {}
+            Button(copy.cancel, role: .cancel) {
+                cancelFinishRecording()
+            }
         } message: {
             Text(copy.runtimeText("保存后会生成原始轨并尝试合成视频；丢弃会删除本次录制项目。"))
+        }
+        .alert(copy.runtimeText("继续上一段录制？"), isPresented: $showsRestartRecordingAlert) {
+            Button(copy.runtimeText("继续录制")) {
+                continueStoppedRecording()
+            }
+            Button(copy.runtimeText("重新开始"), role: .destructive) {
+                restartRecordingFromScratch()
+            }
+            Button(copy.cancel, role: .cancel) {}
+        } message: {
+            Text(copy.runtimeText("继续录制会保留当前时间轴并接着往后录；重新开始会清空当前时间轴并创建新的录制项目。"))
         }
         .onAppear {
             applyDistributionPolicy()
@@ -485,37 +550,49 @@ struct DashboardView: View {
         }
         .onChange(of: layout) {
             restartScreenPreviewIfNeeded()
+            refreshActiveRecordingConfigurationFromCurrentControls()
             recordCurrentLayoutKeyframeIfNeeded(force: true)
         }
         .onChange(of: commandController.isRecording) {
             if commandController.isRecording {
                 beginRecordingCaptureSession()
                 if let session = commandController.lastRecordingSession {
+                    let archiveURLs = session.archiveURLs(forSegment: activeArchiveSegmentIndex)
+                    if activeArchiveSegmentIndex > 1 {
+                        commandController.registerArchiveSegment(
+                            presenterCameraURL: session.requiresPresenterCameraTrack ? archiveURLs.presenterCameraURL : nil,
+                            slidesScreenURL: session.requiresSlidesScreenTrack ? archiveURLs.slidesScreenURL : nil,
+                            microphoneAudioURL: archiveURLs.microphoneAudioURL
+                        )
+                    }
                     if session.requiresPresenterCameraTrack {
                         do {
-                            try camera.startCameraArchiveRecording(to: session.presenterCameraURL)
+                            try camera.startCameraArchiveRecording(to: archiveURLs.presenterCameraURL)
                         } catch {
                             commandController.reportRecordingIssue("讲者摄像头原始轨写入失败：\(error.localizedDescription)")
                         }
                     }
                     if session.requiresSlidesScreenTrack {
+                        let recordingConfiguration = activeRecordingConfiguration ?? currentRecordingConfiguration()
+                        activeScreenArchivePixelSize = recordingConfiguration.screenCapturePixelSize
                         startScreenArchiveRecording(
-                            to: session.slidesScreenURL,
+                            to: archiveURLs.slidesScreenURL,
                             target: target,
                             sourcePreference: screenSourcePreference,
-                            recordingPixelSize: screenArchiveRecordingPixelSize
+                            recordingPixelSize: recordingConfiguration.screenCapturePixelSize
                         )
                     }
-                    startMicrophoneArchiveRecording(to: session.microphoneAudioURL)
+                    startMicrophoneArchiveRecording(to: archiveURLs.microphoneAudioURL)
                 }
             } else {
                 if shouldRenderStoppedRecording {
-                    updatePresenterVideoEffectsForLastRecording()
+                    updatePresenterVideoEffectsForLastRecording(activeRecordingConfiguration?.presenterVideoEffects)
                     finalizeRecordingTimelineForLastRecording()
                 }
                 stopRecordingAndRenderProgram(
                     shouldRender: shouldRenderStoppedRecording,
-                    discardSession: discardStoppedRecording
+                    discardSession: discardStoppedRecording,
+                    configuration: activeRecordingConfiguration
                 )
                 resetRecordingStateAfterStop(preserveTimeline: shouldRenderStoppedRecording)
             }
@@ -654,7 +731,7 @@ struct DashboardView: View {
 
     private func handlePresenterVideoEffectsChange() {
         camera.updatePreviewEffects(effectivePresenterVideoEffects)
-        updatePresenterVideoEffectsForLastRecording()
+        persistPresenterVideoEffectsForActiveRecording()
     }
 
     /// 将当前手势和缩放回调绑定到选中的演示目标，避免目标切换时投递错位。
@@ -737,7 +814,29 @@ struct DashboardView: View {
         guard recordingControlState == .idle else {
             return
         }
+        if hasStoppedRecordingAvailableForContinuation {
+            showsRestartRecordingAlert = true
+            return
+        }
 
+        beginFreshRecordingCountdown()
+    }
+
+    private func beginFreshRecordingCountdown() {
+        shouldContinueStoppedRecording = false
+        activeArchiveSegmentIndex = 1
+        nextArchiveSegmentIndex = 1
+        beginRecordingCountdown()
+    }
+
+    private func beginRecordingCountdown() {
+        let continuesStoppedRecording = shouldContinueStoppedRecording
+        activeArchiveSegmentIndex = continuesStoppedRecording ? max(2, nextArchiveSegmentIndex) : 1
+        let recordingConfiguration = currentRecordingConfiguration(
+            exportSettingsOverride: continuesStoppedRecording ? lastRecordingExportSettings : nil
+        )
+        activeRecordingConfiguration = recordingConfiguration
+        lastRecordingExportSettings = recordingConfiguration.exportSettings
         recordingControlState = .starting
         recordingCountdownTask?.cancel()
         recordingCountdownTask = Task { @MainActor in
@@ -752,15 +851,28 @@ struct DashboardView: View {
             recordingCountdownPresenter.showRecordingStarted()
             shouldRenderStoppedRecording = true
             discardStoppedRecording = false
-            commandController.toggleRecording(
-                scenario: recordingScenario,
-                cameraName: camera.activeDeviceName,
-                mode: mode,
-                layout: layout,
-                pictureInPictureGeometry: currentPictureInPictureGeometry,
-                presenterVideoEffects: effectivePresenterVideoEffects
-            )
+            if continuesStoppedRecording {
+                if !commandController.resumeLastRecordingSessionForContinuation() {
+                    activeRecordingConfiguration = nil
+                    recordingControlState = .idle
+                    elapsedSeconds = 0
+                    hasStoppedRecordingAvailableForContinuation = false
+                    shouldContinueStoppedRecording = false
+                    recordingCountdownPresenter.hide()
+                    return
+                }
+            } else {
+                commandController.toggleRecording(
+                    scenario: recordingConfiguration.scenario,
+                    cameraName: recordingConfiguration.cameraName,
+                    mode: recordingConfiguration.mode,
+                    layout: recordingConfiguration.layout,
+                    pictureInPictureGeometry: recordingConfiguration.pictureInPictureGeometry,
+                    presenterVideoEffects: recordingConfiguration.presenterVideoEffects
+                )
+            }
             if !commandController.isRecording {
+                activeRecordingConfiguration = nil
                 recordingControlState = .idle
                 elapsedSeconds = 0
             }
@@ -772,6 +884,7 @@ struct DashboardView: View {
     private func cancelRecordingCountdown() {
         recordingCountdownTask?.cancel()
         recordingCountdownTask = nil
+        activeRecordingConfiguration = nil
         recordingCountdownPresenter.hide()
         if !commandController.isRecording {
             recordingControlState = .idle
@@ -779,18 +892,45 @@ struct DashboardView: View {
         }
     }
 
+    private func continueStoppedRecording() {
+        showsRestartRecordingAlert = false
+        shouldContinueStoppedRecording = true
+        beginRecordingCountdown()
+    }
+
+    private func restartRecordingFromScratch() {
+        showsRestartRecordingAlert = false
+        hasStoppedRecordingAvailableForContinuation = false
+        shouldContinueStoppedRecording = false
+        activeArchiveSegmentIndex = 1
+        nextArchiveSegmentIndex = 1
+        resetRecordingStateAfterStop(preserveTimeline: false)
+        beginFreshRecordingCountdown()
+    }
+
     private func beginRecordingCaptureSession() {
         let now = Date()
-        elapsedSeconds = 0
-        accumulatedRecordingDuration = 0
+        if !shouldContinueStoppedRecording {
+            elapsedSeconds = 0
+            accumulatedRecordingDuration = 0
+        } else {
+            accumulatedRecordingDuration = TimeInterval(elapsedSeconds)
+        }
         recordingActiveStartedAt = now
         latestScreenPreviewImage = nil
         latestScreenPreviewSourceID = nil
-        recordingStartedAt = now
-        recordingPiPKeyframes = initialPiPKeyframes()
-        recordingLayoutKeyframes = initialLayoutKeyframes()
-        lastPiPKeyframeDate = now
+        recordingStartedAt = now.addingTimeInterval(-accumulatedRecordingDuration)
         recordingControlState = .recording
+        if !shouldContinueStoppedRecording {
+            recordingPiPKeyframes = initialPiPKeyframes()
+            recordingLayoutKeyframes = initialLayoutKeyframes()
+        } else {
+            recordCurrentLayoutKeyframeIfNeeded(force: true)
+            recordCurrentPiPKeyframeIfNeeded(force: true)
+        }
+        lastPiPKeyframeDate = now
+        hasStoppedRecordingAvailableForContinuation = false
+        shouldContinueStoppedRecording = false
     }
 
     private func pauseRecording() {
@@ -798,6 +938,7 @@ struct DashboardView: View {
             return
         }
         recordCurrentPiPKeyframeIfNeeded(force: true)
+        recordCurrentLayoutKeyframeIfNeeded(force: true)
         commitActiveRecordingDuration()
         camera.pauseCameraArchiveRecording()
         screenArchiveRecorder.pauseRecording()
@@ -812,11 +953,13 @@ struct DashboardView: View {
         guard commandController.isRecording, recordingControlState == .paused else {
             return
         }
+        refreshActiveRecordingConfigurationFromCurrentControls(includePaused: true)
         recordingActiveStartedAt = Date()
         camera.resumeCameraArchiveRecording()
         screenArchiveRecorder.resumeRecording()
         microphoneArchiveRecorder.resumeRecording()
         recordingControlState = .recording
+        recordCurrentLayoutKeyframeIfNeeded(force: true)
         recordCurrentPiPKeyframeIfNeeded(force: true)
         commandController.reportRecordingProgress("录制已继续")
     }
@@ -829,7 +972,12 @@ struct DashboardView: View {
             cancelRecordingCountdown()
             return
         }
-        commitActiveRecordingDuration()
+        finishAlertPausedActiveRecording = commandController.isRecording
+        if recordingControlState == .recording {
+            pauseRecording()
+        } else {
+            commitActiveRecordingDuration()
+        }
         showsFinishRecordingAlert = true
     }
 
@@ -838,19 +986,35 @@ struct DashboardView: View {
             resetRecordingStateAfterStop()
             return
         }
+        finishAlertPausedActiveRecording = false
         recordingCountdownTask?.cancel()
         recordingCountdownPresenter.hide()
         commitActiveRecordingDuration()
         shouldRenderStoppedRecording = save
         discardStoppedRecording = !save
+        let recordingConfiguration = activeRecordingConfiguration ?? currentRecordingConfiguration()
         commandController.toggleRecording(
-            scenario: recordingScenario,
-            cameraName: camera.activeDeviceName,
-            mode: mode,
-            layout: layout,
-            pictureInPictureGeometry: currentPictureInPictureGeometry,
-            presenterVideoEffects: effectivePresenterVideoEffects
+            scenario: recordingConfiguration.scenario,
+            cameraName: recordingConfiguration.cameraName,
+            mode: recordingConfiguration.mode,
+            layout: recordingConfiguration.layout,
+            pictureInPictureGeometry: recordingConfiguration.pictureInPictureGeometry,
+            presenterVideoEffects: recordingConfiguration.presenterVideoEffects
         )
+    }
+
+    private func cancelFinishRecording() {
+        showsFinishRecordingAlert = false
+        defer {
+            finishAlertPausedActiveRecording = false
+        }
+        guard finishAlertPausedActiveRecording,
+              commandController.isRecording else {
+            return
+        }
+        if recordingControlState == .paused {
+            resumeRecording()
+        }
     }
 
     private func commitActiveRecordingDuration() {
@@ -869,9 +1033,12 @@ struct DashboardView: View {
     }
 
     private func resetRecordingStateAfterStop(preserveTimeline: Bool = false) {
+        let finishedArchiveSegmentIndex = activeArchiveSegmentIndex
         recordingControlState = .idle
         recordingCountdownTask = nil
         recordingCountdownPresenter.hide()
+        activeRecordingConfiguration = nil
+        activeArchiveSegmentIndex = 1
         if !preserveTimeline {
             elapsedSeconds = 0
         }
@@ -883,10 +1050,18 @@ struct DashboardView: View {
             recordingLayoutKeyframes = []
             timelinePlayheadMilliseconds = 0
             selectedTimelineRange = nil
+            lastRecordingExportSettings = nil
+            nextArchiveSegmentIndex = 1
         }
         lastPiPKeyframeDate = nil
         shouldRenderStoppedRecording = true
         discardStoppedRecording = false
+        hasStoppedRecordingAvailableForContinuation = preserveTimeline
+        if preserveTimeline {
+            nextArchiveSegmentIndex = max(nextArchiveSegmentIndex, finishedArchiveSegmentIndex + 1)
+        }
+        shouldContinueStoppedRecording = false
+        finishAlertPausedActiveRecording = false
     }
 
     private func installRecordingHotKeyMonitor() {
@@ -986,6 +1161,69 @@ struct DashboardView: View {
         }
     }
 
+    private func restartScreenArchiveSegmentForCanvasChangeIfNeeded() {
+        guard commandController.isRecording,
+              currentProgramUsesScreen,
+              !showsFinishRecordingAlert,
+              !finishAlertPausedActiveRecording,
+              !isRestartingScreenArchiveForCanvasChange,
+              let session = commandController.lastRecordingSession,
+              session.requiresSlidesScreenTrack else {
+            return
+        }
+
+        let recordingConfiguration = activeRecordingConfiguration ?? currentRecordingConfiguration()
+        let nextPixelSize = recordingConfiguration.screenCapturePixelSize
+        guard activeScreenArchivePixelSize != nextPixelSize else {
+            return
+        }
+
+        isRestartingScreenArchiveForCanvasChange = true
+        Task { @MainActor in
+            _ = await screenArchiveRecorder.stopRecording()
+            guard commandController.isRecording,
+                  currentProgramUsesScreen,
+                  let segmentURLs = allocateAdditionalArchiveSegmentURLs(),
+                  commandController.lastRecordingSession?.requiresSlidesScreenTrack == true else {
+                activeScreenArchivePixelSize = nil
+                isRestartingScreenArchiveForCanvasChange = false
+                return
+            }
+
+            let currentConfiguration = activeRecordingConfiguration ?? currentRecordingConfiguration()
+            commandController.registerArchiveSegment(
+                presenterCameraURL: nil,
+                slidesScreenURL: segmentURLs.slidesScreenURL,
+                microphoneAudioURL: nil
+            )
+            activeScreenArchivePixelSize = currentConfiguration.screenCapturePixelSize
+            installScreenArchivePreviewHandler()
+            startScreenArchiveRecording(
+                to: segmentURLs.slidesScreenURL,
+                target: target,
+                sourcePreference: screenSourcePreference,
+                recordingPixelSize: currentConfiguration.screenCapturePixelSize
+            )
+            if recordingControlState == .paused {
+                screenArchiveRecorder.pauseRecording()
+            }
+            commandController.reportRecordingProgress(
+                "画布比例已应用到录制轨：\(currentConfiguration.screenCapturePixelSize.width)x\(currentConfiguration.screenCapturePixelSize.height)"
+            )
+            isRestartingScreenArchiveForCanvasChange = false
+            restartScreenArchiveSegmentForCanvasChangeIfNeeded()
+        }
+    }
+
+    private func allocateAdditionalArchiveSegmentURLs() -> RecordingArchiveSegmentURLs? {
+        guard let session = commandController.lastRecordingSession else {
+            return nil
+        }
+        let nextIndex = max(nextArchiveSegmentIndex, activeArchiveSegmentIndex + 1)
+        nextArchiveSegmentIndex = nextIndex + 1
+        return session.archiveURLs(forSegment: nextIndex)
+    }
+
     private var screenArchiveRecordingPixelSize: ScreenArchiveRecorder.CapturePixelSize {
         let pixelSize = programCanvasAspect.pixelSize(for: programCanvasResolution)
         return ScreenArchiveRecorder.CapturePixelSize(
@@ -994,7 +1232,56 @@ struct DashboardView: View {
         )
     }
 
+    private func currentRecordingConfiguration(
+        exportSettingsOverride: RecordingExportSettings? = nil
+    ) -> ActiveRecordingConfiguration {
+        let exportSettings = exportSettingsOverride ?? programCanvasExportSettings
+        let pixelSize = exportSettings.customPixelSize
+            ?? programCanvasAspect.pixelSize(for: programCanvasResolution)
+        return ActiveRecordingConfiguration(
+            scenario: recordingScenario,
+            cameraName: camera.activeDeviceName,
+            mode: mode,
+            layout: normalizedLayout(layout, for: mode),
+            pictureInPictureGeometry: currentPictureInPictureGeometry,
+            presenterVideoEffects: effectivePresenterVideoEffects,
+            exportSettings: exportSettings,
+            screenCapturePixelSize: ScreenArchiveRecorder.CapturePixelSize(
+                width: pixelSize.width,
+                height: pixelSize.height
+            )
+        )
+    }
+
+    private func handleProgramCanvasConfigurationChanged() {
+        refreshActiveRecordingConfigurationFromCurrentControls(includePaused: true)
+        restartScreenArchiveSegmentForCanvasChangeIfNeeded()
+        recordCurrentPiPKeyframeIfNeeded(force: true)
+        recordCurrentLayoutKeyframeIfNeeded(force: true)
+    }
+
+    private func handleMonitorCanvasSizeChanged(_ size: CGSize) {
+        guard monitorCanvasSize != size else {
+            return
+        }
+        monitorCanvasSize = size
+        handleProgramCanvasConfigurationChanged()
+    }
+
+    private func refreshActiveRecordingConfigurationFromCurrentControls(includePaused: Bool = false) {
+        guard recordingControlState.acceptsLiveConfigurationUpdates(
+            isFinishConfirmationVisible: showsFinishRecordingAlert || finishAlertPausedActiveRecording,
+            includePaused: includePaused
+        ) else {
+            return
+        }
+        let recordingConfiguration = currentRecordingConfiguration()
+        activeRecordingConfiguration = recordingConfiguration
+        lastRecordingExportSettings = recordingConfiguration.exportSettings
+    }
+
     private func stopScreenArchiveRecording() {
+        activeScreenArchivePixelSize = nil
         Task {
             await screenArchiveRecorder.stopRecording()
         }
@@ -1021,17 +1308,27 @@ struct DashboardView: View {
         }
     }
 
-    private func stopRecordingAndRenderProgram(shouldRender: Bool, discardSession: Bool = false) {
+    private func stopRecordingAndRenderProgram(
+        shouldRender: Bool,
+        discardSession: Bool = false,
+        configuration: ActiveRecordingConfiguration? = nil
+    ) {
         guard let session = commandController.lastRecordingSession else {
             stopScreenArchiveRecording()
             stopMicrophoneArchiveRecording()
             return
         }
-        let renderSettings = programCanvasExportSettings
+        let renderSettings = ProgramRenderResourcePolicy.defaultProgramSettings(
+            from: configuration?.exportSettings ?? defaultExportSettingsForLastRecording
+        )
 
         Task {
             await camera.stopCameraArchiveRecording()
             let screenSummary = await screenArchiveRecorder.stopRecording()
+            await MainActor.run {
+                activeScreenArchivePixelSize = nil
+                isRestartingScreenArchiveForCanvasChange = false
+            }
             await microphoneArchiveRecorder.stopRecording()
             if discardSession {
                 await MainActor.run {
@@ -1279,13 +1576,18 @@ struct DashboardView: View {
                 isRecording: commandController.isRecording,
                 pipOffset: $pipOffset,
                 pipScale: $pipScale,
+                splitScreenSourceOffset: $splitScreenSourceOffset,
+                splitCameraSourceOffset: $splitCameraSourceOffset,
                 pipShape: pipShape,
                 presenterVideoEffects: effectivePresenterVideoEffects,
                 canvasSizeChanged: { size in
-                    monitorCanvasSize = size
+                    handleMonitorCanvasSizeChanged(size)
                 },
                 pipInteractionEnded: {
                     recordCurrentPiPKeyframeIfNeeded(force: true)
+                },
+                splitCropInteractionEnded: {
+                    recordCurrentLayoutKeyframeIfNeeded(force: true)
                 },
                 pipCornerChanged: { corner in
                     updatePiPCorner(corner)
@@ -1310,8 +1612,8 @@ struct DashboardView: View {
 
             ProgramCanvasControls(
                 copy: copy,
-                aspect: $programCanvasAspect,
-                resolution: $programCanvasResolution,
+                aspect: programCanvasAspectBinding,
+                resolution: programCanvasResolutionBinding,
                 showsAdvancedPresenterEffectsUI: WonderShowDistribution.showsAdvancedPresenterEffectsUI,
                 presenterBeautyControlsExpanded: $presenterBeautyControlsExpanded,
                 presenterSmartBeautyEnabled: $presenterSmartBeautyEnabled,
@@ -1412,7 +1714,7 @@ struct DashboardView: View {
 
             Button(copy.text("timelineExportRange")) {
                 saveCurrentPiPTimelineForLastRecording()
-                exportDraftSettings = programCanvasExportSettings
+                exportDraftSettings = defaultExportSettingsForLastRecording
                 showsExportSettings = true
             }
             .buttonStyle(TimelineMiniButtonStyle())
@@ -1501,7 +1803,7 @@ struct DashboardView: View {
 
                         Button(copy.text("exportVideo")) {
                             saveCurrentPiPTimelineForLastRecording()
-                            exportDraftSettings = programCanvasExportSettings
+                            exportDraftSettings = defaultExportSettingsForLastRecording
                             showsExportSettings = true
                         }
                         .buttonStyle(ConsoleGradientButtonStyle(variant: .outline, expands: true))
@@ -1726,7 +2028,7 @@ struct DashboardView: View {
                             Menu {
                                 ForEach(camera.availableDevices) { device in
                                     Button(device.name) {
-                                        camera.selectDevice(id: device.id)
+                                        selectCameraInputDevice(device)
                                     }
                                 }
                             } label: {
@@ -1748,7 +2050,7 @@ struct DashboardView: View {
                             Menu {
                                 ForEach(audioInputDevices) { device in
                                     Button(localizedAudioInputName(device)) {
-                                        selectAudioInputDevice(device.id)
+                                        selectAudioInputDevice(device)
                                     }
                                 }
                             } label: {
@@ -1757,6 +2059,13 @@ struct DashboardView: View {
                             .menuStyle(.borderlessButton)
                             .buttonStyle(.plain)
                             .frame(maxWidth: .infinity)
+                            .disabled(commandController.isRecording)
+                            .opacity(commandController.isRecording ? 0.52 : 1)
+                            .help(
+                                commandController.isRecording
+                                    ? copy.runtimeText("录制中音频输入已锁定；停止录制后可切换，避免音画不同步。")
+                                    : copy.text("audioInput")
+                            )
 
                             Button(copy.rescan) {
                                 refreshAudioInputDevices()
@@ -1844,7 +2153,7 @@ struct DashboardView: View {
                             if enabled {
                                 seedSubjectAwareBeautyDefaultsIfNeeded()
                             }
-                            updatePresenterVideoEffectsForLastRecording()
+                            persistPresenterVideoEffectsForActiveRecording()
                         }
                 }
                 .disabled(!permitsSubjectAwareBeauty)
@@ -1882,7 +2191,7 @@ struct DashboardView: View {
                 .minimumScaleFactor(0.72)
                 .frame(width: 62, alignment: .leading)
             ConsoleValueSlider(value: value, range: range) {
-                updatePresenterVideoEffectsForLastRecording()
+                persistPresenterVideoEffectsForActiveRecording()
             }
             Text(format(value.wrappedValue))
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -1916,7 +2225,7 @@ struct DashboardView: View {
                 ForEach(PresenterBeautyStyle.allCases, id: \.self) { style in
                     Button(style.localizedLabel(copy)) {
                         presenterBeautyStyle = style
-                        updatePresenterVideoEffectsForLastRecording()
+                        persistPresenterVideoEffectsForActiveRecording()
                     }
                 }
             } label: {
@@ -2283,7 +2592,7 @@ struct DashboardView: View {
                 RecordingLayoutOption(label: copy.text("layoutSpeakerFullBody"), layout: .speakerFullBody)
             ]
         case .cameraAndScreen:
-            return [
+            var options = [
                 RecordingLayoutOption(
                     label: copy.text("screenMainPipLayout"),
                     layout: .screenWithCameraPictureInPicture(corner: .bottomRight)
@@ -2293,6 +2602,15 @@ struct DashboardView: View {
                     layout: .cameraWithScreenPictureInPicture(corner: .topRight)
                 )
             ]
+            if !WonderShowDistribution.isCommunityEdition {
+                options.append(
+                    RecordingLayoutOption(label: copy.runtimeText("左右分屏"), layout: .sideBySide)
+                )
+                options.append(
+                    RecordingLayoutOption(label: copy.runtimeText("上下分屏"), layout: .topBottom)
+                )
+            }
+            return options
         }
     }
 
@@ -2309,7 +2627,7 @@ struct DashboardView: View {
             }
         case .cameraAndScreen:
             switch layout {
-            case .screenWithCameraPictureInPicture, .cameraWithScreenPictureInPicture:
+            case .screenWithCameraPictureInPicture, .cameraWithScreenPictureInPicture, .sideBySide, .topBottom:
                 return layout
             default:
                 return .screenWithCameraPictureInPicture(corner: .bottomRight)
@@ -2392,7 +2710,7 @@ struct DashboardView: View {
     }
 
     private func exportProgramVideo(settings: RecordingExportSettings) {
-        updatePresenterVideoEffectsForLastRecording()
+        persistPresenterVideoEffectsForActiveRecording()
         activeProgramRenderTask?.cancel()
         activeProgramRenderTask = commandController.exportProgramVideo(
             settings: settings,
@@ -2442,15 +2760,9 @@ struct DashboardView: View {
     }
 
     private func previewProgramExport() {
-        updatePresenterVideoEffectsForLastRecording()
+        persistPresenterVideoEffectsForActiveRecording()
         activeProgramRenderTask?.cancel()
-        let previewSettings = RecordingExportSettings(
-            resolution: .hd1080,
-            frameRate: .fps30,
-            quality: .standard,
-            codec: .h264,
-            customPixelSize: nil
-        )
+        let previewSettings = ProgramRenderResourcePolicy.previewSettings(from: defaultExportSettingsForLastRecording)
         activeProgramRenderTask = commandController.previewLastProgramExport(
             settings: previewSettings,
             onProgress: { progress in
@@ -2561,13 +2873,28 @@ struct DashboardView: View {
     }
 
     private func updatePresenterVideoEffectsForLastRecording() {
+        updatePresenterVideoEffectsForLastRecording(nil)
+    }
+
+    private func persistPresenterVideoEffectsForActiveRecording() {
+        refreshActiveRecordingConfigurationFromCurrentControls()
+        guard commandController.isRecording else {
+            return
+        }
+        updatePresenterVideoEffectsForLastRecording(activeRecordingConfiguration?.presenterVideoEffects)
+    }
+
+    private func updatePresenterVideoEffectsForLastRecording(_ effects: PresenterVideoEffects?) {
         guard commandController.lastRecordingSession != nil else {
             return
         }
-        commandController.updateLastRecordingPresenterVideoEffects(effectivePresenterVideoEffects)
+        commandController.updateLastRecordingPresenterVideoEffects(effects ?? effectivePresenterVideoEffects)
     }
 
     private func saveCurrentPiPTimelineForLastRecording() {
+        guard commandController.isRecording else {
+            return
+        }
         recordCurrentPiPKeyframeIfNeeded(force: true)
         let keyframes = normalizedRecordingPiPKeyframes()
         if keyframes.isEmpty {
@@ -2594,7 +2921,10 @@ struct DashboardView: View {
                 milliseconds: 0,
                 mode: mode,
                 layout: normalizedLayout(layout, for: mode),
-                pictureInPictureGeometry: currentPictureInPictureGeometry
+                pictureInPictureGeometry: currentPictureInPictureGeometry,
+                screenCrop: currentScreenSourceCrop,
+                cameraCrop: currentCameraSourceCrop,
+                canvasPixelSize: currentRecordingCanvasPixelSize
             )
         ]
     }
@@ -2668,14 +2998,20 @@ struct DashboardView: View {
             milliseconds: max(0, Int(currentActiveRecordingDuration() * 1_000)),
             mode: mode,
             layout: normalizedLayout(layout, for: mode),
-            pictureInPictureGeometry: currentPictureInPictureGeometry
+            pictureInPictureGeometry: currentPictureInPictureGeometry,
+            screenCrop: currentScreenSourceCrop,
+            cameraCrop: currentCameraSourceCrop,
+            canvasPixelSize: currentRecordingCanvasPixelSize
         )
         if !force, recordingLayoutKeyframes.last == keyframe {
             return
         }
         if recordingLayoutKeyframes.last?.mode == keyframe.mode,
            recordingLayoutKeyframes.last?.layout == keyframe.layout,
-           recordingLayoutKeyframes.last?.pictureInPictureGeometry == keyframe.pictureInPictureGeometry {
+           recordingLayoutKeyframes.last?.pictureInPictureGeometry == keyframe.pictureInPictureGeometry,
+           recordingLayoutKeyframes.last?.screenCrop == keyframe.screenCrop,
+           recordingLayoutKeyframes.last?.cameraCrop == keyframe.cameraCrop,
+           recordingLayoutKeyframes.last?.canvasPixelSize == keyframe.canvasPixelSize {
             return
         }
         recordingLayoutKeyframes.append(keyframe)
@@ -2691,12 +3027,20 @@ struct DashboardView: View {
             if let last = normalized.last,
                last.mode == keyframe.mode,
                last.layout == keyframe.layout,
-               last.pictureInPictureGeometry == keyframe.pictureInPictureGeometry {
+               last.pictureInPictureGeometry == keyframe.pictureInPictureGeometry,
+               last.screenCrop == keyframe.screenCrop,
+               last.cameraCrop == keyframe.cameraCrop,
+               last.canvasPixelSize == keyframe.canvasPixelSize {
                 continue
             }
             normalized.append(keyframe)
         }
         return normalized
+    }
+
+    private var currentRecordingCanvasPixelSize: RecordingExportPixelSize? {
+        let settings = activeRecordingConfiguration?.exportSettings ?? programCanvasExportSettings
+        return settings.effectivePixelSize ?? programCanvasAspect.pixelSize(for: programCanvasResolution)
     }
 
     private func handleScreenCaptureSourceChange() {
@@ -2806,7 +3150,7 @@ struct DashboardView: View {
             return copy.text("compositionScreenMain")
         case .cameraWithScreenPictureInPicture:
             return copy.text("compositionSpeakerMain")
-        case .sideBySide:
+        case .sideBySide, .topBottom:
             return copy.text("compositionScreenMain")
         }
     }
@@ -2821,7 +3165,7 @@ struct DashboardView: View {
             return copy.text("screenMainPipLayout")
         case .cameraWithScreenPictureInPicture:
             return copy.text("speakerMainPipLayout")
-        case .sideBySide:
+        case .sideBySide, .topBottom:
             return copy.text("screenMainPipLayout")
         }
     }
@@ -2847,7 +3191,7 @@ struct DashboardView: View {
             switch layout {
             case .speakerCloseUp, .speakerFullBody:
                 return false
-            case .screenOnly, .screenWithCameraPictureInPicture, .cameraWithScreenPictureInPicture, .sideBySide:
+            case .screenOnly, .screenWithCameraPictureInPicture, .cameraWithScreenPictureInPicture, .sideBySide, .topBottom:
                 return true
             }
         }
@@ -2863,7 +3207,7 @@ struct DashboardView: View {
             switch layout {
             case .screenOnly:
                 return false
-            case .speakerCloseUp, .speakerFullBody, .screenWithCameraPictureInPicture, .cameraWithScreenPictureInPicture, .sideBySide:
+            case .speakerCloseUp, .speakerFullBody, .screenWithCameraPictureInPicture, .cameraWithScreenPictureInPicture, .sideBySide, .topBottom:
                 return true
             }
         }
@@ -2965,6 +3309,27 @@ struct DashboardView: View {
         )
     }
 
+    private var currentScreenSourceCrop: ProgramLayerSourceCrop? {
+        sourceCrop(from: splitScreenSourceOffset, appliesTo: layout)
+    }
+
+    private var currentCameraSourceCrop: ProgramLayerSourceCrop? {
+        sourceCrop(from: splitCameraSourceOffset, appliesTo: layout)
+    }
+
+    private func sourceCrop(
+        from offset: CGSize,
+        appliesTo layout: RecordingLayout
+    ) -> ProgramLayerSourceCrop? {
+        guard layout == .sideBySide || layout == .topBottom else {
+            return nil
+        }
+        guard abs(offset.width) > 0.001 || abs(offset.height) > 0.001 else {
+            return nil
+        }
+        return ProgramLayerSourceCrop(offsetX: Double(offset.width), offsetY: Double(offset.height))
+    }
+
     private func pictureInPictureSize(
         layout: RecordingLayout,
         scale: CGFloat,
@@ -3007,7 +3372,7 @@ struct DashboardView: View {
         switch layout {
         case .speakerCloseUp, .speakerFullBody:
             return CGSize(width: 360, height: 203)
-        case .sideBySide:
+        case .sideBySide, .topBottom:
             return CGSize(width: 250, height: 141)
         case .screenOnly, .screenWithCameraPictureInPicture, .cameraWithScreenPictureInPicture:
             return CGSize(width: 250, height: 141)
@@ -3264,16 +3629,30 @@ struct DashboardView: View {
         return count == 0 ? copy.noInputsFound : "\(count) \(copy.inputCountSuffix)"
     }
 
+    private var selectedCameraInputDevice: CameraInputDevice {
+        InputDeviceDisplaySelectionPolicy.resolve(
+            selectedID: camera.selectedDeviceID,
+            availableOptions: camera.availableDevices,
+            rememberedOption: selectedCameraInputDeviceSnapshot,
+            fallback: .automatic
+        )
+    }
+
     private var selectedDeviceTitle: String {
-        camera.availableDevices.first(where: { $0.id == camera.selectedDeviceID })?.name ?? copy.selectInputDevice
+        selectedCameraInputDevice.name
     }
 
     private var selectedDeviceDetail: String {
-        camera.availableDevices.first(where: { $0.id == camera.selectedDeviceID })?.detail ?? copy.deviceListPending
+        selectedCameraInputDevice.detail
     }
 
     private var selectedAudioInputDevice: AudioInputDeviceOption {
-        audioInputDevices.first(where: { $0.id == selectedAudioInputDeviceID }) ?? .systemDefault
+        InputDeviceDisplaySelectionPolicy.resolve(
+            selectedID: selectedAudioInputDeviceID,
+            availableOptions: audioInputDevices,
+            rememberedOption: selectedAudioInputDeviceSnapshot,
+            fallback: .systemDefault
+        )
     }
 
     private var selectedAudioInputDeviceTitle: String {
@@ -3287,13 +3666,21 @@ struct DashboardView: View {
         return localizedAudioInputDetail(selectedAudioInputDevice)
     }
 
-    private func selectAudioInputDevice(_ deviceID: String) {
+    private func selectCameraInputDevice(_ device: CameraInputDevice) {
+        selectedCameraInputDeviceSnapshot = device.id == CameraInputDevice.automatic.id ? nil : device
+        camera.selectDevice(id: device.id)
+    }
+
+    private func selectAudioInputDevice(_ device: AudioInputDeviceOption) {
         let result = AudioInputSelectionPolicy.resolve(
             currentDeviceID: selectedAudioInputDeviceID,
-            requestedDeviceID: deviceID,
+            requestedDeviceID: device.id,
             isRecording: commandController.isRecording
         )
         selectedAudioInputDeviceID = result.selectedDeviceID
+        if result.warning == nil {
+            selectedAudioInputDeviceSnapshot = device.isSystemDefault ? nil : device
+        }
         if let warning = result.warning {
             commandController.reportRecordingIssue(warning)
         }
@@ -3311,7 +3698,12 @@ struct DashboardView: View {
         let devices = MicrophoneArchiveRecorder.availableInputDevices()
         audioInputDevices = devices
         if !devices.contains(where: { $0.id == selectedAudioInputDeviceID }) {
-            selectedAudioInputDeviceID = AudioInputDeviceOption.systemDefault.id
+            if selectedAudioInputDeviceSnapshot?.id != selectedAudioInputDeviceID {
+                selectedAudioInputDeviceID = AudioInputDeviceOption.systemDefault.id
+                selectedAudioInputDeviceSnapshot = nil
+            }
+        } else if selectedAudioInputDeviceID == AudioInputDeviceOption.systemDefault.id {
+            selectedAudioInputDeviceSnapshot = nil
         }
     }
 
@@ -5072,7 +5464,7 @@ private struct ProgramCanvasControls: View {
                 icon: "rectangle.compress.vertical",
                 isActive: expandedPopover == .resolution,
                 isEnabled: true,
-                help: copy.runtimeText("切换预览和默认导出的输出分辨率")
+                help: copy.runtimeText("切换录制画布和手动导出默认分辨率；预览/自动合成会降到 1080p 以内")
             ) {
                 togglePopover(.resolution)
             }
@@ -5688,6 +6080,11 @@ private struct ProgramCanvasPlaceholder: View {
     }
 }
 
+private enum SplitCropSource {
+    case slidesScreen
+    case presenterCamera
+}
+
 private struct ProgramMonitorView: View {
     let copy: AppCopy
     let layout: RecordingLayout
@@ -5703,14 +6100,19 @@ private struct ProgramMonitorView: View {
     let isRecording: Bool
     @Binding var pipOffset: CGSize
     @Binding var pipScale: CGFloat
+    @Binding var splitScreenSourceOffset: CGSize
+    @Binding var splitCameraSourceOffset: CGSize
     let pipShape: PiPShape
     let presenterVideoEffects: PresenterVideoEffects
     let canvasSizeChanged: (CGSize) -> Void
     let pipInteractionEnded: () -> Void
+    let splitCropInteractionEnded: () -> Void
     let pipCornerChanged: (PiPCorner) -> Void
     let reconnect: () -> Void
     @State private var pipDragBaseOffset: CGSize?
     @State private var pipResizeBaseScale: CGFloat?
+    @State private var splitScreenDragBaseOffset: CGSize?
+    @State private var splitCameraDragBaseOffset: CGSize?
 
     var body: some View {
         GeometryReader { proxy in
@@ -5798,35 +6200,59 @@ private struct ProgramMonitorView: View {
             case .screenOnly:
                 screenLayer(fillMode: .fit)
             case .speakerCloseUp, .speakerFullBody:
-                cameraLayer
+                cameraLayer()
             case .screenWithCameraPictureInPicture:
                 screenLayer(fillMode: .fit)
                 pipCameraLayer
                     .position(pipPosition(in: size))
                     .gesture(pipDrag(in: size))
             case .cameraWithScreenPictureInPicture:
-                cameraLayer
+                cameraLayer()
                 pipScreenLayer
                     .position(pipPosition(in: size))
                     .gesture(pipDrag(in: size))
             case .sideBySide:
-                HStack(spacing: 0) {
-                    screenLayer(fillMode: .fit)
-                    cameraLayer
+                ZStack(alignment: .topLeading) {
+                    let paneWidth = size.width / 2
+                    screenLayer(fillMode: .fill, preservesWholeSource: false, sourceOffset: splitScreenSourceOffset)
+                        .frame(width: paneWidth, height: size.height)
+                        .position(x: paneWidth / 2, y: size.height / 2)
+                        .gesture(splitCropDrag(source: .slidesScreen))
+                    cameraLayer(contentMode: .fill, sourceOffset: splitCameraSourceOffset)
+                        .frame(width: paneWidth, height: size.height)
+                        .position(x: paneWidth + paneWidth / 2, y: size.height / 2)
+                        .gesture(splitCropDrag(source: .presenterCamera))
+                }
+            case .topBottom:
+                ZStack(alignment: .topLeading) {
+                    let paneHeight = size.height / 2
+                    screenLayer(fillMode: .fill, preservesWholeSource: false, sourceOffset: splitScreenSourceOffset)
+                        .frame(width: size.width, height: paneHeight)
+                        .position(x: size.width / 2, y: paneHeight / 2)
+                        .gesture(splitCropDrag(source: .slidesScreen))
+                    cameraLayer(contentMode: .fill, sourceOffset: splitCameraSourceOffset)
+                        .frame(width: size.width, height: paneHeight)
+                        .position(x: size.width / 2, y: paneHeight + paneHeight / 2)
+                        .gesture(splitCropDrag(source: .presenterCamera))
                 }
             }
         }
         .frame(width: size.width, height: size.height)
     }
 
-    private func screenLayer(fillMode: ContentMode) -> some View {
+    private func screenLayer(
+        fillMode: ContentMode,
+        preservesWholeSource: Bool? = nil,
+        sourceOffset: CGSize = .zero
+    ) -> some View {
         GeometryReader { proxy in
             ZStack {
                 if let screenImage {
                     screenImageView(
                         screenImage,
-                        preservesWholeSource: fillMode == .fit || screenSourceID?.isWindow == true,
-                        in: proxy.size
+                        preservesWholeSource: preservesWholeSource ?? (fillMode == .fit || screenSourceID?.isWindow == true),
+                        in: proxy.size,
+                        sourceOffset: sourceOffset
                     )
                 } else {
                     ProgramCanvasPlaceholder(
@@ -5844,7 +6270,12 @@ private struct ProgramMonitorView: View {
     }
 
     @ViewBuilder
-    private func screenImageView(_ image: CGImage, preservesWholeSource: Bool, in size: CGSize) -> some View {
+    private func screenImageView(
+        _ image: CGImage,
+        preservesWholeSource: Bool,
+        in size: CGSize,
+        sourceOffset: CGSize = .zero
+    ) -> some View {
         let sourceSize = CGSize(width: image.width, height: image.height)
         if preservesWholeSource {
             let rect = ScreenArchiveRecorder.maxIntegralAspectFitRect(
@@ -5856,21 +6287,25 @@ private struct ProgramMonitorView: View {
                 .frame(width: rect.width, height: rect.height)
                 .position(x: rect.midX, y: rect.midY)
         } else {
-            Image(decorative: image, scale: 1)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: size.width, height: size.height)
-                .clipped()
+            filledImageView(image, in: size, sourceOffset: sourceOffset)
         }
     }
 
-    private var cameraLayer: some View {
-        ZStack {
-            if cameraStatus == .running {
-                presenterCameraPreview(contentMode: .fit)
-            } else {
-                cameraPlaceholder
+    private func cameraLayer(contentMode: ContentMode = .fit, sourceOffset: CGSize = .zero) -> some View {
+        GeometryReader { proxy in
+            ZStack {
+                if cameraStatus == .running {
+                    presenterCameraPreview(
+                        contentMode: contentMode,
+                        targetSize: proxy.size,
+                        sourceOffset: sourceOffset
+                    )
+                } else {
+                    cameraPlaceholder
+                }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
@@ -5879,7 +6314,7 @@ private struct ProgramMonitorView: View {
     private var pipCameraLayer: some View {
         pipChrome {
             if cameraStatus == .running {
-                presenterCameraPreview(contentMode: .fill)
+                presenterCameraPreview(contentMode: .fill, targetSize: pipSize, sourceOffset: .zero)
             } else {
                 cameraPlaceholder
             }
@@ -5904,17 +6339,57 @@ private struct ProgramMonitorView: View {
     }
 
     @ViewBuilder
-    private func presenterCameraPreview(contentMode: ContentMode) -> some View {
+    private func presenterCameraPreview(
+        contentMode: ContentMode,
+        targetSize: CGSize,
+        sourceOffset: CGSize
+    ) -> some View {
         if let cameraPreviewImage {
-            Image(decorative: cameraPreviewImage, scale: 1)
-                .resizable()
-                .aspectRatio(contentMode: contentMode)
-                .clipped()
-                .background(Color.black)
+            switch contentMode {
+            case .fit:
+                Image(decorative: cameraPreviewImage, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: targetSize.width, height: targetSize.height)
+                    .background(Color.black)
+            case .fill:
+                filledImageView(cameraPreviewImage, in: targetSize, sourceOffset: sourceOffset)
+            @unknown default:
+                filledImageView(cameraPreviewImage, in: targetSize, sourceOffset: sourceOffset)
+            }
         } else {
             CameraPreviewView(session: cameraSession)
                 .modifier(PresenterVideoPreviewEffectModifier(effects: presenterVideoEffects))
+                .offset(fallbackSplitPreviewPixelOffset(sourceOffset, in: targetSize))
         }
+    }
+
+    private func filledImageView(
+        _ image: CGImage,
+        in size: CGSize,
+        sourceOffset: CGSize
+    ) -> some View {
+        let sourceSize = CGSize(width: image.width, height: image.height)
+        let scale = max(
+            size.width / max(1, sourceSize.width),
+            size.height / max(1, sourceSize.height)
+        )
+        let scaledSize = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+        let offset = splitPreviewPixelOffset(
+            sourceOffset,
+            scaledSize: scaledSize,
+            targetSize: size
+        )
+        return Image(decorative: image, scale: 1)
+            .resizable()
+            .frame(width: scaledSize.width, height: scaledSize.height)
+            .position(
+                x: size.width / 2 + offset.width,
+                y: size.height / 2 + offset.height
+            )
+            .frame(width: size.width, height: size.height)
+            .background(Color.black)
+            .clipped()
     }
 
     private func pipChrome<Content: View>(@ViewBuilder content: () -> Content) -> some View {
@@ -6028,6 +6503,69 @@ private struct ProgramMonitorView: View {
                 pipResizeBaseScale = nil
                 pipInteractionEnded()
             }
+    }
+
+    private func splitCropDrag(source: SplitCropSource) -> some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { value in
+                let baseOffset: CGSize
+                switch source {
+                case .slidesScreen:
+                    baseOffset = splitScreenDragBaseOffset ?? splitScreenSourceOffset
+                    splitScreenDragBaseOffset = baseOffset
+                case .presenterCamera:
+                    baseOffset = splitCameraDragBaseOffset ?? splitCameraSourceOffset
+                    splitCameraDragBaseOffset = baseOffset
+                }
+
+                let next = CGSize(
+                    width: baseOffset.width + value.translation.width / 180,
+                    height: baseOffset.height + value.translation.height / 180
+                )
+                let clamped = clampedSourceOffset(next)
+                switch source {
+                case .slidesScreen:
+                    splitScreenSourceOffset = clamped
+                case .presenterCamera:
+                    splitCameraSourceOffset = clamped
+                }
+            }
+            .onEnded { _ in
+                switch source {
+                case .slidesScreen:
+                    splitScreenDragBaseOffset = nil
+                case .presenterCamera:
+                    splitCameraDragBaseOffset = nil
+                }
+                splitCropInteractionEnded()
+            }
+    }
+
+    private func clampedSourceOffset(_ offset: CGSize) -> CGSize {
+        CGSize(
+            width: min(max(offset.width, -1), 1),
+            height: min(max(offset.height, -1), 1)
+        )
+    }
+
+    private func splitPreviewPixelOffset(
+        _ sourceOffset: CGSize,
+        scaledSize: CGSize,
+        targetSize: CGSize
+    ) -> CGSize {
+        let overflowX = max(0, scaledSize.width - targetSize.width)
+        let overflowY = max(0, scaledSize.height - targetSize.height)
+        return CGSize(
+            width: sourceOffset.width * overflowX / 2,
+            height: sourceOffset.height * overflowY / 2
+        )
+    }
+
+    private func fallbackSplitPreviewPixelOffset(_ sourceOffset: CGSize, in size: CGSize) -> CGSize {
+        CGSize(
+            width: sourceOffset.width * size.width * 0.18,
+            height: sourceOffset.height * size.height * 0.18
+        )
     }
 
     private func clampedOffset(_ offset: CGSize, in size: CGSize) -> CGSize {
@@ -6247,6 +6785,53 @@ private struct RecordingCountdownOverlay: View {
     }
 }
 
+private struct ExportOutcomeSheet: View {
+    let copy: AppCopy
+    let outcome: ExportOutcomePresentation
+    let reveal: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: outcome.url == nil ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .font(.system(size: 18, weight: .bold))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(
+                        outcome.url == nil ? ConsolePalette.record : ConsolePalette.teal,
+                        ConsolePalette.goldBright
+                    )
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(outcome.title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(ConsolePalette.textPrimary)
+                    Text(outcome.message)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(ConsolePalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 10) {
+                if outcome.url != nil {
+                    Button(copy.revealProject) {
+                        reveal()
+                    }
+                    .buttonStyle(ConsoleGradientButtonStyle(variant: .gold, expands: true, compact: true))
+                }
+                Button(outcome.url == nil ? copy.runtimeText("确定") : copy.runtimeText("关闭")) {
+                    close()
+                }
+                .buttonStyle(ConsoleGradientButtonStyle(variant: .outline, expands: true, compact: true))
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+        .background(ConsolePalette.background)
+    }
+}
+
 private struct ExportProgressSheet: View {
     let copy: AppCopy
     let progress: ExportProgressPresentation
@@ -6462,7 +7047,9 @@ private extension RecordingLayout {
             }
             return "\(copy.text("speakerMainPipLayout")) · \(corner.localizedLabel(copy))"
         case .sideBySide:
-            return copy.layoutSide
+            return copy.runtimeText("左右分屏")
+        case .topBottom:
+            return copy.runtimeText("上下分屏")
         }
     }
 }

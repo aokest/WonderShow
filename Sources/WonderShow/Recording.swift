@@ -43,6 +43,7 @@ public enum RecordingLayout: Codable, Hashable, Sendable {
     case screenWithCameraPictureInPicture(corner: PiPCorner)
     case cameraWithScreenPictureInPicture(corner: PiPCorner)
     case sideBySide
+    case topBottom
 }
 
 public enum RecordingExportResolution: String, Codable, CaseIterable, Hashable, Sendable {
@@ -501,6 +502,8 @@ public struct RecordingPipelineFactory: Sendable {
             return .cameraWithPictureInPicture(corner: corner)
         case .sideBySide:
             return .sideBySide
+        case .topBottom:
+            return .sideBySide
         }
     }
 }
@@ -577,6 +580,7 @@ public enum ProgramView: Codable, Hashable, Sendable {
     case slidesWithSpeakerPictureInPicture
     case speakerWithSlidesPictureInPicture
     case sideBySide
+    case topBottom
     case slidesFullScreen
 }
 
@@ -591,21 +595,40 @@ public enum ProgramLayerPlacement: Codable, Hashable, Sendable {
     case customPictureInPicture(ProgramPictureInPictureGeometry)
     case leftHalf
     case rightHalf
+    case topHalf
+    case bottomHalf
+}
+
+public struct ProgramLayerSourceCrop: Codable, Hashable, Sendable {
+    public let offsetX: Double
+    public let offsetY: Double
+
+    public init(offsetX: Double = 0, offsetY: Double = 0) {
+        self.offsetX = Self.clamp(offsetX)
+        self.offsetY = Self.clamp(offsetY)
+    }
+
+    private static func clamp(_ value: Double) -> Double {
+        min(max(value, -1), 1)
+    }
 }
 
 public struct ProgramLayer: Codable, Hashable, Sendable {
     public let source: ProgramLayerSource
     public let placement: ProgramLayerPlacement
     public let speakerShot: SpeakerShot?
+    public let sourceCrop: ProgramLayerSourceCrop?
 
     public init(
         source: ProgramLayerSource,
         placement: ProgramLayerPlacement,
-        speakerShot: SpeakerShot? = nil
+        speakerShot: SpeakerShot? = nil,
+        sourceCrop: ProgramLayerSourceCrop? = nil
     ) {
         self.source = source
         self.placement = placement
         self.speakerShot = speakerShot
+        self.sourceCrop = sourceCrop
     }
 
     public static let slidesFullCanvas = ProgramLayer(
@@ -629,10 +652,16 @@ public struct ProgramLayer: Codable, Hashable, Sendable {
 public struct ProgramScene: Codable, Hashable, Sendable {
     public let view: ProgramView
     public let layers: [ProgramLayer]
+    public let canvasPixelSize: RecordingExportPixelSize?
 
-    public init(view: ProgramView, layers: [ProgramLayer]) {
+    public init(
+        view: ProgramView,
+        layers: [ProgramLayer],
+        canvasPixelSize: RecordingExportPixelSize? = nil
+    ) {
         self.view = view
         self.layers = layers
+        self.canvasPixelSize = canvasPixelSize
     }
 
     public var speakerLayer: ProgramLayer? {
@@ -865,6 +894,8 @@ public struct RecordingProjectFactory: Sendable {
                 )
             case .sideBySide:
                 scene = .sideBySide
+            case .topBottom:
+                scene = .topBottom
             }
         }
 
@@ -1099,6 +1130,18 @@ private extension ProgramScene {
             ProgramLayer(
                 source: .presenterCamera,
                 placement: .rightHalf,
+                speakerShot: .closeUp
+            )
+        ]
+    )
+
+    static let topBottom = ProgramScene(
+        view: .topBottom,
+        layers: [
+            ProgramLayer(source: .slidesScreen, placement: .topHalf),
+            ProgramLayer(
+                source: .presenterCamera,
+                placement: .bottomHalf,
                 speakerShot: .closeUp
             )
         ]

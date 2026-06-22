@@ -45,6 +45,19 @@ struct ProgramVideoRenderer {
         self.fileManager = fileManager
     }
 
+    private struct VideoSourceSegment {
+        let asset: AVURLAsset
+        let track: AVAssetTrack
+        let duration: CMTime
+        let naturalSize: CGSize
+    }
+
+    private struct AudioSourceSegment {
+        let asset: AVURLAsset
+        let track: AVAssetTrack
+        let duration: CMTime
+    }
+
     static func validatePlayableVideo(at url: URL, fileManager: FileManager = .default) async throws {
         guard fileManager.fileExists(atPath: url.path) else {
             throw ProgramVideoRendererError.invalidProgramExport("文件不存在")
@@ -75,42 +88,37 @@ struct ProgramVideoRenderer {
     ) async throws -> URL {
         let timeline = session.manifest.project.timeline
         let requirements = mediaRequirements(for: timeline)
-        let cameraAsset = AVURLAsset(url: session.presenterCameraURL)
-        let screenAsset = AVURLAsset(url: session.slidesScreenURL)
-
-        let cameraSourceTrack = try await sourceTrack(
-            asset: cameraAsset,
-            url: session.presenterCameraURL,
+        let cameraSegments = try await videoSourceSegments(
+            urls: session.presenterCameraSegmentURLs,
             isRequired: requirements.camera,
             missingError: .missingCameraTrack
         )
-        let screenSourceTrack = try await sourceTrack(
-            asset: screenAsset,
-            url: session.slidesScreenURL,
+        let screenSegments = try await videoSourceSegments(
+            urls: session.slidesScreenSegmentURLs,
             isRequired: requirements.screen,
             missingError: .missingScreenTrack
         )
 
-        if requirements.camera, cameraSourceTrack == nil {
+        if requirements.camera, cameraSegments.isEmpty {
             throw ProgramVideoRendererError.missingCameraTrack
         }
-        if requirements.screen, screenSourceTrack == nil {
+        if requirements.screen, screenSegments.isEmpty {
             throw ProgramVideoRendererError.missingScreenTrack
         }
 
         let composition = AVMutableComposition()
-        let cameraTrack = cameraSourceTrack == nil ? nil : composition.addMutableTrack(
+        let cameraTrack = cameraSegments.isEmpty ? nil : composition.addMutableTrack(
             withMediaType: .video,
             preferredTrackID: kCMPersistentTrackID_Invalid
         )
-        let screenTrack = screenSourceTrack == nil ? nil : composition.addMutableTrack(
+        let screenTrack = screenSegments.isEmpty ? nil : composition.addMutableTrack(
             withMediaType: .video,
             preferredTrackID: kCMPersistentTrackID_Invalid
         )
 
         let duration = await renderDuration(
-            cameraAsset: cameraSourceTrack == nil ? nil : cameraAsset,
-            screenAsset: screenSourceTrack == nil ? nil : screenAsset,
+            cameraSegments: cameraSegments,
+            screenSegments: screenSegments,
             timelineDurationMilliseconds: timeline.durationMilliseconds
         )
         let exportTimeRange = exportTimeRange(selectedRange, within: duration)
@@ -119,28 +127,18 @@ struct ProgramVideoRenderer {
             session: session,
             duration: duration
         )
-        let cameraNaturalSize = if let cameraSourceTrack {
-            (try? await cameraSourceTrack.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
-        } else {
-            CGSize(width: 1920, height: 1080)
-        }
-        let screenNaturalSize = if let screenSourceTrack {
-            (try? await screenSourceTrack.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
-        } else {
-            cameraNaturalSize
-        }
-        if let cameraTrack, let cameraSourceTrack {
+        let cameraNaturalSize = cameraSegments.first?.naturalSize ?? CGSize(width: 1920, height: 1080)
+        let screenNaturalSize = screenSegments.first?.naturalSize ?? cameraNaturalSize
+        if let cameraTrack {
             try await insertVideoTrack(
-                cameraSourceTrack,
-                from: cameraAsset,
+                cameraSegments,
                 into: cameraTrack,
                 duration: duration
             )
         }
-        if let screenTrack, let screenSourceTrack {
+        if let screenTrack {
             try await insertVideoTrack(
-                screenSourceTrack,
-                from: screenAsset,
+                screenSegments,
                 into: screenTrack,
                 duration: duration
             )
@@ -253,24 +251,38 @@ struct ProgramVideoRenderer {
         return (requiresCamera, requiresScreen)
     }
 
-    private func sourceTrack(
-        asset: AVURLAsset,
-        url: URL,
+    private func videoSourceSegments(
+        urls: [URL],
         isRequired: Bool,
         missingError: ProgramVideoRendererError
-    ) async throws -> AVAssetTrack? {
-        guard fileManager.fileExists(atPath: url.path) else {
-            if isRequired {
-                throw missingError
+    ) async throws -> [VideoSourceSegment] {
+        var segments: [VideoSourceSegment] = []
+        for url in urls {
+            guard fileManager.fileExists(atPath: url.path) else {
+                continue
             }
-            return nil
+            let asset = AVURLAsset(url: url)
+            guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+                continue
+            }
+            let duration = (try? await asset.load(.duration)) ?? .invalid
+            guard duration.isValid, duration.seconds > 0 else {
+                continue
+            }
+            let naturalSize = (try? await track.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
+            segments.append(
+                VideoSourceSegment(
+                    asset: asset,
+                    track: track,
+                    duration: duration,
+                    naturalSize: naturalSize
+                )
+            )
         }
-
-        let track = try await asset.loadTracks(withMediaType: .video).first
-        if track == nil, isRequired {
+        if segments.isEmpty, isRequired {
             throw missingError
         }
-        return track
+        return segments
     }
 
     private func renderSize(
@@ -337,50 +349,47 @@ struct ProgramVideoRenderer {
         session: RecordingSessionRecord,
         duration: CMTime
     ) async throws {
-        guard fileManager.fileExists(atPath: session.microphoneAudioURL.path) else {
-            return
-        }
-
-        let microphoneAsset = AVURLAsset(url: session.microphoneAudioURL)
-        guard let microphoneSourceTrack = try await microphoneAsset.loadTracks(withMediaType: .audio).first,
-              let audioTrack = composition.addMutableTrack(
+        let segments = try await audioSourceSegments(urls: session.microphoneAudioSegmentURLs)
+        guard !segments.isEmpty,
+              let compositionTrack = composition.addMutableTrack(
                 withMediaType: .audio,
                 preferredTrackID: kCMPersistentTrackID_Invalid
               ) else {
             return
         }
+        try insertAudioSegments(segments, into: compositionTrack, duration: duration)
+    }
 
-        let audioDuration = (try? await microphoneAsset.load(.duration)) ?? duration
-        let insertDuration = min(duration, audioDuration)
-        guard insertDuration.isValid, insertDuration.seconds > 0 else {
-            return
+    private func audioSourceSegments(urls: [URL]) async throws -> [AudioSourceSegment] {
+        var segments: [AudioSourceSegment] = []
+        for url in urls {
+            guard fileManager.fileExists(atPath: url.path) else {
+                continue
+            }
+            let asset = AVURLAsset(url: url)
+            guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
+                continue
+            }
+            let duration = (try? await asset.load(.duration)) ?? .invalid
+            guard duration.isValid, duration.seconds > 0 else {
+                continue
+            }
+            segments.append(AudioSourceSegment(asset: asset, track: track, duration: duration))
         }
-        try audioTrack.insertTimeRange(
-            CMTimeRange(start: .zero, duration: insertDuration),
-            of: microphoneSourceTrack,
-            at: .zero
-        )
+        return segments
     }
 
     private func renderDuration(
-        cameraAsset: AVAsset?,
-        screenAsset: AVAsset?,
+        cameraSegments: [VideoSourceSegment],
+        screenSegments: [VideoSourceSegment],
         timelineDurationMilliseconds: Int
     ) async -> CMTime {
         if timelineDurationMilliseconds > 0 {
             return CMTime(value: CMTimeValue(timelineDurationMilliseconds), timescale: 1_000)
         }
 
-        let cameraDuration = if let cameraAsset {
-            (try? await cameraAsset.load(.duration)) ?? .invalid
-        } else {
-            CMTime.invalid
-        }
-        let screenDuration = if let screenAsset {
-            (try? await screenAsset.load(.duration)) ?? .invalid
-        } else {
-            CMTime.invalid
-        }
+        let cameraDuration = totalDuration(of: cameraSegments)
+        let screenDuration = totalDuration(of: screenSegments)
         var candidates: [CMTime] = []
         if cameraDuration.isValid, cameraDuration.seconds > 0 {
             candidates.append(cameraDuration)
@@ -395,25 +404,60 @@ struct ProgramVideoRenderer {
     }
 
     private func insertVideoTrack(
-        _ sourceTrack: AVAssetTrack,
-        from sourceAsset: AVAsset,
+        _ segments: [VideoSourceSegment],
         into compositionTrack: AVMutableCompositionTrack,
         duration: CMTime
     ) async throws {
-        let sourceDuration = (try? await sourceAsset.load(.duration)) ?? duration
-        let availableDuration = minValidDuration(sourceDuration, duration)
-        if availableDuration.seconds > 0 {
+        var cursor = CMTime.zero
+        for segment in segments {
+            guard cursor < duration else {
+                break
+            }
+            let availableDuration = minValidDuration(segment.duration, duration - cursor)
+            guard availableDuration.seconds > 0 else {
+                continue
+            }
             try compositionTrack.insertTimeRange(
                 CMTimeRange(start: .zero, duration: availableDuration),
-                of: sourceTrack,
-                at: .zero
+                of: segment.track,
+                at: cursor
             )
+            cursor = cursor + availableDuration
         }
 
-        if duration > availableDuration {
+        if duration > cursor {
             compositionTrack.insertEmptyTimeRange(
-                CMTimeRange(start: availableDuration, duration: duration - availableDuration)
+                CMTimeRange(start: cursor, duration: duration - cursor)
             )
+        }
+    }
+
+    private func insertAudioSegments(
+        _ segments: [AudioSourceSegment],
+        into compositionTrack: AVMutableCompositionTrack,
+        duration: CMTime
+    ) throws {
+        var cursor = CMTime.zero
+        for segment in segments {
+            guard cursor < duration else {
+                break
+            }
+            let availableDuration = minValidDuration(segment.duration, duration - cursor)
+            guard availableDuration.seconds > 0 else {
+                continue
+            }
+            try compositionTrack.insertTimeRange(
+                CMTimeRange(start: .zero, duration: availableDuration),
+                of: segment.track,
+                at: cursor
+            )
+            cursor = cursor + availableDuration
+        }
+    }
+
+    private func totalDuration(of segments: [VideoSourceSegment]) -> CMTime {
+        segments.reduce(CMTime.zero) { partialResult, segment in
+            partialResult + segment.duration
         }
     }
 
@@ -464,6 +508,10 @@ struct ProgramVideoRenderer {
 
             let instruction = try ProgramVideoCompositionInstruction(
                 timeRange: segmentRange,
+                canvasRect: canvasRect(
+                    for: segment.scene.canvasPixelSize,
+                    renderSize: renderSize
+                ),
                 layers: renderLayers(
                     for: segment.scene,
                     cameraTrack: cameraTrack,
@@ -478,6 +526,19 @@ struct ProgramVideoRenderer {
         }
 
         return instructions
+    }
+
+    private func canvasRect(
+        for canvasPixelSize: RecordingExportPixelSize?,
+        renderSize: CGSize
+    ) -> CGRect {
+        guard let canvasPixelSize else {
+            return CGRect(origin: .zero, size: renderSize)
+        }
+        return ScreenArchiveRecorder.maxIntegralAspectFitRect(
+            sourceSize: CGSize(width: canvasPixelSize.width, height: canvasPixelSize.height),
+            targetSize: renderSize
+        )
     }
 
     private func boundedTimelineTime(milliseconds: Int, duration: CMTime) -> CMTime {
@@ -510,6 +571,7 @@ struct ProgramVideoRenderer {
                     placement: .fullCanvas,
                     fillMode: .fit,
                     trimsBlackMatte: true,
+                    sourceCrop: nil,
                     presenterVideoEffects: presenterVideoEffects
                 )
             ]
@@ -525,6 +587,7 @@ struct ProgramVideoRenderer {
                     placement: .fullCanvas,
                     fillMode: .closeUp,
                     trimsBlackMatte: true,
+                    sourceCrop: nil,
                     presenterVideoEffects: presenterVideoEffects
                 )
             ]
@@ -540,6 +603,7 @@ struct ProgramVideoRenderer {
                     placement: .fullCanvas,
                     fillMode: .fit,
                     trimsBlackMatte: false,
+                    sourceCrop: nil,
                     presenterVideoEffects: .default
                 )
             ]
@@ -563,6 +627,7 @@ struct ProgramVideoRenderer {
                     placement: speakerLayer.placement,
                     fillMode: .fill,
                     trimsBlackMatte: true,
+                    sourceCrop: speakerLayer.sourceCrop,
                     presenterVideoEffects: presenterVideoEffects
                 ),
                 ProgramVideoRenderLayer(
@@ -572,6 +637,7 @@ struct ProgramVideoRenderer {
                     placement: .fullCanvas,
                     fillMode: .fit,
                     trimsBlackMatte: false,
+                    sourceCrop: nil,
                     presenterVideoEffects: .default
                 )
             ]
@@ -590,6 +656,7 @@ struct ProgramVideoRenderer {
                     placement: scene.layers.first(where: { $0.source == .slidesScreen })?.placement ?? .pictureInPicture(corner: .topRight, size: .medium),
                     fillMode: .fit,
                     trimsBlackMatte: false,
+                    sourceCrop: scene.layers.first(where: { $0.source == .slidesScreen })?.sourceCrop,
                     presenterVideoEffects: .default
                 ),
                 ProgramVideoRenderLayer(
@@ -599,6 +666,7 @@ struct ProgramVideoRenderer {
                     placement: .fullCanvas,
                     fillMode: .fit,
                     trimsBlackMatte: true,
+                    sourceCrop: nil,
                     presenterVideoEffects: presenterVideoEffects
                 )
             ]
@@ -609,23 +677,58 @@ struct ProgramVideoRenderer {
             guard let cameraTrack else {
                 throw ProgramVideoRendererError.missingCameraTrack
             }
+            let screenLayer = scene.layers.first(where: { $0.source == .slidesScreen })
+            let cameraLayer = scene.layers.first(where: { $0.source == .presenterCamera })
             return [
                 ProgramVideoRenderLayer(
                     trackID: cameraTrack.trackID,
                     naturalSize: cameraNaturalSize,
                     sourceCropRect: nil,
-                    placement: .rightHalf,
+                    placement: cameraLayer?.placement ?? .rightHalf,
                     fillMode: .fill,
                     trimsBlackMatte: true,
+                    sourceCrop: cameraLayer?.sourceCrop,
                     presenterVideoEffects: presenterVideoEffects
                 ),
                 ProgramVideoRenderLayer(
                     trackID: screenTrack.trackID,
                     naturalSize: screenContentCropRect?.size ?? screenNaturalSize,
                     sourceCropRect: screenContentCropRect,
-                    placement: .leftHalf,
-                    fillMode: .fit,
+                    placement: screenLayer?.placement ?? .leftHalf,
+                    fillMode: .fill,
                     trimsBlackMatte: false,
+                    sourceCrop: screenLayer?.sourceCrop,
+                    presenterVideoEffects: .default
+                )
+            ]
+        case .topBottom:
+            guard let screenTrack else {
+                throw ProgramVideoRendererError.missingScreenTrack
+            }
+            guard let cameraTrack else {
+                throw ProgramVideoRendererError.missingCameraTrack
+            }
+            let screenLayer = scene.layers.first(where: { $0.source == .slidesScreen })
+            let cameraLayer = scene.layers.first(where: { $0.source == .presenterCamera })
+            return [
+                ProgramVideoRenderLayer(
+                    trackID: cameraTrack.trackID,
+                    naturalSize: cameraNaturalSize,
+                    sourceCropRect: nil,
+                    placement: cameraLayer?.placement ?? .bottomHalf,
+                    fillMode: .fill,
+                    trimsBlackMatte: true,
+                    sourceCrop: cameraLayer?.sourceCrop,
+                    presenterVideoEffects: presenterVideoEffects
+                ),
+                ProgramVideoRenderLayer(
+                    trackID: screenTrack.trackID,
+                    naturalSize: screenContentCropRect?.size ?? screenNaturalSize,
+                    sourceCropRect: screenContentCropRect,
+                    placement: screenLayer?.placement ?? .topHalf,
+                    fillMode: .fill,
+                    trimsBlackMatte: false,
+                    sourceCrop: screenLayer?.sourceCrop,
                     presenterVideoEffects: .default
                 )
             ]
@@ -1048,6 +1151,7 @@ private struct ProgramVideoRenderLayer: Hashable, Sendable {
     let placement: ProgramLayerPlacement
     let fillMode: ProgramVideoFillMode
     let trimsBlackMatte: Bool
+    let sourceCrop: ProgramLayerSourceCrop?
     let presenterVideoEffects: PresenterVideoEffects
 }
 
@@ -1181,10 +1285,12 @@ private final class ProgramVideoCompositionInstruction: NSObject, AVVideoComposi
     let enablePostProcessing = false
     let containsTweening = true
     let passthroughTrackID = kCMPersistentTrackID_Invalid
+    let canvasRect: CGRect
     let layers: [ProgramVideoRenderLayer]
 
-    init(timeRange: CMTimeRange, layers: [ProgramVideoRenderLayer]) {
+    init(timeRange: CMTimeRange, canvasRect: CGRect, layers: [ProgramVideoRenderLayer]) {
         self.timeRange = timeRange
+        self.canvasRect = canvasRect
         self.layers = layers
     }
 
@@ -1241,7 +1347,9 @@ private final class ProgramVideoCompositor: NSObject, AVVideoCompositing, @unche
                     naturalSize: sourceImage.extent.size,
                     placement: layer.placement,
                     renderSize: renderSize,
-                    fillMode: layer.fillMode
+                    canvasRect: instruction.canvasRect,
+                    fillMode: layer.fillMode,
+                    sourceCrop: layer.sourceCrop
                 )
                 let fittedImage = Self.scaledImage(
                     sourceImage,
@@ -1316,7 +1424,9 @@ private struct ProgramLayerGeometry {
         naturalSize: CGSize,
         placement: ProgramLayerPlacement,
         renderSize: CGSize,
-        fillMode: ProgramVideoFillMode
+        canvasRect: CGRect,
+        fillMode: ProgramVideoFillMode,
+        sourceCrop: ProgramLayerSourceCrop? = nil
     ) {
         let sourceSize = CGSize(
             width: max(1, abs(naturalSize.width)),
@@ -1325,7 +1435,8 @@ private struct ProgramLayerGeometry {
         let rect = Self.targetRect(
             placement: placement,
             sourceSize: sourceSize,
-            renderSize: renderSize
+            renderSize: renderSize,
+            canvasRect: canvasRect
         )
         let scale: CGFloat
         switch fillMode {
@@ -1337,23 +1448,45 @@ private struct ProgramLayerGeometry {
             scale = max(rect.width / sourceSize.width, rect.height / sourceSize.height) * 1.35
         }
         let scaledSize = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+        let sourceOffset = Self.sourceOffset(
+            sourceCrop: sourceCrop,
+            scaledSize: scaledSize,
+            targetRect: rect
+        )
         self.rect = rect
         self.scale = scale
         self.translation = CGSize(
-            width: rect.midX - scaledSize.width / 2,
-            height: rect.midY - scaledSize.height / 2
+            width: rect.midX - scaledSize.width / 2 + sourceOffset.width,
+            height: rect.midY - scaledSize.height / 2 + sourceOffset.height
         )
         self.maskImage = Self.maskImage(for: placement, rect: rect)
+    }
+
+    private static func sourceOffset(
+        sourceCrop: ProgramLayerSourceCrop?,
+        scaledSize: CGSize,
+        targetRect: CGRect
+    ) -> CGSize {
+        guard let sourceCrop else {
+            return .zero
+        }
+        let overflowX = max(0, scaledSize.width - targetRect.width)
+        let overflowY = max(0, scaledSize.height - targetRect.height)
+        return CGSize(
+            width: CGFloat(sourceCrop.offsetX) * overflowX / 2,
+            height: CGFloat(sourceCrop.offsetY) * overflowY / 2
+        )
     }
 
     private static func targetRect(
         placement: ProgramLayerPlacement,
         sourceSize: CGSize,
-        renderSize: CGSize
+        renderSize: CGSize,
+        canvasRect: CGRect
     ) -> CGRect {
         switch placement {
         case .fullCanvas:
-            return CGRect(origin: .zero, size: renderSize)
+            return canvasRect
         case .pictureInPicture(let corner, let size):
             let widthFraction: CGFloat
             switch size {
@@ -1364,41 +1497,45 @@ private struct ProgramLayerGeometry {
             case .large:
                 widthFraction = 0.34
             }
-            let targetWidth = renderSize.width * widthFraction
+            let targetWidth = canvasRect.width * widthFraction
             let targetHeight = sourceSize.height * (targetWidth / sourceSize.width)
             let margin: CGFloat = 36
             let x: CGFloat
             let y: CGFloat
             switch corner {
             case .topLeft:
-                x = margin
-                y = renderSize.height - targetHeight - margin
+                x = canvasRect.minX + margin
+                y = canvasRect.maxY - targetHeight - margin
             case .topRight:
-                x = renderSize.width - targetWidth - margin
-                y = renderSize.height - targetHeight - margin
+                x = canvasRect.maxX - targetWidth - margin
+                y = canvasRect.maxY - targetHeight - margin
             case .bottomLeft:
-                x = margin
-                y = margin
+                x = canvasRect.minX + margin
+                y = canvasRect.minY + margin
             case .bottomRight:
-                x = renderSize.width - targetWidth - margin
-                y = margin
+                x = canvasRect.maxX - targetWidth - margin
+                y = canvasRect.minY + margin
             }
             return CGRect(x: x, y: y, width: targetWidth, height: targetHeight)
         case .customPictureInPicture(let geometry):
-            let targetWidth = max(1, renderSize.width * CGFloat(geometry.width))
-            let targetHeight = max(1, renderSize.height * CGFloat(geometry.height))
-            let centerX = renderSize.width * CGFloat(geometry.centerX)
-            let centerYFromTop = renderSize.height * CGFloat(geometry.centerY)
+            let targetWidth = max(1, canvasRect.width * CGFloat(geometry.width))
+            let targetHeight = max(1, canvasRect.height * CGFloat(geometry.height))
+            let centerX = canvasRect.minX + canvasRect.width * CGFloat(geometry.centerX)
+            let centerY = canvasRect.minY + canvasRect.height * (1 - CGFloat(geometry.centerY))
             return CGRect(
                 x: centerX - targetWidth / 2,
-                y: renderSize.height - centerYFromTop - targetHeight / 2,
+                y: centerY - targetHeight / 2,
                 width: targetWidth,
                 height: targetHeight
             )
         case .leftHalf:
-            return CGRect(x: 0, y: 0, width: renderSize.width / 2, height: renderSize.height)
+            return CGRect(x: canvasRect.minX, y: canvasRect.minY, width: canvasRect.width / 2, height: canvasRect.height)
         case .rightHalf:
-            return CGRect(x: renderSize.width / 2, y: 0, width: renderSize.width / 2, height: renderSize.height)
+            return CGRect(x: canvasRect.midX, y: canvasRect.minY, width: canvasRect.width / 2, height: canvasRect.height)
+        case .topHalf:
+            return CGRect(x: canvasRect.minX, y: canvasRect.midY, width: canvasRect.width, height: canvasRect.height / 2)
+        case .bottomHalf:
+            return CGRect(x: canvasRect.minX, y: canvasRect.minY, width: canvasRect.width, height: canvasRect.height / 2)
         }
     }
 
@@ -1409,7 +1546,7 @@ private struct ProgramLayerGeometry {
             shape = geometry.shape
         case .pictureInPicture:
             shape = .roundedRectangle
-        case .fullCanvas, .leftHalf, .rightHalf:
+        case .fullCanvas, .leftHalf, .rightHalf, .topHalf, .bottomHalf:
             return CIImage(color: .white).cropped(to: rect)
         }
 

@@ -185,6 +185,59 @@ struct ProgramVideoRendererTests {
     #expect(duration < 1.25)
 }
 
+@Test func programVideoRendererConcatenatesContinuationCameraSegments() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("wondershow-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let firstCameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let secondCameraURL = rootURL.appendingPathComponent("Raw/presenter-camera-2.mov")
+    try makeTestVideo(url: firstCameraURL, size: CGSize(width: 640, height: 360), color: .camera, duration: 1)
+    try makeTestVideo(url: secondCameraURL, size: CGSize(width: 640, height: 360), color: .cameraDim, duration: 1)
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraOnly,
+        layout: .speakerCloseUp,
+        durationMilliseconds: 2_000
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: firstCameraURL,
+        slidesScreenURL: rootURL.appendingPathComponent("Raw/slides-screen.mov"),
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: RecordingProjectManifestFactory().makeManifest(project: project),
+        presenterCameraSegmentURLs: [firstCameraURL, secondCameraURL]
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/continued-camera.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(resolution: .source, frameRate: .fps30, quality: .high, codec: .h264),
+        outputURL: outputURL
+    )
+
+    let firstSegmentImage = try frameImage(from: outputURL, seconds: 0.4)
+    let secondSegmentImage = try frameImage(from: outputURL, seconds: 1.4)
+    let firstPixel = try #require(pixel(in: firstSegmentImage, x: 320, y: 180))
+    let secondPixel = try #require(pixel(in: secondSegmentImage, x: 320, y: 180))
+
+    #expect(colorDistance(firstPixel, secondPixel) > 45)
+    #expect(secondPixel.red < 105)
+    #expect(secondPixel.green < 105)
+    #expect(secondPixel.blue < 105)
+}
+
 @Test func programVideoRendererAcceptsMillisecondTimelineDurations() async throws {
     let fileManager = FileManager.default
     let rootURL = fileManager.temporaryDirectory
@@ -1350,6 +1403,327 @@ struct ProgramVideoRendererTests {
     #expect(customPiPGeometry(in: segments[1].scene) == secondGeometry)
 }
 
+@Test func manifestLayoutKeyframesPreserveSplitSourceCrops() {
+    let screenCrop = ProgramLayerSourceCrop(offsetX: 0.6, offsetY: -0.25)
+    let cameraCrop = ProgramLayerSourceCrop(offsetX: -0.4, offsetY: 0.5)
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .sideBySide,
+        durationMilliseconds: 10_000
+    )
+    let manifest = RecordingProjectManifestFactory().makeManifest(project: project)
+
+    let updated = manifest.updatingLayoutKeyframes([
+        RecordingLayoutKeyframe(
+            milliseconds: 0,
+            mode: .cameraAndScreen,
+            layout: .sideBySide,
+            screenCrop: screenCrop,
+            cameraCrop: cameraCrop
+        ),
+        RecordingLayoutKeyframe(
+            milliseconds: 5_000,
+            mode: .cameraAndScreen,
+            layout: .topBottom,
+            screenCrop: ProgramLayerSourceCrop(offsetX: -0.2, offsetY: 0.3),
+            cameraCrop: ProgramLayerSourceCrop(offsetX: 0.2, offsetY: -0.3)
+        )
+    ])
+    let firstSegment = updated.project.timeline.segments[0]
+    let secondSegment = updated.project.timeline.segments[1]
+
+    #expect(firstSegment.scene.layers.first(where: { $0.source == .slidesScreen })?.sourceCrop == screenCrop)
+    #expect(firstSegment.scene.layers.first(where: { $0.source == .presenterCamera })?.sourceCrop == cameraCrop)
+    #expect(secondSegment.scene.view == .topBottom)
+    #expect(secondSegment.scene.layers.first(where: { $0.source == .slidesScreen })?.placement == .topHalf)
+    #expect(secondSegment.scene.layers.first(where: { $0.source == .presenterCamera })?.placement == .bottomHalf)
+}
+
+@Test func manifestLayoutKeyframesPreserveCanvasPixelSizeOnlyChanges() {
+    let firstCanvas = RecordingExportPixelSize(width: 1920, height: 1080)
+    let secondCanvas = RecordingExportPixelSize(width: 1080, height: 1080)
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .sideBySide,
+        durationMilliseconds: 10_000
+    )
+    let manifest = RecordingProjectManifestFactory().makeManifest(project: project)
+
+    let updated = manifest.updatingLayoutKeyframes([
+        RecordingLayoutKeyframe(
+            milliseconds: 0,
+            mode: .cameraAndScreen,
+            layout: .sideBySide,
+            canvasPixelSize: firstCanvas
+        ),
+        RecordingLayoutKeyframe(
+            milliseconds: 4_000,
+            mode: .cameraAndScreen,
+            layout: .sideBySide,
+            canvasPixelSize: secondCanvas
+        )
+    ])
+    let segments = updated.project.timeline.segments
+
+    #expect(updated.project.timeline.isContiguous)
+    #expect(segments.map(\.startMilliseconds) == [0, 4_000])
+    #expect(segments.map(\.endMilliseconds) == [4_000, 10_000])
+    #expect(segments.map(\.scene.canvasPixelSize) == [firstCanvas, secondCanvas])
+}
+
+@Test func programVideoRendererUsesCanvasPixelSizeTimelineForActiveCanvasRect() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("wondershow-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .camera)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen)
+
+    let wideCanvas = RecordingExportPixelSize(width: 1920, height: 1080)
+    let squareCanvas = RecordingExportPixelSize(width: 1080, height: 1080)
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .sideBySide,
+        durationMilliseconds: 1_000
+    )
+    let manifest = RecordingProjectManifestFactory()
+        .makeManifest(project: project)
+        .updatingLayoutKeyframes([
+            RecordingLayoutKeyframe(
+                milliseconds: 0,
+                mode: .cameraAndScreen,
+                layout: .sideBySide,
+                canvasPixelSize: wideCanvas
+            ),
+            RecordingLayoutKeyframe(
+                milliseconds: 500,
+                mode: .cameraAndScreen,
+                layout: .sideBySide,
+                canvasPixelSize: squareCanvas
+            )
+        ])
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: manifest
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/canvas-keyframed.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(
+            resolution: .hd1080,
+            frameRate: .fps30,
+            quality: .high,
+            codec: .h264,
+            customPixelSize: squareCanvas
+        ),
+        outputURL: outputURL
+    )
+
+    let wideSegmentImage = try frameImage(from: outputURL, seconds: 0.2)
+    let squareSegmentImage = try frameImage(from: outputURL, seconds: 0.8)
+    let wideTopBar = try #require(pixel(in: wideSegmentImage, x: 270, y: 100))
+    let squareTopContent = try #require(pixel(in: squareSegmentImage, x: 270, y: 100))
+
+    #expect(rgbSum(wideTopBar) < 24)
+    #expect(rgbSum(squareTopContent) > 80)
+}
+
+@Test func programVideoRendererFillsScreenLayerInSideBySideLayout() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("wondershow-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .camera)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen)
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .sideBySide,
+        durationMilliseconds: 1_000
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: RecordingProjectManifestFactory().makeManifest(project: project)
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/side-by-side-fill.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(
+            resolution: .hd1080,
+            frameRate: .fps30,
+            quality: .high,
+            codec: .h264,
+            customPixelSize: RecordingExportPixelSize(width: 1280, height: 720)
+        ),
+        outputURL: outputURL
+    )
+
+    let image = try firstFrameImage(from: outputURL)
+    let topOfScreenPane = try #require(pixel(in: image, x: 320, y: 48))
+    let bottomOfScreenPane = try #require(pixel(in: image, x: 320, y: 672))
+
+    #expect(rgbSum(topOfScreenPane) > 80)
+    #expect(rgbSum(bottomOfScreenPane) > 80)
+}
+
+@Test func programVideoRendererFillsScreenLayerInTopBottomLayout() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("wondershow-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .camera)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen)
+
+    let project = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .topBottom,
+        durationMilliseconds: 1_000
+    )
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: RecordingProjectManifestFactory().makeManifest(project: project)
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/top-bottom-fill.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(
+            resolution: .hd1080,
+            frameRate: .fps30,
+            quality: .high,
+            codec: .h264,
+            customPixelSize: RecordingExportPixelSize(width: 1280, height: 720)
+        ),
+        outputURL: outputURL
+    )
+
+    let image = try firstFrameImage(from: outputURL)
+    let leftOfScreenPane = try #require(pixel(in: image, x: 64, y: 180))
+    let rightOfScreenPane = try #require(pixel(in: image, x: 1216, y: 180))
+
+    #expect(rgbSum(leftOfScreenPane) > 80)
+    #expect(rgbSum(rightOfScreenPane) > 80)
+}
+
+@Test func programVideoRendererAppliesSplitScreenSourceCropOffset() async throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+        .appendingPathComponent("wondershow-program-renderer-tests", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Raw", isDirectory: true), withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: rootURL.appendingPathComponent("Exports", isDirectory: true), withIntermediateDirectories: true)
+    defer {
+        try? fileManager.removeItem(at: rootURL)
+    }
+
+    let cameraURL = rootURL.appendingPathComponent("Raw/presenter-camera.mov")
+    let screenURL = rootURL.appendingPathComponent("Raw/slides-screen.mov")
+    try makeTestVideo(url: cameraURL, size: CGSize(width: 640, height: 360), color: .camera)
+    try makeTestVideo(url: screenURL, size: CGSize(width: 960, height: 540), color: .screen)
+
+    let baseProject = RecordingProjectFactory().makeProject(
+        scenario: .trainingCourse,
+        camera: .builtInFaceTime,
+        screen: .mainDisplay,
+        mode: .cameraAndScreen,
+        layout: .sideBySide,
+        durationMilliseconds: 1_000
+    )
+    let croppedManifest = RecordingProjectManifestFactory()
+        .makeManifest(project: baseProject)
+        .updatingLayoutKeyframes([
+            RecordingLayoutKeyframe(
+                milliseconds: 0,
+                mode: .cameraAndScreen,
+                layout: .sideBySide,
+                screenCrop: ProgramLayerSourceCrop(offsetX: -1, offsetY: 0)
+            )
+        ])
+    let session = RecordingSessionRecord(
+        url: rootURL,
+        manifestURL: rootURL.appendingPathComponent("project.json"),
+        presenterCameraURL: cameraURL,
+        slidesScreenURL: screenURL,
+        microphoneAudioURL: rootURL.appendingPathComponent("Raw/microphone.m4a"),
+        programOutputURL: rootURL.appendingPathComponent("Exports/program.mp4"),
+        manifest: croppedManifest
+    )
+
+    let outputURL = rootURL.appendingPathComponent("Exports/side-by-side-screen-crop.mp4")
+    _ = try await ProgramVideoRenderer().render(
+        session: session,
+        settings: RecordingExportSettings(
+            resolution: .hd1080,
+            frameRate: .fps30,
+            quality: .high,
+            codec: .h264,
+            customPixelSize: RecordingExportPixelSize(width: 1280, height: 720)
+        ),
+        outputURL: outputURL
+    )
+
+    let image = try firstFrameImage(from: outputURL)
+    let centerOfScreenPane = try #require(pixel(in: image, x: 320, y: 360))
+
+    #expect(centerOfScreenPane.green > 170)
+}
+
 @Test func manifestTimelineDurationCanBeFinalizedToActualRecordingLength() {
     let project = RecordingProjectFactory().makeProject(
         scenario: .trainingCourse,
@@ -1836,6 +2210,10 @@ private func colorDistance(_ lhs: Pixel, _ rhs: Pixel) -> Int {
     abs(Int(lhs.red) - Int(rhs.red))
         + abs(Int(lhs.green) - Int(rhs.green))
         + abs(Int(lhs.blue) - Int(rhs.blue))
+}
+
+private func rgbSum(_ pixel: Pixel) -> Int {
+    Int(pixel.red) + Int(pixel.green) + Int(pixel.blue)
 }
 
 private func cgImage(from image: CIImage) throws -> CGImage {

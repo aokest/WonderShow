@@ -24,6 +24,20 @@ import Testing
     #expect(state.stopEnabled == false)
 }
 
+@Test func recordingControlStateOnlyAcceptsLiveConfigurationUpdatesDuringActiveRecording() {
+    #expect(RecordingControlState.starting.acceptsLiveConfigurationUpdates(isFinishConfirmationVisible: false))
+    #expect(RecordingControlState.recording.acceptsLiveConfigurationUpdates(isFinishConfirmationVisible: false))
+    #expect(!RecordingControlState.idle.acceptsLiveConfigurationUpdates(isFinishConfirmationVisible: false))
+    #expect(!RecordingControlState.paused.acceptsLiveConfigurationUpdates(isFinishConfirmationVisible: false))
+    #expect(RecordingControlState.paused.acceptsLiveConfigurationUpdates(isFinishConfirmationVisible: false, includePaused: true))
+}
+
+@Test func recordingControlStateFreezesConfigurationDuringFinishConfirmation() {
+    #expect(!RecordingControlState.starting.acceptsLiveConfigurationUpdates(isFinishConfirmationVisible: true))
+    #expect(!RecordingControlState.recording.acceptsLiveConfigurationUpdates(isFinishConfirmationVisible: true))
+    #expect(!RecordingControlState.paused.acceptsLiveConfigurationUpdates(isFinishConfirmationVisible: true, includePaused: true))
+}
+
 @MainActor
 @Test func miniToolbarDefaultsBelowTheMenuBarNearTopCenter() {
     let visibleFrame = NSRect(x: 0, y: 0, width: 1440, height: 840)

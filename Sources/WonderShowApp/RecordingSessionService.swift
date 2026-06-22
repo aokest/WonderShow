@@ -9,6 +9,33 @@ struct RecordingSessionRecord: Equatable {
     let microphoneAudioURL: URL
     let programOutputURL: URL
     let manifest: RecordingProjectManifest
+    let presenterCameraSegmentURLs: [URL]
+    let slidesScreenSegmentURLs: [URL]
+    let microphoneAudioSegmentURLs: [URL]
+
+    init(
+        url: URL,
+        manifestURL: URL,
+        presenterCameraURL: URL,
+        slidesScreenURL: URL,
+        microphoneAudioURL: URL,
+        programOutputURL: URL,
+        manifest: RecordingProjectManifest,
+        presenterCameraSegmentURLs: [URL]? = nil,
+        slidesScreenSegmentURLs: [URL]? = nil,
+        microphoneAudioSegmentURLs: [URL]? = nil
+    ) {
+        self.url = url
+        self.manifestURL = manifestURL
+        self.presenterCameraURL = presenterCameraURL
+        self.slidesScreenURL = slidesScreenURL
+        self.microphoneAudioURL = microphoneAudioURL
+        self.programOutputURL = programOutputURL
+        self.manifest = manifest
+        self.presenterCameraSegmentURLs = presenterCameraSegmentURLs ?? [presenterCameraURL]
+        self.slidesScreenSegmentURLs = slidesScreenSegmentURLs ?? [slidesScreenURL]
+        self.microphoneAudioSegmentURLs = microphoneAudioSegmentURLs ?? [microphoneAudioURL]
+    }
 }
 
 extension RecordingSessionRecord {
@@ -20,7 +47,44 @@ extension RecordingSessionRecord {
             slidesScreenURL: slidesScreenURL,
             microphoneAudioURL: microphoneAudioURL,
             programOutputURL: programOutputURL,
-            manifest: manifest
+            manifest: manifest,
+            presenterCameraSegmentURLs: presenterCameraSegmentURLs,
+            slidesScreenSegmentURLs: slidesScreenSegmentURLs,
+            microphoneAudioSegmentURLs: microphoneAudioSegmentURLs
+        )
+    }
+
+    func appendingArchiveSegment(
+        presenterCameraURL: URL?,
+        slidesScreenURL: URL?,
+        microphoneAudioURL: URL?
+    ) -> RecordingSessionRecord {
+        RecordingSessionRecord(
+            url: url,
+            manifestURL: manifestURL,
+            presenterCameraURL: self.presenterCameraURL,
+            slidesScreenURL: self.slidesScreenURL,
+            microphoneAudioURL: self.microphoneAudioURL,
+            programOutputURL: programOutputURL,
+            manifest: manifest,
+            presenterCameraSegmentURLs: presenterCameraURL.map { presenterCameraSegmentURLs + [$0] } ?? presenterCameraSegmentURLs,
+            slidesScreenSegmentURLs: slidesScreenURL.map { slidesScreenSegmentURLs + [$0] } ?? slidesScreenSegmentURLs,
+            microphoneAudioSegmentURLs: microphoneAudioURL.map { microphoneAudioSegmentURLs + [$0] } ?? microphoneAudioSegmentURLs
+        )
+    }
+
+    func archiveURLs(forSegment index: Int) -> RecordingArchiveSegmentURLs {
+        guard index > 1 else {
+            return RecordingArchiveSegmentURLs(
+                presenterCameraURL: presenterCameraURL,
+                slidesScreenURL: slidesScreenURL,
+                microphoneAudioURL: microphoneAudioURL
+            )
+        }
+        return RecordingArchiveSegmentURLs(
+            presenterCameraURL: url.appendingPathComponent("Raw/presenter-camera-\(index).mov"),
+            slidesScreenURL: url.appendingPathComponent("Raw/slides-screen-\(index).mov"),
+            microphoneAudioURL: url.appendingPathComponent("Raw/microphone-\(index).m4a")
         )
     }
 
@@ -31,6 +95,12 @@ extension RecordingSessionRecord {
     var requiresSlidesScreenTrack: Bool {
         manifest.project.rawTracks.contains { $0.role == .slidesScreen }
     }
+}
+
+struct RecordingArchiveSegmentURLs: Equatable, Sendable {
+    let presenterCameraURL: URL
+    let slidesScreenURL: URL
+    let microphoneAudioURL: URL
 }
 
 struct RecordingPiPKeyframe: Equatable, Hashable, Sendable {
@@ -48,17 +118,26 @@ struct RecordingLayoutKeyframe: Equatable, Hashable, Sendable {
     let mode: RecordingMode
     let layout: RecordingLayout
     let pictureInPictureGeometry: ProgramPictureInPictureGeometry?
+    let screenCrop: ProgramLayerSourceCrop?
+    let cameraCrop: ProgramLayerSourceCrop?
+    let canvasPixelSize: RecordingExportPixelSize?
 
     init(
         milliseconds: Int,
         mode: RecordingMode,
         layout: RecordingLayout,
-        pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil
+        pictureInPictureGeometry: ProgramPictureInPictureGeometry? = nil,
+        screenCrop: ProgramLayerSourceCrop? = nil,
+        cameraCrop: ProgramLayerSourceCrop? = nil,
+        canvasPixelSize: RecordingExportPixelSize? = nil
     ) {
         self.milliseconds = max(0, milliseconds)
         self.mode = mode
         self.layout = layout
         self.pictureInPictureGeometry = pictureInPictureGeometry
+        self.screenCrop = screenCrop
+        self.cameraCrop = cameraCrop
+        self.canvasPixelSize = canvasPixelSize
     }
 }
 
@@ -134,7 +213,10 @@ extension RecordingProjectManifest {
                     scene: Self.programScene(
                         mode: keyframe.mode,
                         layout: keyframe.layout,
-                        geometry: keyframe.pictureInPictureGeometry
+                        geometry: keyframe.pictureInPictureGeometry,
+                        screenCrop: keyframe.screenCrop,
+                        cameraCrop: keyframe.cameraCrop,
+                        canvasPixelSize: keyframe.canvasPixelSize
                     )
                 )
             )
@@ -265,7 +347,10 @@ extension RecordingProjectManifest {
             if let last = normalized.last,
                last.mode == keyframe.mode,
                last.layout == keyframe.layout,
-               last.pictureInPictureGeometry == keyframe.pictureInPictureGeometry {
+               last.pictureInPictureGeometry == keyframe.pictureInPictureGeometry,
+               last.screenCrop == keyframe.screenCrop,
+               last.cameraCrop == keyframe.cameraCrop,
+               last.canvasPixelSize == keyframe.canvasPixelSize {
                 continue
             }
             normalized.append(keyframe)
@@ -280,7 +365,10 @@ extension RecordingProjectManifest {
                     milliseconds: 0,
                     mode: first.mode,
                     layout: first.layout,
-                    pictureInPictureGeometry: first.pictureInPictureGeometry
+                    pictureInPictureGeometry: first.pictureInPictureGeometry,
+                    screenCrop: first.screenCrop,
+                    cameraCrop: first.cameraCrop,
+                    canvasPixelSize: first.canvasPixelSize
                 ),
                 at: 0
             )
@@ -291,26 +379,31 @@ extension RecordingProjectManifest {
     private static func programScene(
         mode: RecordingMode,
         layout: RecordingLayout,
-        geometry: ProgramPictureInPictureGeometry?
+        geometry: ProgramPictureInPictureGeometry?,
+        screenCrop: ProgramLayerSourceCrop? = nil,
+        cameraCrop: ProgramLayerSourceCrop? = nil,
+        canvasPixelSize: RecordingExportPixelSize? = nil
     ) -> ProgramScene {
+        let scene: ProgramScene
         switch mode {
         case .screenOnly:
-            return ProgramScene(view: .slidesFullScreen, layers: [.slidesFullCanvas])
+            scene = ProgramScene(view: .slidesFullScreen, layers: [.slidesFullCanvas])
         case .cameraOnly:
             if layout == .speakerFullBody {
-                return ProgramScene(view: .speakerFullBody, layers: [.speakerFullBodyCanvas])
+                scene = ProgramScene(view: .speakerFullBody, layers: [.speakerFullBodyCanvas])
+            } else {
+                scene = ProgramScene(view: .speakerCloseUp, layers: [.speakerCloseUpCanvas])
             }
-            return ProgramScene(view: .speakerCloseUp, layers: [.speakerCloseUpCanvas])
         case .cameraAndScreen:
             switch layout {
             case .screenOnly:
-                return ProgramScene(view: .slidesFullScreen, layers: [.slidesFullCanvas])
+                scene = ProgramScene(view: .slidesFullScreen, layers: [.slidesFullCanvas])
             case .speakerFullBody:
-                return ProgramScene(view: .speakerFullBody, layers: [.speakerFullBodyCanvas])
+                scene = ProgramScene(view: .speakerFullBody, layers: [.speakerFullBodyCanvas])
             case .speakerCloseUp:
-                return ProgramScene(view: .speakerCloseUp, layers: [.speakerCloseUpCanvas])
+                scene = ProgramScene(view: .speakerCloseUp, layers: [.speakerCloseUpCanvas])
             case .screenWithCameraPictureInPicture(let corner):
-                return ProgramScene(
+                scene = ProgramScene(
                     view: .slidesWithSpeakerPictureInPicture,
                     layers: [
                         .slidesFullCanvas,
@@ -323,7 +416,7 @@ extension RecordingProjectManifest {
                     ]
                 )
             case .cameraWithScreenPictureInPicture(let corner):
-                return ProgramScene(
+                scene = ProgramScene(
                     view: .speakerWithSlidesPictureInPicture,
                     layers: [
                         ProgramLayer(
@@ -339,19 +432,34 @@ extension RecordingProjectManifest {
                     ]
                 )
             case .sideBySide:
-                return ProgramScene(
+                scene = ProgramScene(
                     view: .sideBySide,
                     layers: [
-                        ProgramLayer(source: .slidesScreen, placement: .leftHalf),
+                        ProgramLayer(source: .slidesScreen, placement: .leftHalf, sourceCrop: screenCrop),
                         ProgramLayer(
                             source: .presenterCamera,
                             placement: .rightHalf,
-                            speakerShot: .closeUp
+                            speakerShot: .closeUp,
+                            sourceCrop: cameraCrop
+                        )
+                    ]
+                )
+            case .topBottom:
+                scene = ProgramScene(
+                    view: .topBottom,
+                    layers: [
+                        ProgramLayer(source: .slidesScreen, placement: .topHalf, sourceCrop: screenCrop),
+                        ProgramLayer(
+                            source: .presenterCamera,
+                            placement: .bottomHalf,
+                            speakerShot: .closeUp,
+                            sourceCrop: cameraCrop
                         )
                     ]
                 )
             }
         }
+        return scene.withCanvasPixelSize(canvasPixelSize)
     }
 }
 
@@ -361,7 +469,7 @@ private extension ProgramScene {
             switch layer.placement {
             case .pictureInPicture, .customPictureInPicture:
                 return true
-            case .fullCanvas, .leftHalf, .rightHalf:
+            case .fullCanvas, .leftHalf, .rightHalf, .topHalf, .bottomHalf:
                 return false
             }
         }
@@ -374,13 +482,18 @@ private extension ProgramScene {
                 return ProgramLayer(
                     source: layer.source,
                     placement: .customPictureInPicture(geometry),
-                    speakerShot: layer.speakerShot
+                    speakerShot: layer.speakerShot,
+                    sourceCrop: layer.sourceCrop
                 )
-            case .fullCanvas, .leftHalf, .rightHalf:
+            case .fullCanvas, .leftHalf, .rightHalf, .topHalf, .bottomHalf:
                 return layer
             }
         }
-        return ProgramScene(view: view, layers: updatedLayers)
+        return ProgramScene(view: view, layers: updatedLayers, canvasPixelSize: canvasPixelSize)
+    }
+
+    func withCanvasPixelSize(_ canvasPixelSize: RecordingExportPixelSize?) -> ProgramScene {
+        ProgramScene(view: view, layers: layers, canvasPixelSize: canvasPixelSize)
     }
 }
 

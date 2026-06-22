@@ -23,13 +23,35 @@ struct MediaPipeSidecarHealth: Codable, Sendable {
     }
 }
 
+struct MediaPipeSidecarInferenceOptions: Equatable, Sendable {
+    let needsHands: Bool
+    let needsFace: Bool
+    let needsSegmentation: Bool
+
+    static let full = MediaPipeSidecarInferenceOptions(
+        needsHands: true,
+        needsFace: true,
+        needsSegmentation: true
+    )
+
+    var hasWork: Bool {
+        needsHands || needsFace || needsSegmentation
+    }
+}
+
 private struct MediaPipeSidecarInferRequest: Codable, Sendable {
     let timestampMs: Int
     let imageBase64: String
+    let needsHands: Bool
+    let needsFace: Bool
+    let needsSegmentation: Bool
 
     enum CodingKeys: String, CodingKey {
         case timestampMs = "timestamp_ms"
         case imageBase64 = "image_base64"
+        case needsHands = "needs_hands"
+        case needsFace = "needs_face"
+        case needsSegmentation = "needs_segmentation"
     }
 }
 
@@ -49,12 +71,17 @@ private struct MediaPipeSidecarInferResponse: Codable, Sendable {
     }
 }
 
+private final class MediaPipeJPEGEncodingContext: @unchecked Sendable {
+    let ciContext = CIContext()
+}
+
 /// Talks to the local MediaPipe HTTP sidecar running on the same machine.
 /// - Important: This client is local-only and never sends images to the public internet.
 actor MediaPipeSidecarClient {
     private let session: URLSession
     private let inferURL: URL
     private let healthURL: URL
+    private nonisolated static let jpegEncodingContext = MediaPipeJPEGEncodingContext()
 
     init(baseURL: URL = URL(string: "http://127.0.0.1:18777")!) {
         let configuration = URLSessionConfiguration.ephemeral
@@ -83,10 +110,20 @@ actor MediaPipeSidecarClient {
     ///   - jpegData: JPEG-encoded image bytes.
     ///   - timestampMilliseconds: Frame timestamp.
     /// - Returns: Parsed inference frame or `nil` when the sidecar is unavailable.
-    func infer(jpegData: Data, timestampMilliseconds: Int) async -> MediaPipeInferenceFrame? {
+    func infer(
+        jpegData: Data,
+        timestampMilliseconds: Int,
+        options: MediaPipeSidecarInferenceOptions = .full
+    ) async -> MediaPipeInferenceFrame? {
+        guard options.hasWork else {
+            return nil
+        }
         let requestPayload = MediaPipeSidecarInferRequest(
             timestampMs: timestampMilliseconds,
-            imageBase64: jpegData.base64EncodedString()
+            imageBase64: jpegData.base64EncodedString(),
+            needsHands: options.needsHands,
+            needsFace: options.needsFace,
+            needsSegmentation: options.needsSegmentation
         )
         guard let body = try? JSONEncoder().encode(requestPayload) else {
             return nil
@@ -125,9 +162,8 @@ actor MediaPipeSidecarClient {
         from pixelBuffer: CVPixelBuffer,
         compressionQuality: Double = 0.82
     ) -> Data? {
-        let ciContext = CIContext()
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else {
+        guard let cgImage = jpegEncodingContext.ciContext.createCGImage(ciImage, from: ciImage.extent) else {
             return nil
         }
 

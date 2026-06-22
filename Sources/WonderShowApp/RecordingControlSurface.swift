@@ -6,6 +6,23 @@ enum RecordingControlState: Hashable, Sendable {
     case starting
     case recording
     case paused
+
+    func acceptsLiveConfigurationUpdates(
+        isFinishConfirmationVisible: Bool,
+        includePaused: Bool = false
+    ) -> Bool {
+        guard !isFinishConfirmationVisible else {
+            return false
+        }
+        switch self {
+        case .starting, .recording:
+            return true
+        case .paused:
+            return includePaused
+        case .idle:
+            return false
+        }
+    }
 }
 
 enum RecordingControlSurfaceAction: Hashable, Sendable {

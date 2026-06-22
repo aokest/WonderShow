@@ -1,5 +1,16 @@
 # 文档变更记录
 
+## 2026-06-22
+
+- 发布封板版本更新到 `v1.0.11 (20260623010720)`：主 App 与社区版 App 均已打包，社区版发布 zip 与开源 core zip 已生成并通过 sha256 校验。
+- 资源占用优化收口：新增 `ProgramRenderResourcePolicy`，预览合成和停止录制后自动生成的 `Exports/program.mp4` 统一使用 1080p 包络内的轻量设置，避免默认流程直接吃 4K；导出面板仍保留用户手动选择 4K 的路径。
+- 修复摄像头 raw 归档在切源或帧泵延迟时可能只写入极短视频的问题：`CameraArchiveRecorder` 按活跃录制时长补帧，并继续排除暂停期间的墙钟时间。
+- 发布前录制一致性收口版本更新到 `v1.0.10`：修复录制过程中切换画布比例后，监视器看到的画面与预览合成/最终导出不一致的问题。
+- `RecordingLayoutKeyframe` 新增录制当时的画布像素尺寸；即使布局、画中画和裁切参数没有变化，只要用户在录制中切换画布比例，也会拆分 program timeline，避免画布变化被归一化逻辑吞掉。
+- `ProgramVideoRenderer` 改为按 timeline 段计算活动画布矩形，full canvas、画中画、左右分屏和上下分屏都相对该段画布定位；最终 MP4 仍保持单一输出尺寸，历史比例段以 letterbox/pillarbox 方式保留当时监视器构图。
+- Dashboard 在录制中检测到画布像素尺寸变化时，会为屏幕 raw 轨切出新的 `Raw/slides-screen-N.mov` 段，避免继续把新比例画面写入旧比例 raw 文件；保存后的预览和导出使用录制过程中的最后有效导出设置，停止录制后的画布调整不回写到本次录制。
+- 新增回归测试：`manifestLayoutKeyframesPreserveCanvasPixelSizeOnlyChanges`、`programVideoRendererUsesCanvasPixelSizeTimelineForActiveCanvasRect`、默认 program/预览分辨率策略测试以及摄像头归档补帧测试；全量 `rtk swift test --disable-sandbox` 244 项通过。
+
 ## 2026-06-20
 
 - 固化 `v1.0.0` 核心录制基线：活动窗口直接采集、切换录制源、监视器完整显示、预览合成和高清导出作为受保护主链路，后续功能不得轻易破坏这些行为。

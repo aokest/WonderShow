@@ -161,6 +161,8 @@ private extension ProgramView {
             return "讲者主"
         case .sideBySide:
             return "分屏"
+        case .topBottom:
+            return "上下"
         case .slidesFullScreen:
             return "屏幕"
         }

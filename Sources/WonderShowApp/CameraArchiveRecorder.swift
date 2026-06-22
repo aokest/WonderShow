@@ -121,11 +121,14 @@ final class CameraArchiveRecorder: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.wondershow.camera-archive-recorder")
     private let fileManager: FileManager
     private let renderContext = CIContext()
+    private let nominalFrameRate: Int32 = 30
     private var state: State = .idle
     private var isPaused = false
     private var latestPixelBuffer: CVPixelBuffer?
     private var framePump: DispatchSourceTimer?
     private var frameIndex: CMTimeValue = 0
+    private var activeClockStartedAt: Date?
+    private var accumulatedActiveDuration: TimeInterval = 0
 
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -146,6 +149,8 @@ final class CameraArchiveRecorder: @unchecked Sendable {
             framePump = nil
             latestPixelBuffer = nil
             frameIndex = 0
+            activeClockStartedAt = nil
+            accumulatedActiveDuration = 0
             state = .waitingForFirstFrame(outputURL)
         }
     }
@@ -159,13 +164,26 @@ final class CameraArchiveRecorder: @unchecked Sendable {
 
     func pauseRecording() {
         queue.async { [weak self] in
-            self?.isPaused = true
+            guard let self, !isPaused else {
+                return
+            }
+            appendLatestFrameOnQueue()
+            accumulatedActiveDuration = currentActiveDurationOnQueue()
+            activeClockStartedAt = nil
+            isPaused = true
         }
     }
 
     func resumeRecording() {
         queue.async { [weak self] in
-            self?.isPaused = false
+            guard let self, isPaused else {
+                return
+            }
+            isPaused = false
+            if latestPixelBuffer != nil {
+                activeClockStartedAt = Date()
+                appendLatestFrameOnQueue()
+            }
         }
     }
 
@@ -184,6 +202,8 @@ final class CameraArchiveRecorder: @unchecked Sendable {
                 latestPixelBuffer = nil
                 framePump?.cancel()
                 framePump = nil
+                activeClockStartedAt = nil
+                accumulatedActiveDuration = 0
                 state = .idle
                 completion?(url)
             case .writing(let recording):
@@ -192,6 +212,8 @@ final class CameraArchiveRecorder: @unchecked Sendable {
                 latestPixelBuffer = nil
                 framePump?.cancel()
                 framePump = nil
+                activeClockStartedAt = nil
+                accumulatedActiveDuration = 0
                 state = .finishing
                 let finishedURL = recording.url
                 recording.input.markAsFinished()
@@ -224,16 +246,23 @@ final class CameraArchiveRecorder: @unchecked Sendable {
                 let recording = try makeRecording(url: url, pixelBuffer: pixelBuffer)
                 state = .writing(recording)
                 latestPixelBuffer = normalizedPixelBuffer(pixelBuffer, for: recording)
+                if !isPaused {
+                    activeClockStartedAt = Date()
+                }
                 startFramePumpOnQueue()
                 appendLatestFrameOnQueue()
             } catch {
                 latestPixelBuffer = nil
+                activeClockStartedAt = nil
+                accumulatedActiveDuration = 0
                 state = .idle
             }
         case .writing(let recording):
+            appendLatestFrameOnQueue()
             if let normalized = normalizedPixelBuffer(pixelBuffer, for: recording) {
                 latestPixelBuffer = normalized
             }
+            appendLatestFrameOnQueue()
         }
     }
 
@@ -296,10 +325,32 @@ final class CameraArchiveRecorder: @unchecked Sendable {
         guard recording.input.isReadyForMoreMediaData else {
             return
         }
-        let presentationTime = CMTime(value: frameIndex, timescale: 30)
-        if recording.adaptor.append(latestPixelBuffer, withPresentationTime: presentationTime) {
-            frameIndex += 1
+        let targetFrameCount = targetFrameCountForCurrentActiveDuration()
+        while frameIndex < targetFrameCount {
+            guard recording.input.isReadyForMoreMediaData else {
+                return
+            }
+            let presentationTime = CMTime(value: frameIndex, timescale: nominalFrameRate)
+            if recording.adaptor.append(latestPixelBuffer, withPresentationTime: presentationTime) {
+                frameIndex += 1
+            } else {
+                return
+            }
         }
+    }
+
+    private func targetFrameCountForCurrentActiveDuration() -> CMTimeValue {
+        let elapsed = currentActiveDurationOnQueue()
+        let elapsedFrameCount = CMTimeValue((elapsed * Double(nominalFrameRate)).rounded(.down)) + 1
+        return max(frameIndex + 1, elapsedFrameCount)
+    }
+
+    private func currentActiveDurationOnQueue() -> TimeInterval {
+        var duration = accumulatedActiveDuration
+        if !isPaused, let activeClockStartedAt {
+            duration += max(0, Date().timeIntervalSince(activeClockStartedAt))
+        }
+        return duration
     }
 
     private func videoOutputSettings(width: Int, height: Int) -> [String: Any] {

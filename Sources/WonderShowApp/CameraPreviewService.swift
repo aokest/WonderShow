@@ -43,6 +43,20 @@ enum CameraPreviewMediaPipePolicy {
         gestureControlEnabled || requiresPortraitInference(for: effects)
     }
 
+    static func inferenceOptions(
+        gestureControlEnabled: Bool,
+        effects: PresenterVideoEffects
+    ) -> MediaPipeSidecarInferenceOptions {
+        MediaPipeSidecarInferenceOptions(
+            needsHands: gestureControlEnabled,
+            needsFace: effects.advancedBeautyEnabled
+                || effects.faceLandmarkBeautyEnabled
+                || effects.emojiFaceReplacementEnabled,
+            needsSegmentation: effects.portraitSegmentationEnabled
+                && (effects.backgroundBlur > 0 || effects.backgroundEffect != .none)
+        )
+    }
+
     static func shouldUseSyntheticPortraitFallbackForLiveMonitor(_ effects: PresenterVideoEffects) -> Bool {
         false
     }
@@ -357,10 +371,6 @@ final class CameraPreviewService: NSObject, ObservableObject {
         deviceScanSummary = devices.isEmpty
             ? "系统未返回任何视频输入"
             : devices.map { "\($0.localizedName) [\($0.deviceType.rawValue)]" }.joined(separator: "；")
-
-        if !nextDevices.contains(where: { $0.id == selectedDeviceID }) {
-            selectedDeviceID = CameraInputDevice.automatic.id
-        }
     }
 
     func refreshDevicesAndRestart() {
@@ -551,6 +561,9 @@ final class CameraPreviewService: NSObject, ObservableObject {
            let selected = devices.first(where: { $0.uniqueID == selectedDeviceID }) {
             return selected
         }
+        if selectedDeviceID != CameraInputDevice.automatic.id {
+            return nil
+        }
 
         return devices.first { device in
             let name = device.localizedName.lowercased()
@@ -607,11 +620,19 @@ final class CameraPreviewService: NSObject, ObservableObject {
                 return
             }
 
+            let options = CameraPreviewMediaPipePolicy.inferenceOptions(
+                gestureControlEnabled: snapshot.gestureControlEnabled,
+                effects: previewEffects
+            )
+            guard options.hasWork else {
+                return
+            }
             if let jpegData = MediaPipeSidecarClient.jpegData(from: pixelBuffer) {
-                Task { @MainActor [weak self, jpegData, timestampMilliseconds] in
+                Task { @MainActor [weak self, jpegData, timestampMilliseconds, options] in
                     self?.processGestureFrameWithMediaPipe(
                         jpegData: jpegData,
-                        timestampMilliseconds: timestampMilliseconds
+                        timestampMilliseconds: timestampMilliseconds,
+                        options: options
                     )
                 }
                 return
@@ -708,13 +729,15 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
     ///   - timestampMilliseconds: Frame timestamp used for ordering and recognition windows.
     private func processGestureFrameWithMediaPipe(
         jpegData: Data,
-        timestampMilliseconds: Int
+        timestampMilliseconds: Int,
+        options: MediaPipeSidecarInferenceOptions
     ) {
         let shouldRunForPreview = CameraPreviewMediaPipePolicy.shouldRunMediaPipe(
             gestureControlEnabled: gestureControlEnabled,
             effects: sessionBox.previewEffects
         )
         guard shouldRunForPreview else { return }
+        guard options.hasWork else { return }
         guard !mediaPipeInferenceInFlight else { return }
         guard timestampMilliseconds - lastMediaPipeFrameTimestampMilliseconds >= mediaPipeMinimumFrameIntervalMilliseconds else {
             return
@@ -727,7 +750,8 @@ extension CameraPreviewService: AVCaptureVideoDataOutputSampleBufferDelegate {
             guard let self else { return }
             let frame = await self.mediaPipeSidecar.infer(
                 jpegData: jpegData,
-                timestampMilliseconds: timestampMilliseconds
+                timestampMilliseconds: timestampMilliseconds,
+                options: options
             )
             await MainActor.run {
                 self.setMediaPipeInferenceInFlight(false)

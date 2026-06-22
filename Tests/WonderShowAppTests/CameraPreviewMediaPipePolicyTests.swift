@@ -62,3 +62,44 @@ import Testing
     #expect(!CameraPreviewMediaPipePolicy.shouldUseSyntheticPortraitFallbackForLiveMonitor(effects))
     #expect(!CameraPreviewMediaPipePolicy.shouldRunSubjectAwareBeautyDetectionForLiveMonitor(effects))
 }
+
+@Test func previewPolicyRequestsOnlyHandsForGestureControlWithoutPortraitEffects() {
+    let options = CameraPreviewMediaPipePolicy.inferenceOptions(
+        gestureControlEnabled: true,
+        effects: .default
+    )
+
+    #expect(options.needsHands)
+    #expect(!options.needsFace)
+    #expect(!options.needsSegmentation)
+}
+
+@Test func previewPolicyRequestsSegmentationWithoutHandsForBackgroundOnlyEffects() {
+    let options = CameraPreviewMediaPipePolicy.inferenceOptions(
+        gestureControlEnabled: false,
+        effects: PresenterVideoEffects(
+            portraitSegmentationEnabled: true,
+            backgroundEffect: .blur(strength: 0.65),
+            backgroundBlur: 0.65
+        )
+    )
+
+    #expect(!options.needsHands)
+    #expect(!options.needsFace)
+    #expect(options.needsSegmentation)
+}
+
+@Test func previewPolicyRequestsFaceWithoutHandsForEmojiEffects() {
+    let options = CameraPreviewMediaPipePolicy.inferenceOptions(
+        gestureControlEnabled: false,
+        effects: PresenterVideoEffects(
+            emojiFaceReplacementEnabled: true,
+            emojiFaceReplacementStrength: 1,
+            emojiFaceReplacementScale: 1.25
+        )
+    )
+
+    #expect(!options.needsHands)
+    #expect(options.needsFace)
+    #expect(!options.needsSegmentation)
+}

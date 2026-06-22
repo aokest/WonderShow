@@ -34,14 +34,14 @@ This repository currently contains the tested `v1.0.0` macOS recording-studio ba
 - camera, selected screen/window, and selected microphone raw recording;
 - monitor picture-in-picture with draggable position, size, and shape;
 - source switching during recording with stable raw screen-track normalization;
-- layout switching during recording through manifest timeline keyframes;
+- layout and canvas-aspect switching during recording through manifest timeline keyframes;
 - sample-level microphone recording with continuous program audio export;
 - preview composition and video export through the real renderer;
 - export settings for resolution, frame rate, quality, and codec;
 - multi-camera capability modeling, with Pocket 3 as one verified UVC input;
 - `open-source/wondershow-core`, a public Swift package for project schemas, MediaPipe sidecar protocol, plugin APIs, examples, and tests.
 
-The current baseline has passed `swift test --disable-sandbox` with 194 tests and `scripts/build-app.sh` release packaging in the v1.0.0 line. Treat this version as the protected stable recording baseline before adding timeline editing, presenter video enhancement, menu-bar/mini-toolbar controls, licensing, multi-endpoint support, themes, and source-slot fast switching changes.
+The current baseline has passed `swift test --disable-sandbox` with 244 tests and `scripts/build-app.sh` release packaging in the v1.0.x line. Treat this version as the protected stable recording baseline before adding destructive timeline editing, advanced presenter portrait effects, licensing, multi-endpoint support, or theme-system changes.
 
 ## Open Source Release Kit
 
